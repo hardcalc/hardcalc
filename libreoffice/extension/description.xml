@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<description xmlns="http://openoffice.org/extensions/description/2006"
+             xmlns:d="http://openoffice.org/extensions/description/2006"
+             xmlns:xlink="http://www.w3.org/1999/xlink">
+  <identifier value="org.hardcalc.libreoffice"/>
+  <version value="0.1.2"/>
+  <platform value="all"/>
+  <dependencies>
+    <OpenOffice.org-minimal-version value="4.1" d:name="LibreOffice 7.0"/>
+  </dependencies>
+  <publisher>
+    <name xlink:href="https://hardcalc.org" lang="en">hardcalc</name>
+  </publisher>
+  <display-name>
+    <name lang="en">hardcalc Markdown for Calc</name>
+    <name lang="de">hardcalc-Markdown für Calc</name>
+  </display-name>
+  <extension-description>
+    <src xlink:href="description/en.txt" lang="en"/>
+    <src xlink:href="description/de.txt" lang="de"/>
+  </extension-description>
+  <!--UPDATE-INFORMATION-->
+</description>

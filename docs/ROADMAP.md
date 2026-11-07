@@ -1,0 +1,56 @@
+# hardcalc – roadmap
+
+A file holds **data** (tables, types), **rules** (layers) and
+**presentations** (layouts, charts, comments). Presentations are blocks of
+their own in the same Markdown file and *refer* to data instead of copying
+it – when a number changes, report and chart are up to date.
+
+This page lists open points and ideas. Suggestions are welcome as
+[issues](https://github.com/hardcalc/hardcalc/issues).
+
+## Spreadsheet
+
+- **Decimal arithmetic** for amounts of money (today `f64` with rounding).
+- **Stable references when inserting and deleting**: A1 references follow
+  when moving and sorting, not yet when inserting or deleting rows and
+  columns. In the long run, layouts, comments and text should refer by key
+  (`Expenses[Rent, Amount]`) instead of A1.
+- **Renaming with consequences** for types and functions (tables and columns
+  already work).
+- Layers **`links`** (URLs, files, other tables) and **`scenario`** (what if).
+- Remember view settings (hidden layers, theme) in the file (`fill`/`nofill`
+  already works).
+- **Playground with several ranges → grid layout**: where `:shape matrix`
+  refuses today because the contents are not connected.
+  - Every data range becomes a matrix of its own with an index after the name
+    (`Cameras 1`, `Cameras 2` …); the playground disappears.
+  - Free texts become `text` elements; a single cell used as a heading
+    (e.g. in the first row) becomes `heading`.
+  - All formulas and layer targets follow, also across ranges
+    (`Cameras 2!B3`) and from other tables.
+  - The layout arranges the elements as the ranges lay in the playground.
+- `hardcalc diff`: compare two versions cell by cell.
+
+## Interface
+
+- **Sixel** for the image preview (foot, xterm, mlterm …).
+- Layout: an option to keep elements of the same row together when they move
+  along.
+- Clarity of the interface (beginner/expert view).
+- Cursor movement and input still go directly through crossterm keys; the
+  key map covers the program functions. In the long run they should become
+  `Action`s too.
+
+## Import and export
+
+- **Charts in the ODS export**.
+
+## hardconf
+
+- Renaming map entries, with updating of the `ref` references.
+- `list(Struct)` as a table in the form (today one tree node per element).
+- Search; `hardconf check` and `hardconf schema` without the interface.
+- Show truncated hints of the selected row in full in the status line.
+- Schema from a separate file (`#%include`), conditionally required fields,
+  documentation per enum variant, a derive macro that generates the schema
+  from Rust structs.

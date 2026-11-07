@@ -1,0 +1,195 @@
+# Backup configuration – example for hardconf (see CONFIG-SPEC.md)
+# Written by backupd 2.4.0 on 2026-10-17 09:12 UTC for /var/lib/backupd
+
+revision = "r-5f2c91d0"
+
+[global]
+exclude.both    = ["*.tmp"]
+exclude.upload  = []
+exclude.restore = []
+include.both    = []
+include.upload  = []
+include.restore = []
+
+[targets.nas1]
+id        = 3
+host      = "nas.example.lan"
+ssh_port  = 22
+api_port  = 8443
+tls       = "pin"
+tls_fingerprint = ""
+# No certificate accepted yet, uploads are paused: backupd target trust nas1
+# Used by: photos
+
+[accounts.archive]
+id          = 7
+host        = "s3.example.com"
+port        = 443
+mirror_host = "s3-eu.example.com"
+mirror_port = 443
+username    = "archive"
+password    = "********"
+
+[jobs.photos]
+id           = 1
+notes        = """
+Uploads the photo library every night.
+Questions: see the wiki page "Backup"."""
+token        = "tok_3c9e71a0b5d2f846"
+transport    = "https"
+notify       = "admin@example.com"
+max_per_hour = 20
+max_per_day  = 100
+strict_paths = true
+unmatched    = "hold"
+skip_hidden  = false
+allowed_ips  = ["192.0.2.0/24"]
+include.both    = []
+include.upload  = ["/home/*/Pictures/*"]
+include.restore = []
+exclude.both    = []
+exclude.upload  = []
+exclude.restore = []
+
+[jobs.photos.accounts.private]
+id           = 2
+host         = "s3.example.com"
+mirror_host  = "s3-eu.example.com"
+username     = "photos"
+password     = "********"
+display_name = "Photos"
+
+[jobs.photos.targets.nas1]
+username = "backup-photos"
+password = "********"
+read     = true
+write    = true
+
+[jobs.documents]
+id        = 4
+token     = "new"
+transport = "http"
+notify    = ""
+
+#%hardconf 1
+#%
+#% # ── Types ────────────────────────────────────────────────────────────────
+#%types
+#%  Port      = int range 1..65535
+#%  Limit     = int range 0..                              "0 = unlimited"
+#%  Name      = text pattern "^[a-z][a-z0-9_-]*$"
+#%  Alias     = text pattern "^[a-z][a-z0-9_-]*$"
+#%  Pattern   = text pattern "^[^\s]+$"
+#%  Network   = text check cidr
+#%  Address   = text check email
+#%  Password  = text secret special("********": "keep the stored password")
+#%  Token     = text secret special("new": "create a new token, the old one stops working at once")
+#%  TlsMode   = enum(verify, ca, pin)
+#%  Transport = enum(https, http)
+#%  Unmatched = enum(hold, skip, upload)
+#%
+#% # ── Top level ────────────────────────────────────────────────────────────
+#%root "Backup configuration"
+#%  /// Edit the values, save and close hardconf. backupd then shows all
+#%  /// changes and applies them only after you confirm.
+#%  /// Closing without saving cancels, nothing is changed.
+#%  /// All changes take effect at once, also for running jobs.
+#%  revision?    : text readonly                           "Detects concurrent changes"
+#%    /// Remove this field for a file kept on disk
+#%    /// ("backupd config apply file.toml").
+#%  global?      : Rules                                   "Rules for all jobs"
+#%  targets      : map(Target, Alias) = {}                      "Storage targets"
+#%  accounts     : map(Account, Alias) = {}                     "Parked cloud accounts"
+#%    /// Cloud accounts that no job uses. The credentials stay stored, but
+#%    /// no job can read from or write to the account. To give it to a job,
+#%    /// move the entry to jobs.<name>.accounts.
+#%  jobs         : map(Job, Name) = {}                          "Backup jobs"
+#%
+#% # ── Structs ──────────────────────────────────────────────────────────────
+#%struct Rules "Rules"
+#%  /// Apply in addition to the rules of each job.
+#%  /// Files a job may not touch stay invisible to it; the log says why.
+#%  exclude : Patterns = {}                                     "always skipped"
+#%    /// A match always skips the file and wins over include.
+#%    /// upload: files sent to the target · restore: files written back
+#%  include : Patterns = {}                                     "at least one pattern must match"
+#%    /// As soon as a direction has at least one entry, a file must match
+#%    /// at least ONE of them.
+#%
+#%struct Patterns "Patterns"
+#%  /// "*.jpg" matches by name, "/home/*/Pictures/*" by path.
+#%  /// Case does not matter.
+#%  both    : list(Pattern) = []                           "upload AND restore"
+#%  upload  : list(Pattern) = []                           "files sent to the target"
+#%  restore : list(Pattern) = []                           "files written back"
+#%
+#%struct Target "Storage target"
+#%  /// A server that receives backups over SSH and offers an HTTPS API for
+#%  /// listing snapshots. Only how backupd reaches it is set here. Which job
+#%  /// uses it with which account is set at the job under "targets".
+#%  id?       : int readonly                               "Links the entry to the database"
+#%  notes?    : text multiline                       "Notes"
+#%    /// Free text for people. backupd stores it but does not use it.
+#%  host      : text check host                            "Name or address of the server"
+#%  ssh_port  : Port = 22
+#%  api_port  : Port = 8443                                "HTTPS port of the API"
+#%  tls       : TlsMode = "verify"                         "Check of the API certificate"
+#%    /// "verify": valid chain of a public CA.
+#%    /// "ca":     valid chain of the CA in tls_ca (PEM, e.g. your own CA).
+#%    /// "pin":    exactly the certificate with tls_fingerprint (SHA-256),
+#%    ///           for self-signed certificates. "backupd target trust
+#%    ///           <alias>" fetches and confirms the fingerprint.
+#%  tls_name? : text when tls in (verify, ca)              "Name in the certificate, if ≠ host"
+#%  tls_ca?   : text multiline when tls = ca               "PEM of the CA"
+#%  tls_fingerprint? : text when tls = pin                 "SHA-256 of the certificate"
+#%
+#%struct Account "Cloud account"
+#%  id?           : int readonly                           "Links the entry to the database"
+#%  notes?        : text multiline                       "Notes"
+#%    /// Free text for people. backupd stores it but does not use it.
+#%  host          : text check host
+#%  port          : Port = 443
+#%  mirror_host   : text check host
+#%  mirror_port   : Port = 443
+#%  username      : text
+#%  password?     : Password                               "enter a new password in plain text"
+#%    /// Stored encrypted and never shown again in any output.
+#%  bucket?       : text                                   "Bucket, empty = the account's default"
+#%  display_name? : text length ..100                      "Name in reports, empty = the alias"
+#%
+#%struct Job "Job"
+#%  /// A backup job. The runner signs in with its token on every request:
+#%  ///   HTTP header  Authorization: Bearer <token>
+#%  id?          : int readonly                            "Links the entry to the database"
+#%  notes?       : text multiline                       "Notes"
+#%    /// Free text for people. backupd stores it but does not use it.
+#%  token?       : Token                                   "Access key, created by backupd"
+#%    /// Leave out for a new job. After applying, the file opens again and
+#%    /// shows the new tokens with instructions for connecting.
+#%  transport    : Transport = "https"
+#%    /// "https": encrypted connections only.
+#%    /// "http":  unencrypted connections allowed too. Tokens and files then
+#%    ///          cross the network in plain text, only in a trusted LAN.
+#%  notify?      : Address special("": "off")              "gets a report after every run"
+#%    /// Every run (also failed and partial ones) sends a short report to
+#%    /// this address.
+#%  max_per_hour : Limit = 20                              "Uploads per 60 minutes"
+#%  max_per_day  : Limit = 100                             "Uploads per 24 hours"
+#%  max_deletes_per_hour : Limit = 50                      "Deletions per 60 minutes"
+#%  max_deletes_per_day  : Limit = 250                     "Deletions per 24 hours"
+#%  strict_paths : bool = true                             "EVERY file must match an include pattern"
+#%  unmatched    : Unmatched = "hold"                      "what happens to files no rule covers"
+#%    /// "hold": wait for approval · "skip": leave out · "upload": back up
+#%  skip_hidden  : bool = false                            "Leave out hidden files"
+#%  allowed_ips  : list(Network) = []                      "empty = from anywhere"
+#%  include      : Patterns = {}
+#%  exclude      : Patterns = {}
+#%  accounts     : map(Account, Alias) = {}                     "Cloud accounts of this job"
+#%  targets      : map(TargetAccess, ref(targets)) = {}         "Storage targets of this job"
+#%
+#%struct TargetAccess "Target access"
+#%  /// The account this job uses on the storage target.
+#%  username  : text
+#%  password? : Password
+#%  read      : bool = false                               "Restore from the target"
+#%  write     : bool = false                               "Upload to the target"

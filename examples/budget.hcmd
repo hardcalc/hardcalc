@@ -1,0 +1,92 @@
+# Budget 2026
+
+An example of the hardcalc format. This file is valid Markdown.
+
+```types
+Euro   = decimal(2) unit "€"
+Status = enum(open, paid, cancelled)
+```
+
+```functions
+gross(x) = x * 1.19   # gross amount with 19 % VAT
+share(part, total) = part / total
+```
+
+## Expenses :: matrix[*, 5]
+
+| Item    | Amount:Euro | Status:Status | Share:decimal(3) | Gross:Euro       |
+|---------|------------:|---------------|------------------|------------------|
+| Rent    | 1200.00     | paid          | =B1/sum(B)       | =Amount          |
+| Power   | 85.50       | open          | =B2/sum(B)       | =Amount * 1.19   |
+| Internet| 39.99       | paid          | =B3/sum(B)       | =Amount * 119%   |
+
+```layer format
+B: align right
+D: percent(1)
+row[Status=open]: fg yellow
+```
+
+```layer validate
+B: >= 0
+Item: required unique
+```
+
+```layer comments
+B1: Rent increase announced for July
+```
+
+```chart Spending
+type:   bar
+data:   Expenses.Amount, Expenses.Gross
+labels: Expenses.Item
+```
+
+Rent is **{=Expenses[Rent, Share] | percent(1)}** of the expenses,
+the gross total is {=sum(Expenses!Gross)}.
+
+## Sales :: tensor[Month, Region, Product]
+
+| Month | Region | Product | Value:Euro |
+|-------|--------|---------|------------|
+| Jan   | North  | A       | 120.00     |
+| Jan   | South  | A       | 80.00      |
+| Feb   | North  | A       | 135.00     |
+| Feb   | South  | B       | 42.10      |
+
+```chart SalesTrend
+type:   line
+data:   Sales
+x:      Month
+series: Region
+filter: Product=A
+```
+
+## Metrics :: vector
+
+| Metric           | Value                                |
+|------------------|--------------------------------------|
+| Total expenses   | =sum(Expenses!Gross)                 |
+| Rent             | =Expenses[Rent, Amount]              |
+| Sales North      | =sum(Sales[Region=North])            |
+| Result           | =B3 - B1                             |
+| Distance         | =12 * Speed                          |
+| Speed            | 5 m/s                                |
+| Trend            | =spark(Expenses!Gross)               |
+
+A plain Markdown table is an anonymous matrix:
+
+| x | y |
+|---|---|
+| 1 | 2 |
+
+```layout Report
+page: A4 portrait
+font: 9
+grid: 12
+1-12 / 1-2    heading  Budget 2026
+1-6  / 4-12   table    Expenses   columns: Item, Amount, Share
+7-12 / 4-12   chart    Spending
+1-8  / 14-16  text     Rent is **{=Expenses[Rent, Share] | percent(1)}** of the expenses.
+9-12 / 14-16  value    sum(Expenses!Gross)   label: Total expenses
+1-12 / 18-19  note     All figures are provisional.
+```

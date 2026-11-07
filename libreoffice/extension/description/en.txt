@@ -1,0 +1,1 @@
+Opens and saves hardcalc documents (*.hcmd, Markdown with tables) in LibreOffice Calc. Every table becomes a sheet, formulas are translated in both directions; text, types, layers, charts and layouts around the tables are kept unchanged.

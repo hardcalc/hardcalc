@@ -1,0 +1,36 @@
+[package]
+name = "hardcalc"
+version = "0.1.0"
+edition = "2024"
+description = "Universal terminal spreadsheet: vectors, matrices, tensors, typed cells and layers, stored as readable Markdown"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/hardcalc/hardcalc"
+homepage = "https://hardcalc.org"
+default-run = "hardcalc"
+
+[dependencies]
+calamine = "0.36.1"
+flate2 = "1"
+lzma-rs = "0.3"
+ratatui = "0.30.2"
+regex = "1.13.1"
+rust_xlsxwriter = "0.99.1"
+ruzstd = "0.8"
+serde_json = "1"
+term-maths = "1.0.0"
+terminal-colorsaurus = "1.0.3"
+toml_edit = "0.25.17"
+typst = { version = "0.14.2", optional = true }
+typst-assets = { version = "0.14.2", features = ["fonts"], optional = true }
+typst-pdf = { version = "0.14.2", optional = true }
+unicode-width = "0.2"
+zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[features]
+# PDF calculation reports with typeset formulas (hardcalc report).
+typst = ["dep:typst", "dep:typst-pdf", "dep:typst-assets"]

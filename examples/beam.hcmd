@@ -1,0 +1,25 @@
+# Simply supported beam
+
+Section properties from the profile table:
+
+## Profiles :: matrix
+
+| Profile | W_y:decimal(0) unit "cm³" |
+|---------|--------------------------:|
+| IPE 200 |                       194 |
+| IPE 240 |                       324 |
+
+```hardcalc
+## Bending check
+f_yk    = 235 N/mm²          ' yield strength S235
+gamma_M = 1.1
+L       = 5.0 m              ' span
+g_k     = 4.0 kN/m
+q_k     = 3.0 kN/m
+q_d     = 1.35*g_k + 1.5*q_k
+M_Ed    = q_d * L^2 / 8
+W_y     = Profiles!B2        ' IPE 240 from the table
+σ_Ed    = M_Ed / W_y -> N/mm²
+f_yd    = f_yk / γ_M
+σ_Ed <= f_yd
+```

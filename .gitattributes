@@ -1,0 +1,6 @@
+# Keep LF line endings everywhere (tests compare exact text, also on Windows).
+* text=auto eol=lf
+*.ods binary
+*.xlsx binary
+*.pdf binary
+*.png binary

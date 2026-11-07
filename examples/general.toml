@@ -1,0 +1,47 @@
+# Example for hardconf: plain TOML without a schema block.
+# hardconf opens the file as a generic tree editor (CONFIG-SPEC §7.5):
+# types follow from the values, F7 adds keys and tables,
+# F8 deletes tables, F9 changes the type of a value.
+
+title   = "Clubhouse Sunnyside"
+version = 3
+active  = true
+updated = 2026-10-17
+motd = """
+Welcome to the clubhouse!
+Please switch off the lights and heating when you leave."""
+
+[server]
+host    = "clubhouse.example.org"
+port    = 8443
+timeout = 2.5            # seconds
+started = 2026-10-01T08:30:00+02:00
+allowed = ["192.168.1.0/24", "10.0.0.0/8"]
+
+# Without a schema nothing is masked: credentials are in plain text.
+[database]
+url  = "postgres://club@localhost/club"
+pool = { min = 1, max = 8 }
+backup.enabled = true
+backup.time    = 03:15:00
+
+[[members]]
+name  = "Anna Berger"
+role  = "Chair"
+since = 2019-04-01
+
+[[members]]
+name   = "Ben Okafor"
+role   = "Treasurer"
+since  = 2022-01-15
+emails = ["ben@example.org"]
+
+[rooms.hall]
+seats     = 80
+equipment = ["Projector", "Microphone"]
+
+[rooms.kitchen]
+seats = 12
+note  = '''
+Dishwasher only with the tabs from the cupboard on the left.
+Empty the fridge on Fridays.'''
