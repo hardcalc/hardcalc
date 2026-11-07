@@ -21,3 +21,7 @@ install-updater = false
 tap = "hardcalc/homebrew-tap"
 # Publish jobs to run in CI (prereleases are not published to the tap)
 publish-jobs = ["homebrew"]
+
+# GitHub no longer offers the macos-14 runner that dist picks for Apple Silicon
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
