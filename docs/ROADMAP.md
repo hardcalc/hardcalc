@@ -41,6 +41,16 @@ This page lists open points and ideas. Suggestions are welcome as
   key map covers the program functions. In the long run they should become
   `Action`s too.
 
+## Calculation reports
+
+- **Releases with the built-in Typst compiler** (`--features typst`), so that
+  `hardcalc report` works without installing `typst`. The fonts it embeds
+  (Libertinus Serif: SIL OFL; New Computer Modern: GUST Font License;
+  DejaVu Sans Mono) may be bundled, but their license texts must come along:
+  ship the NOTICE of `typst-assets` as `THIRD-PARTY-FONTS.txt` in the release
+  archives. Adds about 9 MB to the binary. Today the releases are built
+  without it and use an installed `typst`.
+
 ## Import and export
 
 - **Charts in the ODS export**.
