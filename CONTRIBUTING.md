@@ -36,4 +36,4 @@ CI runs the same on Linux, macOS and Windows.
 - Documentation and code comments are in English.
 
 By contributing you agree that your contribution is licensed under the
-[GPL-3.0-or-later](LICENSE), like the rest of the project.
+[MIT license](LICENSE), like the rest of the project.

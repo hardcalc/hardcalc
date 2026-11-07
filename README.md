@@ -583,4 +583,4 @@ report security problems in [SECURITY.md](SECURITY.md).
 
 ## License
 
-GPL-3.0-or-later, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
