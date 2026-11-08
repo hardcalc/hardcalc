@@ -2965,4 +2965,5 @@ fn formula_bar_stays_one_line_while_navigating() {
     let buf = term.backend().buffer();
     let row = |y: u16| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>();
     assert!(!row(2).contains("1+1+1"), "{}", row(2));
+    assert!(row(1).trim_end().contains('…'), "{}", row(1));
 }

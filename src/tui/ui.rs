@@ -844,10 +844,20 @@ fn draw_formula_bar(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         Style::new()
     };
+    // Text that does not fit ends in an ellipsis.
+    let cut = lines.len() > first + height;
     for (row, line) in lines.iter().skip(first).take(height).enumerate() {
         let y = area.y + row as u16;
+        let mut line = line.clone();
+        if cut && row + 1 == height {
+            let room = (area.width as usize).saturating_sub(x as usize + 2 + info_w as usize + 1).max(8);
+            while line.width() + 1 > room {
+                line.pop();
+            }
+            line.push('…');
+        }
         f.buffer_mut().set_string(x, y, "│ ", Style::new().fg(Color::DarkGray));
-        f.buffer_mut().set_string(x + 2, y, line, style);
+        f.buffer_mut().set_string(x + 2, y, &line, style);
     }
     if let Some((l, c)) = caret {
         let cx = x + 2 + c as u16;
