@@ -4956,10 +4956,11 @@ impl App {
             }
             "wrap" => match args.first().map(|a| a.to_lowercase()) {
                 None => self.apply_style(formatting::StyleChange::Wrap(Some(0))),
+                Some(a) if a == "on" => self.apply_style(formatting::StyleChange::Wrap(Some(0))),
                 Some(a) if a == "off" || a == "none" => self.apply_style(formatting::StyleChange::Wrap(None)),
                 Some(a) => match a.parse::<u16>() {
                     Ok(n) if n >= 1 => self.apply_style(formatting::StyleChange::Wrap(Some(n))),
-                    _ => self.error("usage: :wrap [width|off]"),
+                    _ => self.error("usage: :wrap [on|off|width]"),
                 },
             },
             "plain" => self.apply_style(formatting::StyleChange::Plain),

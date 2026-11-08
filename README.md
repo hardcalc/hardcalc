@@ -298,7 +298,7 @@ As in Excel: **Ctrl+B** toggles bold for the selection, the context menu
 (`/`, right-click) has the group **Format** with *Bold, Italic, Underline,
 Text color…, Fill color…, Plain*, as does the menu *Edit*. As commands:
 `:bold`, `:italic`, `:underline`, `:fg <color>`, `:bg <color>` (names like
-`red`, `lightblue` or `#rrggbb`; `none` removes the color), `:wrap [width|off]` (long text of the
+`red`, `lightblue` or `#rrggbb`; `none` removes the color), `:wrap [on|off|width]` (long text of the
 selection breaks into several lines; width in characters, default 40) and `:plain`. If
 the terminal intercepts Ctrl+B (e.g. tmux), `:bold` remains.
 

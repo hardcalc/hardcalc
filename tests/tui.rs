@@ -2934,6 +2934,9 @@ fn wrap_command_writes_and_removes_the_rule() {
     cmd(&mut a, ":wrap");
     let out = hardcalc::write(&a.doc);
     assert!(out.contains("wrap") && !out.contains("wrap 12"), "{out}");
+    cmd(&mut a, ":wrap on");
+    let out = hardcalc::write(&a.doc);
+    assert!(out.contains("wrap") && !out.contains("wrap 12"), "{out}");
     cmd(&mut a, ":wrap off");
     assert!(!hardcalc::write(&a.doc).contains("wrap"), "{}", hardcalc::write(&a.doc));
     cmd(&mut a, ":wrap x");
