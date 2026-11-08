@@ -12,8 +12,10 @@ usage: hardcalc                   new document (a playground) in the terminal UI
 
 commands:
   fmt    print the file in canonical form
-  check  print a summary and all type/formula errors
-  eval   print the file with formulas replaced by their values
+  check  print a summary and all type/formula errors with their line (file:line:);
+         hardcalc check <file> --json prints them as JSON
+  eval   print the file with formulas replaced by their values;
+         hardcalc eval <file> -e <expr> [-e <expr>] [--raw] [--json] prints single results
   calc   print the calculation sheet (```hardcalc blocks) with the way to each result;
          hardcalc calc <file> --ascii writes plain ASCII with a decimal point
   report write the calculation sheet as PDF report with typeset formulas (<name>.report.pdf);
@@ -70,6 +72,7 @@ fn main() -> ExitCode {
                 }
             };
         }
+        [cmd, path, ..] if cmd == "check" || cmd == "eval" => (cmd.as_str(), path),
         [cmd, path] => (cmd.as_str(), path),
         [cmd, path, _] if cmd == "pdf" || cmd == "import" || cmd == "export" || cmd == "calc" || cmd == "report" => (cmd.as_str(), path),
         _ => {
@@ -170,47 +173,78 @@ fn main() -> ExitCode {
     match cmd {
         "fmt" => print!("{}", hardcalc::write(&doc)),
         "check" => {
-            summarize(&doc);
+            let json = args[2..].iter().any(|a| a == "--json");
+            if let Some(bad) = args[2..].iter().find(|a| *a != "--json") {
+                eprintln!("check: unknown option '{bad}'\n{USAGE}");
+                return ExitCode::from(2);
+            }
+            let mut findings: Vec<Finding> = Vec::new();
             let (mut wb, diags) = hardcalc::Workbook::from_document(&doc);
             for d in &diags {
-                println!("error  {}: {}", d.location, d.message);
+                let message = match &d.cell {
+                    Some(c) => d.message.strip_prefix(&format!("{c}: ")).unwrap_or(&d.message).to_string(),
+                    None => d.message.clone(),
+                };
+                let (block, table) = if d.cell.is_some() { ("table".to_string(), Some(d.location.clone())) } else { (d.location.clone(), None) };
+                findings.push(Finding { severity: "error", line: d.line, block, table, cell: d.cell.clone(), message });
             }
             let attached = hardcalc::layers::attach(&doc, &wb);
             let formats = hardcalc::layers::Formats::new(&attached, "format");
+            let layer_finding = |e: &hardcalc::layers::LayerError, wb: &hardcalc::Workbook| Finding {
+                severity: "error",
+                line: e.line,
+                block: format!("layer {}", e.layer),
+                table: wb.sheets[e.sheet].name.clone(),
+                cell: None,
+                message: e.message.clone(),
+            };
             for e in &formats.errors {
-                println!("error  layer format: {e}");
+                findings.push(layer_finding(e, &wb));
             }
             let (violations, rule_errors) = hardcalc::layers::validate(&attached, &mut wb, "validate");
             for e in &rule_errors {
-                println!("error  layer validate: {e}");
+                findings.push(layer_finding(e, &wb));
             }
             for v in &violations {
                 let (s, r, c) = v.cell;
-                let sheet = wb.sheets[s].name.clone().unwrap_or_else(|| format!("table #{}", s + 1));
-                println!("invalid  {sheet}: {}{}: {}", hardcalc::engine::col_letters(c), r + 1, v.message);
+                findings.push(Finding {
+                    severity: "invalid",
+                    line: 0,
+                    block: "layer validate".into(),
+                    table: Some(wb.sheets[s].name.clone().unwrap_or_else(|| format!("table #{}", s + 1))),
+                    cell: Some(format!("{}{}", hardcalc::engine::col_letters(c), r + 1)),
+                    message: v.message.clone(),
+                });
             }
-            let mut chart_errors = 0;
             for block in &doc.blocks {
                 if let Block::Chart { name, lines } = block {
                     let result = hardcalc::chart::ChartSpec::parse(name, lines)
                         .and_then(|spec| hardcalc::chart::resolve(&spec, &mut wb));
                     if let Err(e) = result {
-                        println!("error  chart {name}: {e}");
-                        chart_errors += 1;
+                        findings.push(Finding { severity: "error", line: 0, block: format!("chart {name}"), table: None, cell: None, message: e.to_string() });
                     }
                 }
             }
             let calc_problems = hardcalc::sheet::problems(&hardcalc::sheet::evaluate_document(&doc, &mut wb));
             for p in &calc_problems {
-                println!("error  calc: {p}");
+                findings.push(Finding { severity: "error", line: 0, block: "calc".into(), table: None, cell: None, message: p.to_string() });
             }
-            if !diags.is_empty()
-                || !calc_problems.is_empty()
-                || !formats.errors.is_empty()
-                || !rule_errors.is_empty()
-                || !violations.is_empty()
-                || chart_errors > 0
-            {
+            if json {
+                println!("{}", check_json(&doc, &findings));
+            } else {
+                summarize(&doc);
+                for f in &findings {
+                    let place = if f.line > 0 { format!("{path}:{}: ", f.line) } else { String::new() };
+                    let table = f.table.as_deref().map(|t| format!(" @{t}")).unwrap_or_default();
+                    let text = match (&f.cell, f.block.as_str()) {
+                        (Some(c), "table") => format!("{}: {c}: {}", f.table.as_deref().unwrap_or(""), f.message),
+                        (Some(c), _) => format!("{}{table}: {c}: {}", f.block, f.message),
+                        (None, _) => format!("{}{table}: {}", f.block, f.message),
+                    };
+                    println!("{place}{}  {text}", f.severity);
+                }
+            }
+            if !findings.is_empty() {
                 return ExitCode::FAILURE;
             }
         }
@@ -261,7 +295,65 @@ fn main() -> ExitCode {
         }
         "eval" => {
             let (mut wb, _) = hardcalc::Workbook::from_document(&doc);
-            print!("{}", hardcalc::write(&wb.render(&doc)));
+            let mut exprs = Vec::new();
+            let mut raw = false;
+            let mut json = false;
+            let mut rest = args[2..].iter();
+            while let Some(a) = rest.next() {
+                match a.as_str() {
+                    "-e" => match rest.next() {
+                        Some(e) => exprs.push(e.clone()),
+                        None => {
+                            eprintln!("eval: -e needs an expression");
+                            return ExitCode::from(2);
+                        }
+                    },
+                    "--raw" => raw = true,
+                    "--json" => json = true,
+                    other => {
+                        eprintln!("eval: unknown option '{other}'\n{USAGE}");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            if exprs.is_empty() {
+                if raw || json {
+                    eprintln!("eval: --raw and --json need -e <expression>");
+                    return ExitCode::from(2);
+                }
+                print!("{}", hardcalc::write(&wb.render(&doc)));
+                return ExitCode::SUCCESS;
+            }
+            let mut failed = false;
+            let mut results = Vec::new();
+            for e in &exprs {
+                let v = wb.eval_formula(e, 0);
+                failed |= v.is_error();
+                if json {
+                    let (value, unit) = match &v {
+                        hardcalc::value::Value::Num(n, u) => (serde_json::json!(n), (!u.is_none()).then(|| u.to_string())),
+                        hardcalc::value::Value::Bool(b) => (serde_json::json!(b), None),
+                        hardcalc::value::Value::Error(_) | hardcalc::value::Value::Null => (serde_json::Value::Null, None),
+                        other => (serde_json::json!(other.display(None, false)), None),
+                    };
+                    let error = if let hardcalc::value::Value::Error(m) = &v { Some(m.clone()) } else { None };
+                    results.push(serde_json::json!({"expr": e, "value": value, "unit": unit, "error": error}));
+                } else if raw {
+                    match &v {
+                        hardcalc::value::Value::Num(n, _) => println!("{n}"),
+                        other => println!("{}", other.display(None, false)),
+                    }
+                } else {
+                    println!("{}", v.display(None, wb.decimal_comma));
+                }
+            }
+            if json {
+                let out = if results.len() == 1 { results.remove(0) } else { serde_json::Value::Array(results) };
+                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            }
+            if failed {
+                return ExitCode::FAILURE;
+            }
         }
         _ => {
             eprintln!("{USAGE}");
@@ -304,4 +396,47 @@ fn summarize(doc: &hardcalc::Document) {
             Block::Text(_) | Block::Code { .. } => {}
         }
     }
+}
+
+/// One problem `check` found.
+struct Finding {
+    severity: &'static str,
+    line: usize,
+    block: String,
+    table: Option<String>,
+    cell: Option<String>,
+    message: String,
+}
+
+fn check_json(doc: &hardcalc::Document, findings: &[Finding]) -> String {
+    let tables: Vec<serde_json::Value> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Table(t) => Some(serde_json::json!({
+                "name": t.name,
+                "shape": t.shape.to_string(),
+                "rows": t.rows.len(),
+                "columns": t.columns.iter().map(|c| match &c.ty {
+                    Some(ty) => format!("{}:{}", c.name, ty),
+                    None => c.name.clone(),
+                }).collect::<Vec<_>>(),
+            })),
+            _ => None,
+        })
+        .collect();
+    let diagnostics: Vec<serde_json::Value> = findings
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "severity": f.severity,
+                "line": (f.line > 0).then_some(f.line),
+                "block": f.block,
+                "table": f.table,
+                "cell": f.cell,
+                "message": f.message,
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&serde_json::json!({"tables": tables, "diagnostics": diagnostics})).unwrap_or_default()
 }

@@ -111,6 +111,8 @@ pub struct SpanStyle {
     pub color: Option<(u8, u8, u8)>,
     /// Light gray background (table headers and notes in raster layouts).
     pub shade: bool,
+    /// Background color of the cell (layer `bg`), already light for paper.
+    pub bg: Option<(u8, u8, u8)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -554,6 +556,7 @@ pub fn styled_line(kind: LineKind, pieces: &[crate::text::Styled], base: Option<
             italic: p.italic,
             color: base.and_then(|b| b.color),
             shade: base.is_some_and(|b| b.shade),
+            bg: base.and_then(|b| b.bg),
         };
         spans.push(Span { col, text: p.text.clone(), style });
         col += p.text.width();
@@ -645,6 +648,8 @@ pub fn table_lines(t: &PrintTable, columns: &[String], w: usize, h: usize) -> Ve
             if shade {
                 text = format!("{text:<width$}", width = cw + pad);
                 style.shade = true;
+            } else if style.bg.is_some() {
+                text = format!("{text:<width$}", width = cw);
             }
             spans.push(Span { col: x, text, style });
             x += widths[k] + COL_GAP;
@@ -716,6 +721,19 @@ pub fn print_color(c: &Color) -> Option<(u8, u8, u8)> {
     }
 }
 
+/// Light background for a layer `bg` color on paper: named colors are
+/// lightened so black text stays readable, RGB values are taken as written.
+pub fn print_bg(c: &Color) -> Option<(u8, u8, u8)> {
+    match c {
+        Color::Rgb(r, g, b) => Some((*r, *g, *b)),
+        Color::Named(_) => {
+            let (r, g, b) = print_color(c)?;
+            let lighten = |x: u8| (x as u32 + (255 - x as u32) * 3 / 4) as u8;
+            Some((lighten(r), lighten(g), lighten(b)))
+        }
+    }
+}
+
 // ---------------------------------------------------------------- PDF
 
 /// Maps a char to the WinAnsi encoding of the standard PDF fonts.
@@ -773,6 +791,9 @@ fn page_content(layout: &Layout, index: usize) -> Vec<u8> {
             out.extend(format!("0.4 G 0.5 w {:.2} {:.2} m {:.2} {:.2} l S\n", MARGIN, top - lh, MARGIN + w, top - lh).bytes());
         }
         for span in &line.spans {
+            if let Some(bg) = span.style.bg {
+                rect_op(&mut out, bg, MARGIN + span.col as f32 * cw, top - lh, span.text.width() as f32 * cw, lh);
+            }
             if span.style.shade {
                 let x = MARGIN + span.col as f32 * cw;
                 out.extend(format!("0.9 g {:.2} {:.2} {:.2} {:.2} re f\n", x, top - lh, span.text.width() as f32 * cw, lh).bytes());

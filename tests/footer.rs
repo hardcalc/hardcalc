@@ -155,3 +155,11 @@ fn moves_reach_footers() {
     hardcalc::refs::update_document(&mut doc, 0, &hardcalc::refs::Moves { rows: &[0, 1, 2], cols: &[1, 0, 2] });
     assert_eq!(footer_of(&doc)[1][1], "=avg(A)");
 }
+
+#[test]
+fn eval_prints_footer_values() {
+    let (doc, mut wb) = workbook(DOC);
+    let out = hardcalc::write(&wb.render(&doc));
+    assert!(!out.contains("=sum"), "{out}");
+    assert!(out.contains("1325.49") || out.contains("1325,49"), "{out}");
+}

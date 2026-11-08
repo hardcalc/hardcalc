@@ -7,7 +7,7 @@
 //! the `comments` layer.
 
 use crate::engine::col_letters;
-use crate::model::{Align, Block, Column, Document, Layer, Rule, Shape, Table};
+use crate::model::{Align, Block, Column, Document, Layer, Rule, Shape, SrcLine, Table};
 use crate::value::civil_from_days;
 use calamine::{open_workbook_auto, Data, Range, Reader};
 use std::collections::HashMap;
@@ -209,6 +209,7 @@ fn build_document(title: &str, source: &str, sheets: &[Sheet], taken: &[String])
             rows.push(out);
         }
         doc.blocks.push(Block::Table(Table {
+            line: SrcLine::default(),
             heading_level: Some(2),
             name: Some(g.name.clone()),
             shape: Shape::Matrix(Vec::new()),
@@ -220,7 +221,7 @@ fn build_document(title: &str, source: &str, sheets: &[Sheet], taken: &[String])
             fill: None,
         }));
         if !notes.is_empty() {
-            doc.blocks.push(Block::Layer(Layer { name: "comments".into(), target: None, rules: notes }));
+            doc.blocks.push(Block::Layer(Layer { line: SrcLine::default(), name: "comments".into(), target: None, rules: notes }));
         }
         report.tables += 1;
     }

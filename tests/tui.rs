@@ -2773,3 +2773,78 @@ fn decimal_comma_only_on_screen() {
     assert!(out.contains("| x   | 1.5          |") && out.contains("q = 1.35 kN"), "{out}");
 }
 
+
+fn cmd(a: &mut App, text: &str) {
+    typ(a, text);
+    key(a, KeyCode::Enter);
+}
+
+#[test]
+fn bg_can_be_removed_again() {
+    let mut a = app();
+    cmd(&mut a, ":bg blue");
+    assert!(hardcalc::write(&a.doc).contains("bg blue"), "{}", hardcalc::write(&a.doc));
+    cmd(&mut a, ":bg");
+    assert!(!hardcalc::write(&a.doc).contains("bg blue"), "{}", hardcalc::write(&a.doc));
+}
+
+#[test]
+fn spaces_in_a_formula_stay_in_the_editor() {
+    let mut a = app();
+    key(&mut a, KeyCode::Enter);
+    typ(&mut a, "= 1 + 2 * (3 + 4) ");
+    assert!(matches!(a.mode, Mode::Edit { .. }), "{:?}", a.mode);
+    key(&mut a, KeyCode::Enter);
+    let _ = render(&mut a);
+}
+
+#[test]
+fn arrows_move_the_caret_in_a_formula_with_spaces() {
+    let mut a = app();
+    key(&mut a, KeyCode::Enter);
+    key(&mut a, KeyCode::Home);
+    for _ in 0..20 {
+        key(&mut a, KeyCode::Backspace);
+        key(&mut a, KeyCode::Delete);
+    }
+    typ(&mut a, "=A1 + B1");
+    for _ in 0..3 {
+        key(&mut a, KeyCode::Left);
+    }
+    let Mode::Edit { buf, cursor } = &a.mode else { panic!("left the editor") };
+    assert_eq!((buf.as_str(), *cursor), ("=A1 + B1", 5), "caret must stay in the text");
+    assert!(a.point_range().is_none());
+}
+
+fn bg_app(rule: &str) -> App {
+    let src = format!("## T :: matrix\n\n| A | B |\n|---|---|\n| 1 | x |\n| 2 | y |\n\n```layer format\n{rule}\n```\n");
+    App::new(PathBuf::from("t.hcmd"), hardcalc::parse(&src).unwrap())
+}
+
+#[test]
+fn bg_removes_colors_from_other_rules() {
+    for rule in ["A1:A2: bg green", "A: bg green", "A1: bg green", "row[B=x]: bg green", "1: bg green"] {
+        let mut a = bg_app(rule);
+        cmd(&mut a, ":bg");
+        let out = hardcalc::write(&a.doc);
+        let (r, c) = a.view.cursor;
+        let (mut wb, _) = hardcalc::Workbook::from_document(&a.doc);
+        let att = hardcalc::layers::attach(&a.doc, &wb);
+        let style = hardcalc::layers::Formats::new(&att, "format").style(&mut wb, (0, r, c));
+        assert!(style.bg.is_none(), "{rule}: bg survived\n{out}");
+    }
+}
+
+#[test]
+fn bg_on_a_selection_can_be_removed_after_reload() {
+    let mut a = app();
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    cmd(&mut a, ":bg blue");
+    let text = hardcalc::write(&a.doc);
+    let mut b = App::new(PathBuf::from("budget.hcmd"), hardcalc::parse(&text).unwrap());
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    b.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    cmd(&mut b, ":bg");
+    let out = hardcalc::write(&b.doc);
+    assert!(!out.contains("bg blue"), "{text}\n---\n{out}");
+}

@@ -582,9 +582,10 @@ hardcalc                               # interface with a new document (playgrou
 hardcalc <file>                        # interface (.hcmd, or import of xlsx/ods/csv …)
 hardcalc --version                     # version
 hardcalc desktop install|uninstall     # start menu entry and .hcmd file association
-hardcalc check <file>                  # overview, type, formula, chart and validation errors
+hardcalc check <file> [--json]         # overview, type, formula, chart and validation errors (file:line:)
 hardcalc fmt <file>                    # print the file in canonical form
 hardcalc eval <file>                   # print the file with calculated values instead of formulas
+hardcalc eval <file> -e <expr> [--raw] [--json]  # one result per -e; exit code 1 on an error value
 hardcalc calc <file> [--ascii]         # print the calculation sheet with the way to the result
 hardcalc report <file> [out.pdf|.typ]  # calculation report with typeset formulas (Typst)
 hardcalc pdf <file> [Layout]           # the whole document or one layout as PDF

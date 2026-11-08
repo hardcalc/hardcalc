@@ -1,7 +1,7 @@
 //! CSV / TSV import and export.
 
 use crate::engine::{col_letters, Workbook};
-use crate::model::{Align, Block, Column, Document, Shape, Table};
+use crate::model::{Align, Block, Column, Document, Shape, SrcLine, Table};
 use std::path::{Path, PathBuf};
 
 /// Decodes file bytes: UTF-8 (a BOM is dropped), otherwise Windows-1252 as
@@ -120,7 +120,7 @@ pub fn import(path: &Path) -> Result<(Document, crate::import::ImportReport), St
     let doc = Document {
         blocks: vec![
             Block::Text(vec![format!("# {stem}"), String::new(), format!("Imported from {source}.")]),
-            Block::Table(Table { heading_level: Some(2), name: Some(stem), shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None }),
+            Block::Table(Table { line: SrcLine::default(), heading_level: Some(2), name: Some(stem), shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None }),
         ],
     };
     Ok((doc, report))

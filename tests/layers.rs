@@ -171,3 +171,27 @@ fn other_tables_are_read_in_layer_a_unless_named() {
     // In its own table a reference keeps the formula's layer.
     assert_eq!(num(wb.eval_formula_in("Account!B1", 0, 1)), 50.0);
 }
+
+#[test]
+fn range_targets_survive_parse_and_write() {
+    let src = "## T :: matrix\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\n```layer format\nA1:A2: bg green\n```\n\n```layer comments\nB1: Note: x\n```\n";
+    let doc = hardcalc::parse(src).unwrap();
+    let out = hardcalc::write(&doc);
+    assert!(out.contains("A1:A2: bg green"), "{out}");
+    assert!(out.contains("B1: Note: x"), "{out}");
+    let (wb, _) = Workbook::from_document(&doc);
+    let att = hardcalc::layers::attach(&doc, &wb);
+    let f = hardcalc::layers::Formats::new(&att, "format");
+    assert!(f.errors.is_empty(), "{:?}", f.errors);
+}
+
+#[test]
+fn layer_errors_know_their_line() {
+    let src = "## T :: matrix\n\n| A |\n|---|\n| 1 |\n\n```layer format\nA1: bold\nA1: bogus\n```\n";
+    let doc = hardcalc::parse(src).unwrap();
+    let (wb, _) = Workbook::from_document(&doc);
+    let att = hardcalc::layers::attach(&doc, &wb);
+    let f = hardcalc::layers::Formats::new(&att, "format");
+    assert_eq!(f.errors.len(), 1);
+    assert_eq!(f.errors[0].line, 9);
+}

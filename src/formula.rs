@@ -323,6 +323,9 @@ impl Parser {
             if self.eat(close) {
                 return Ok(args);
             }
+            if !self.peek_op(",") && close == "]" && self.pos < self.toks.len() {
+                return Err("expected ',' or ']' – a row key with spaces or other special characters must be quoted: Table[\"Row name\", Column]".into());
+            }
             self.expect(",")?;
         }
     }

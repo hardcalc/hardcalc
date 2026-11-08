@@ -259,7 +259,7 @@ impl App {
                 Some(i) => i,
                 None => {
                     let at = insert_at.unwrap_or(doc.blocks.len());
-                    doc.blocks.insert(at, Block::Layer(Layer { name: layer.clone(), target: None, rules: Vec::new() }));
+                    doc.blocks.insert(at, Block::Layer(Layer { line: Default::default(), name: layer.clone(), target: None, rules: Vec::new() }));
                     at
                 }
             };

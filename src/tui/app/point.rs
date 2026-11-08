@@ -51,7 +51,12 @@ impl App {
             return true;
         }
         let before = buf.chars().take(*cursor).collect::<String>();
-        before.trim_end().ends_with(['=', '(', ',', ';', '+', '-', '*', '/', '^', '&', '<', '>', ':'])
+        // Inside a finished formula (`=A1 + |B1`, spaces included) the arrows
+        // move the caret: only before the end, a closing bracket or an operator
+        // is a reference picked.
+        let after = buf.chars().skip(*cursor).collect::<String>();
+        let open_ahead = after.trim_start().chars().next().is_none_or(|c| matches!(c, ')' | ',' | ';' | '+' | '-' | '*' | '/' | '^' | '&' | '<' | '>' | '=' | ':'));
+        open_ahead && before.trim_end().ends_with(['=', '(', ',', ';', '+', '-', '*', '/', '^', '&', '<', '>', ':'])
     }
 
     /// The range being picked (for drawing).

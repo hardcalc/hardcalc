@@ -365,17 +365,22 @@ impl CellStyle {
 #[derive(Debug, Default)]
 pub struct Formats {
     rules: Vec<(usize, Target, CellStyle)>,
-    pub errors: Vec<String>,
+    pub errors: Vec<LayerError>,
 }
 
 impl Formats {
     pub fn new(attached: &[Attached], layer: &str) -> Formats {
         let mut f = Formats::default();
         for a in attached.iter().filter(|a| a.layer.name == layer) {
-            for rule in &a.layer.rules {
+            for (i, rule) in a.layer.rules.iter().enumerate() {
                 if let Rule::Rule { target, body } = rule {
                     let (style, errs) = CellStyle::parse(body);
-                    f.errors.extend(errs.into_iter().map(|e| format!("{target}: {e}")));
+                    f.errors.extend(errs.into_iter().map(|e| LayerError {
+                        line: a.layer.line.0 + 1 + i,
+                        sheet: a.sheet,
+                        layer: layer.to_string(),
+                        message: format!("{target}: {e}"),
+                    }));
                     f.rules.push((a.sheet, Target::parse(target), style));
                 }
             }
@@ -439,6 +444,18 @@ impl Check {
     }
 }
 
+/// A rule that cannot be read, with where it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerError {
+    /// Line of the rule in the file (0 = unknown).
+    pub line: usize,
+    /// Index of the table the layer belongs to.
+    pub sheet: usize,
+    /// Name of the layer (`format`, `validate`, …).
+    pub layer: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Violation {
     pub cell: CellId,
@@ -447,16 +464,21 @@ pub struct Violation {
 
 /// Runs all rules of the layer named `layer` (normally `validate`).
 /// Returns violations and rule syntax errors.
-pub fn validate(attached: &[Attached], wb: &mut Workbook, layer: &str) -> (Vec<Violation>, Vec<String>) {
+pub fn validate(attached: &[Attached], wb: &mut Workbook, layer: &str) -> (Vec<Violation>, Vec<LayerError>) {
     let mut out = Vec::new();
     let mut errors = Vec::new();
     for a in attached.iter().filter(|a| a.layer.name == layer) {
-        for rule in &a.layer.rules {
+        for (i, rule) in a.layer.rules.iter().enumerate() {
             let Rule::Rule { target, body } = rule else { continue };
             let checks = match Check::parse_all(body) {
                 Ok(c) => c,
                 Err(e) => {
-                    errors.push(format!("{target}: {e}"));
+                    errors.push(LayerError {
+                        line: a.layer.line.0 + 1 + i,
+                        sheet: a.sheet,
+                        layer: layer.to_string(),
+                        message: format!("{target}: {e}"),
+                    });
                     continue;
                 }
             };

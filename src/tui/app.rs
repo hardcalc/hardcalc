@@ -463,6 +463,7 @@ fn table_mut(doc: &mut Document, sheet: usize) -> Option<&mut Table> {
 
 fn new_table(name: &str) -> Table {
     Table {
+        line: Default::default(),
         heading_level: Some(2),
         name: Some(name.to_string()),
         shape: Shape::Matrix(Vec::new()),
@@ -2222,7 +2223,8 @@ impl App {
                     .map(|c| {
                         let v = self.table_cell_view_in((s, r, c), z);
                         let color = if v.error { Some((190, 0, 0)) } else { v.style.fg.as_ref().and_then(print::print_color) };
-                        let style = SpanStyle { bold: v.style.bold, italic: v.style.italic, color, shade: false };
+                        let bg = v.style.bg.as_ref().and_then(print::print_bg);
+                        let style = SpanStyle { bold: v.style.bold, italic: v.style.italic, color, shade: false, bg };
                         PrintCell { text: v.text, align: v.align, style }
                     })
                     .collect()
@@ -2265,7 +2267,7 @@ impl App {
                     let text = if v.is_error() { "#ERR".to_string() } else { self.wb.display(id) };
                     let align = if matches!(v, Value::Num(..) | Value::Date(_)) { Align::Right } else { Align::Left };
                     let color = v.is_error().then_some((190, 0, 0));
-                    PrintCell { text, align, style: SpanStyle { bold: true, italic: false, color, shade: false } }
+                    PrintCell { text, align, style: SpanStyle { bold: true, italic: false, color, shade: false, bg: None } }
                 })
                 .collect();
             if let Some(first) = line.first_mut() {
@@ -3044,7 +3046,7 @@ impl App {
         let sheet = self.view.sheet;
         let (found, insert_at) = self.layer_block(name, sheet);
         if found.is_none() {
-            let layer = crate::model::Layer { name: name.to_string(), target: None, rules: Vec::new() };
+            let layer = crate::model::Layer { line: Default::default(), name: name.to_string(), target: None, rules: Vec::new() };
             self.with_doc(|doc| {
                 let at = insert_at.unwrap_or(doc.blocks.len()).min(doc.blocks.len());
                 doc.blocks.insert(at, Block::Layer(layer));
@@ -3159,7 +3161,7 @@ impl App {
                 Some(i) => i,
                 None => {
                     let at = insert_at.unwrap_or(doc.blocks.len());
-                    doc.blocks.insert(at, Block::Layer(Layer { name: layer, target: None, rules: Vec::new() }));
+                    doc.blocks.insert(at, Block::Layer(Layer { line: Default::default(), name: layer, target: None, rules: Vec::new() }));
                     at
                 }
             };

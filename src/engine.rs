@@ -135,6 +135,10 @@ fn counts(cell: &Cell) -> bool {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
+    /// Line in the source file (0 = unknown).
+    pub line: usize,
+    /// The cell, e.g. `E1`, if the problem is in one.
+    pub cell: Option<String>,
     /// Sheet name or `types`.
     pub location: String,
     pub message: String,
@@ -165,7 +169,7 @@ impl Workbook {
         for block in &doc.blocks {
             if let Block::Types(lines) = block {
                 for e in types.add_block(lines) {
-                    diags.push(Diagnostic { location: "types".into(), message: e });
+                    diags.push(Diagnostic { line: 0, cell: None, location: "types".into(), message: e });
                 }
             }
         }
@@ -181,7 +185,7 @@ impl Workbook {
                     let ty = match &c.ty {
                         None => Type::auto(),
                         Some(expr) => types.resolve(expr).unwrap_or_else(|e| {
-                            diags.push(Diagnostic { location: location.clone(), message: format!("column {}: {e}", c.name) });
+                            diags.push(Diagnostic { line: 0, cell: None, location: location.clone(), message: format!("column {}: {e}", c.name) });
                             Type::auto()
                         }),
                     };
@@ -197,6 +201,8 @@ impl Workbook {
                     match &cell {
                         Cell::Value(Value::Error(e)) | Cell::Formula { expr: Err(e), .. } => {
                             diags.push(Diagnostic {
+                                line: if t.line.0 > 0 { t.line.0 + 2 + r } else { 0 },
+                                cell: Some(format!("{}{}", col_letters(c), r + 1)),
                                 location: location.clone(),
                                 message: format!("{}{}: {e}", col_letters(c), r + 1),
                             });
@@ -218,7 +224,7 @@ impl Workbook {
                         .map(|(c, col)| {
                             let cell = footer_cell(f.cells.get(c).map_or("", String::as_str), col);
                             if let Cell::Formula { expr: Err(e), .. } = &cell {
-                                diags.push(Diagnostic { location: location.clone(), message: format!("footer {} {}: {e}", f.label, col.name) });
+                                diags.push(Diagnostic { line: 0, cell: None, location: location.clone(), message: format!("footer {} {}: {e}", f.label, col.name) });
                             }
                             cell
                         })
@@ -242,6 +248,8 @@ impl Workbook {
                                     let cell = make_cell(raw, &columns[c].ty);
                                     if let Cell::Value(Value::Error(e)) | Cell::Formula { expr: Err(e), .. } = &cell {
                                         diags.push(Diagnostic {
+                                            line: 0,
+                                            cell: Some(format!("{}{}", col_letters(c), r + 1)),
                                             location: location.clone(),
                                             message: format!("layer {}: {}{}: {e}", l.name, col_letters(c), r + 1),
                                         });
@@ -277,7 +285,7 @@ impl Workbook {
                         None => "names are no references or lower-case letters".to_string(),
                         Some(_) => "its columns or rows do not match the table before it, or the name is taken".to_string(),
                     };
-                    diags.push(Diagnostic { location: info.clone(), message: format!("block ignored: {reason}") });
+                    diags.push(Diagnostic { line: 0, cell: None, location: info.clone(), message: format!("block ignored: {reason}") });
                 }
                 Block::Code { info, body } if crate::parse::is_footer_info(info) => {
                     let reason = match previous {
@@ -285,7 +293,7 @@ impl Workbook {
                         Some(t) => crate::parse::parse_footer(body, &t.columns).err().unwrap_or_default(),
                         None => "no table before it".into(),
                     };
-                    diags.push(Diagnostic { location: "footer".into(), message: format!("block ignored: {reason}") });
+                    diags.push(Diagnostic { line: 0, cell: None, location: "footer".into(), message: format!("block ignored: {reason}") });
                 }
                 _ => {}
             }
@@ -297,13 +305,13 @@ impl Workbook {
         for block in &doc.blocks {
             if let Block::Functions(lines) = block {
                 let (defs, errors) = crate::functions::parse_block(lines);
-                diags.extend(errors.into_iter().map(|message| Diagnostic { location: "functions".into(), message }));
+                diags.extend(errors.into_iter().map(|message| Diagnostic { line: 0, cell: None, location: "functions".into(), message }));
                 for (_, def) in defs {
                     match def.compile() {
                         Ok(f) => {
                             functions.insert(def.name.clone(), f);
                         }
-                        Err(message) => diags.push(Diagnostic { location: "functions".into(), message }),
+                        Err(message) => diags.push(Diagnostic { line: 0, cell: None, location: "functions".into(), message }),
                     }
                 }
             }
@@ -471,6 +479,13 @@ impl Workbook {
                     for r in 0..t.rows.len() {
                         for c in 0..t.columns.len() {
                             t.rows[r][c] = self.display((s, r, c));
+                        }
+                    }
+                    for k in 0..t.footer.len() {
+                        for c in 0..t.columns.len() {
+                            if !t.footer[k].cells[c].trim().is_empty() {
+                                t.footer[k].cells[c] = self.display((s, FOOTER_ROW + k, c));
+                            }
                         }
                     }
                     s += 1;
@@ -1061,7 +1076,12 @@ fn conform(v: Value, ty: &Type) -> Value {
         return Value::Num(n, u);
     }
     if u != ty.unit {
-        return Value::err(format!("expected unit {}, got {}", unit_name(&ty.unit), unit_name(&u)));
+        let hint = if u.is_none() {
+            format!(" – multiply by 1{{{}}} or give the source column a type", ty.unit)
+        } else {
+            String::new()
+        };
+        return Value::err(format!("expected unit {}, got {}{hint}", unit_name(&ty.unit), unit_name(&u)));
     }
     match ty.base {
         Base::Decimal(d) => Value::Num(round_to(n, d as i32), u),

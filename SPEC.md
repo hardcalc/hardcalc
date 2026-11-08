@@ -252,7 +252,7 @@ is always `.`, arguments are separated by `,` or `;`.
 | `B2:4`, `B2:D`                | short form: after the `:` only what changes (`B2:B4`, `B2:D2`) |
 | `Expenses!Amount`, `Expenses!B2`, `Expenses!B2:B4`, `Expenses!B` | column, cell, range of another table (`"My sheet"!B2` for names with spaces) |
 | `Amount[Rent]`, `Amount[Total]` | cell of the column in the row or footer row with this name |
-| `Expenses[Rent, Amount]`      | cell by row key (1st column) and column                |
+| `Expenses[Rent, Amount]`      | cell by row key (1st column) and column; a key with spaces is quoted: `Cameras["Nikon Z7 II", Price]` |
 | `Sales[Region=North]`         | filter; gives the last column (value column) as a vector |
 | `@Amount`, `[@Amount]`        | value of the column in the same row – also in functions that otherwise take the whole column (`sum(@Amount, @Gross)`) |
 | `@Expenses!Amount`, `Expenses[@Amount]` | the same row of another table |

@@ -24,8 +24,21 @@ pub enum Block {
     Code { info: String, body: Vec<String> },
 }
 
+/// Line in the source file (1-based, 0 = unknown). Never part of equality, so
+/// a document equals its re-read written form.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SrcLine(pub usize);
+
+impl PartialEq for SrcLine {
+    fn eq(&self, _: &SrcLine) -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Table {
+    /// Line of the header row.
+    pub line: SrcLine,
     /// Heading level (number of `#`) if declared via `## Name :: shape`.
     pub heading_level: Option<usize>,
     pub name: Option<String>,
@@ -133,6 +146,8 @@ pub struct Column {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layer {
+    /// Line of the opening fence.
+    pub line: SrcLine,
     pub name: String,
     /// Explicit target table (`@Name`); otherwise the preceding table.
     pub target: Option<String>,

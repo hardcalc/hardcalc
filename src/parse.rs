@@ -70,7 +70,7 @@ pub fn parse(src: &str) -> Result<Document, ParseError> {
                 t.footer = rows;
                 continue;
             }
-            doc.blocks.push(fenced_block(info, body));
+            doc.blocks.push(fenced_block(info, body, start + 1));
             continue;
         }
 
@@ -121,7 +121,7 @@ fn fence_marker(line: &str) -> Option<&'static str> {
     }
 }
 
-fn fenced_block(info: String, body: Vec<String>) -> Block {
+fn fenced_block(info: String, body: Vec<String>, line: usize) -> Block {
     // A slice or scenario that did not fit its table stays as it is (check reports it).
     if data_layer_info(&info).is_some() || is_data_layer_like(&info) {
         return Block::Code { info, body };
@@ -140,7 +140,7 @@ fn fenced_block(info: String, body: Vec<String>) -> Block {
         };
         let name = head.split_whitespace().next().unwrap_or_default().to_string();
         let rules = body.into_iter().map(parse_rule).collect();
-        return Block::Layer(Layer { name, target, rules });
+        return Block::Layer(Layer { line: SrcLine(line), name, target, rules });
     }
     if let Some(name) = info.strip_prefix("layout ") {
         return Block::Layout { name: name.trim().to_string(), lines: body };
@@ -187,6 +187,17 @@ pub fn parse_footer(lines: &[String], columns: &[Column]) -> Result<Vec<FooterRo
     Ok(rows)
 }
 
+/// Whether `before` is a cell like `A1` and `after` starts with a second cell
+/// and a colon (`B2:`), so the colon between them belongs to a range target.
+fn is_range_start(before: &str, after: &str) -> bool {
+    let cell = |s: &str| {
+        let letters = s.chars().take_while(|c| c.is_ascii_alphabetic()).count();
+        let digits = s[letters..].chars().take_while(|c| c.is_ascii_digit()).count();
+        letters > 0 && digits > 0 && letters + digits == s.len()
+    };
+    cell(before.trim()) && after.split_once(':').is_some_and(|(end, _)| cell(end))
+}
+
 fn parse_rule(line: String) -> Rule {
     let t = line.trim();
     if t.is_empty() || t.starts_with('#') {
@@ -200,6 +211,10 @@ fn parse_rule(line: String) -> Rule {
             '[' => depth += 1,
             ']' => depth -= 1,
             ':' if depth == 0 => {
+                // `A1:B2: bg green`: this colon joins the two ends of a range.
+                if is_range_start(&t[..idx], &t[idx + 1..]) {
+                    continue;
+                }
                 return Rule::Rule {
                     target: t[..idx].trim().to_string(),
                     body: t[idx + 1..].trim().to_string(),
@@ -429,6 +444,6 @@ fn parse_table(lines: &[&str], start: usize) -> (Table, usize) {
         rows.push(cells);
         i += 1;
     }
-    let table = Table { heading_level: None, name: None, shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None };
+    let table = Table { line: SrcLine(start + 1), heading_level: None, name: None, shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None };
     (table, i)
 }

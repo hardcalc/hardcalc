@@ -341,13 +341,7 @@ fn rgb(c: &layers::Color) -> Option<u32> {
 
 /// Light background colours for `bg` (the print colours are for text).
 fn bg_rgb(c: &layers::Color) -> Option<u32> {
-    match c {
-        layers::Color::Rgb(r, g, b) => Some((*r as u32) << 16 | (*g as u32) << 8 | *b as u32),
-        layers::Color::Named(_) => rgb(c).map(|v| {
-            let lighten = |x: u32| x + (255 - x) * 3 / 4;
-            lighten(v >> 16) << 16 | lighten(v >> 8 & 0xff) << 8 | lighten(v & 0xff)
-        }),
-    }
+    crate::print::print_bg(c).map(|(r, g, b)| (r as u32) << 16 | (g as u32) << 8 | b as u32)
 }
 
 /// Excel number format for a type: decimals and unit, e.g. `#,##0.00 "€"`.
