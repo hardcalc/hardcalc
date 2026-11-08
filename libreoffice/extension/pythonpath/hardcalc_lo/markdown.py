@@ -186,9 +186,14 @@ def fences(lines):
     return out
 
 
+_CELL = re.compile(r"^[A-Za-z]+[0-9]+$")
+_RANGE_END = re.compile(r"^\s*[A-Za-z]+[0-9]+\s*:")
+
+
 def layer_rules(body):
     """`target: body` lines of a layer block → [(target, body)] (split at the
-    first `:` outside brackets, as hardcalc does)."""
+    first `:` outside brackets that is not the colon of a range like `A1:B2`,
+    as hardcalc does)."""
     out = []
     for line in body:
         t = line.strip()
@@ -201,6 +206,8 @@ def layer_rules(body):
             elif ch == "]":
                 depth -= 1
             elif ch == ":" and depth == 0:
+                if _CELL.match(t[:i].strip()) and _RANGE_END.match(t[i + 1:]):
+                    continue
                 out.append((t[:i].strip(), t[i + 1:].strip()))
                 break
     return out

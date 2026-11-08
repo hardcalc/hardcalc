@@ -10,8 +10,11 @@
 use crate::engine::RefParts;
 use crate::model::{Block, Document, Rule};
 
-/// New positions: `rows[old] = new`, `cols[old] = new`. Indexes beyond the
-/// maps stay where they are.
+/// Marks a deleted row or column in [`Moves`].
+pub const GONE: usize = usize::MAX;
+
+/// New positions: `rows[old] = new`, `cols[old] = new` ([`GONE`]: deleted).
+/// Indexes beyond the maps stay where they are.
 pub struct Moves<'a> {
     pub rows: &'a [usize],
     pub cols: &'a [usize],
@@ -26,11 +29,16 @@ impl Moves<'_> {
         self.cols.get(c).copied().unwrap_or(c)
     }
 
-    /// The moved form of a single reference (`B2` or `B`), if it is one.
-    /// Column names are not references.
+    fn has_gone(&self) -> bool {
+        self.rows.contains(&GONE) || self.cols.contains(&GONE)
+    }
+
+    /// The moved form of a single reference (`B2` or `B`), if it is one:
+    /// [`REF_ERROR`] if its cell, row or column is gone. A column name is no
+    /// reference, unless its column is deleted.
     fn reference(&self, ident: &str, names: &[String]) -> Option<String> {
-        if names.iter().any(|n| n == ident) {
-            return None;
+        if let Some(c) = names.iter().position(|n| n == ident) {
+            return (self.cols.get(c) == Some(&GONE)).then(|| REF_ERROR.to_string());
         }
         // Moves take anchored references along too (as in Excel).
         let mut p = RefParts::parse(ident)?;
@@ -39,9 +47,63 @@ impl Moves<'_> {
         }
         p.col = self.col(p.col);
         p.row = p.row.map(|(r, abs)| (self.row(r), abs));
+        if p.col == GONE || p.row.is_some_and(|(r, _)| r == GONE) {
+            return Some(REF_ERROR.to_string());
+        }
         Some(p.write())
     }
+
+    /// The moved form of a range `a:b` where lines are deleted: it shrinks
+    /// to what is left of it ([`REF_ERROR`] if nothing is). `None`: not two
+    /// references, or no line of it is deleted.
+    fn range(&self, a: &str, b: &str, names: &[String]) -> Option<(String, String)> {
+        if names.iter().any(|n| n == a || n == b) {
+            return None;
+        }
+        let (mut pa, mut pb) = (RefParts::parse(a)?, RefParts::parse(b)?);
+        let cols = |x: usize, y: usize| (x.min(y), x.max(y));
+        let (c0, c1) = cols(pa.col, pb.col);
+        let kept = |range: std::ops::RangeInclusive<usize>, map: &dyn Fn(usize) -> usize| -> Vec<usize> {
+            range.map(map).filter(|&n| n != GONE).collect()
+        };
+        let any_gone = (c0..=c1).any(|c| self.col(c) == GONE)
+            || match (pa.row, pb.row) {
+                (Some((x, _)), Some((y, _))) => (x.min(y)..=x.max(y)).any(|r| self.row(r) == GONE),
+                _ => false,
+            };
+        if !any_gone {
+            return None;
+        }
+        let col_map = |c: usize| self.col(c);
+        let row_map = |r: usize| self.row(r);
+        let left = kept(c0..=c1, &col_map);
+        if left.is_empty() {
+            return Some((REF_ERROR.into(), REF_ERROR.into()));
+        }
+        let (first_c, last_c) = (left[0], left[left.len() - 1]);
+        if pa.col <= pb.col {
+            (pa.col, pb.col) = (first_c, last_c);
+        } else {
+            (pa.col, pb.col) = (last_c, first_c);
+        }
+        if let (Some((x, xa)), Some((y, ya))) = (pa.row, pb.row) {
+            let rows = kept(x.min(y)..=x.max(y), &row_map);
+            if rows.is_empty() {
+                return Some((REF_ERROR.into(), REF_ERROR.into()));
+            }
+            let (first_r, last_r) = (rows[0], rows[rows.len() - 1]);
+            if x <= y {
+                (pa.row, pb.row) = (Some((first_r, xa)), Some((last_r, ya)));
+            } else {
+                (pa.row, pb.row) = (Some((last_r, xa)), Some((first_r, ya)));
+            }
+        }
+        Some((pa.write(), pb.write()))
+    }
 }
+
+/// What a reference to a deleted cell becomes in a formula.
+pub const REF_ERROR: &str = "#REF!";
 
 /// Rewrites the references to the moved table in one formula. `here`: the
 /// formula belongs to that table; `table`: its name (for `Table!B2`);
@@ -175,6 +237,33 @@ fn rewrite_long(src: &str, here: bool, table: Option<&str>, names: &[String], mo
                         Some(q) => Some(q.as_str()) == table,
                         None => here,
                     };
+                    // A range where lines are deleted shrinks as a whole.
+                    if applies && next == Some(':') && moves.has_gone() {
+                        let mut j = i;
+                        while j < chars.len() && chars[j] == ' ' {
+                            j += 1;
+                        }
+                        j += 1;
+                        while j < chars.len() && chars[j] == ' ' {
+                            j += 1;
+                        }
+                        let start = j;
+                        while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '$') {
+                            j += 1;
+                        }
+                        let end: String = chars[start..j].iter().collect();
+                        if let Some((a, b)) = moves.range(&ident, &end, names) {
+                            qualifier = None;
+                            if a == REF_ERROR {
+                                out.push_str(REF_ERROR);
+                            } else {
+                                out.push_str(&format!("{a}:{b}"));
+                            }
+                            i = j;
+                            last = 'a';
+                            continue;
+                        }
+                    }
                     if next != Some(':') {
                         qualifier = None;
                     }
@@ -200,20 +289,31 @@ fn rewrite_long(src: &str, here: bool, table: Option<&str>, names: &[String], mo
     out
 }
 
-/// The moved form of a layer rule target (`B1`, `B1:C3`, `3`, `B`).
-fn rewrite_target(target: &str, names: &[String], moves: &Moves) -> String {
+/// The moved form of a layer rule target (`B1`, `B1:C3`, `3`, `B`); `None`
+/// if what it names is deleted, the rule then goes.
+fn rewrite_target(target: &str, names: &[String], moves: &Moves) -> Option<String> {
     let t = target.trim();
-    if let Some((a, b)) = t.split_once(':')
-        && let (Some(a), Some(b)) = (moves.reference(a.trim(), names), moves.reference(b.trim(), names))
-    {
-        return format!("{a}:{b}");
+    if let Some((a, b)) = t.split_once(':') {
+        let (a, b) = (a.trim(), b.trim());
+        if let Some((x, y)) = moves.range(a, b, names) {
+            // A range that shrank to one cell is that cell.
+            return (x != REF_ERROR).then(|| if x == y { x } else { format!("{x}:{y}") });
+        }
+        if let (Some(x), Some(y)) = (moves.reference(a, names), moves.reference(b, names)) {
+            return (x != REF_ERROR && y != REF_ERROR).then(|| format!("{x}:{y}"));
+        }
     }
     if let Ok(n) = t.parse::<usize>()
         && n >= 1
     {
-        return (moves.row(n - 1) + 1).to_string();
+        let r = moves.row(n - 1);
+        return (r != GONE).then(|| (r + 1).to_string());
     }
-    moves.reference(t, names).unwrap_or_else(|| target.to_string())
+    match moves.reference(t, names) {
+        Some(r) if r == REF_ERROR => None,
+        Some(r) => Some(r),
+        None => Some(target.to_string()),
+    }
 }
 
 /// Rewrites all references to table `sheet` (formulas everywhere, the
@@ -240,11 +340,14 @@ pub fn update_document(doc: &mut Document, sheet: usize, moves: &Moves) {
                     None => table == Some(sheet),
                 };
                 if owner {
-                    for rule in &mut l.rules {
-                        if let Rule::Rule { target, .. } = rule {
-                            *target = rewrite_target(target, &names, moves);
-                        }
-                    }
+                    let rules = std::mem::take(&mut l.rules);
+                    l.rules = rules
+                        .into_iter()
+                        .filter_map(|rule| match rule {
+                            Rule::Rule { target, body } => rewrite_target(&target, &names, moves).map(|target| Rule::Rule { target, body }),
+                            raw => Some(raw),
+                        })
+                        .collect();
                 }
             }
             _ => {}
@@ -1006,10 +1109,16 @@ mod tests {
     fn layer_targets_follow() {
         let moves = Moves { rows: &[2, 0, 1], cols: &[0, 1] };
         let n = names();
-        assert_eq!(rewrite_target("B1", &n, &moves), "B3");
-        assert_eq!(rewrite_target("1", &n, &moves), "3");
-        assert_eq!(rewrite_target("Amount", &n, &moves), "Amount");
-        assert_eq!(rewrite_target("row[Status=open]", &n, &moves), "row[Status=open]");
+        assert_eq!(rewrite_target("B1", &n, &moves).as_deref(), Some("B3"));
+        assert_eq!(rewrite_target("1", &n, &moves).as_deref(), Some("3"));
+        assert_eq!(rewrite_target("Amount", &n, &moves).as_deref(), Some("Amount"));
+        assert_eq!(rewrite_target("row[Status=open]", &n, &moves).as_deref(), Some("row[Status=open]"));
+        // Deleted lines: the rule goes, a range shrinks.
+        let gone = Moves { rows: &[0, GONE, 1], cols: &[0, 1] };
+        assert_eq!(rewrite_target("B2", &n, &gone), None);
+        assert_eq!(rewrite_target("2", &n, &gone), None);
+        assert_eq!(rewrite_target("B1:B3", &n, &gone).as_deref(), Some("B1:B2"));
+        assert_eq!(rewrite_target("B2:C2", &n, &gone), None);
     }
 
     #[test]

@@ -119,6 +119,15 @@ class Markdown(unittest.TestCase):
         self.assertEqual(t.aligns, ["", "right"])
         self.assertEqual(t.rows, [["1", "x | y"]])
 
+    def test_rules_with_a_range_target(self):
+        rules = markdown.layer_rules(["A1:A3: bg green", "B1: Note: x", "row[t=12:00]: bold", "C2 : C3: fg red"])
+        self.assertEqual(rules, [("A1:A3", "bg green"), ("B1", "Note: x"), ("row[t=12:00]", "bold"), ("C2 : C3", "fg red")])
+
+    def test_ranges_and_conditions_in_the_format_layer(self):
+        src = "## T :: matrix\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\n```layer format\nA1:B2: bg green\n```\n"
+        plans, _ = convert.plan_import(src)
+        self.assertEqual(plans[0].format_ops, [(0, 1, 0, 1, ["bg green"])])
+
     def test_tables_are_compact_by_default(self):
         t = markdown.Table(2, "A", "matrix", ["Item", "Amount:Euro"], ["", "right"], [["Rent", "1200,00"], ["x|y", "5"]])
         self.assertEqual(markdown.write_table(t), "\n".join([

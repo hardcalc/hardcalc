@@ -5103,10 +5103,18 @@ impl App {
                     return self.error("no data row selected");
                 }
                 let r1 = r1.min(rows - 1);
-                self.with_table(|t| {
-                    data_layers::pad_layers(t);
-                    for grid in t.grids_mut() {
-                        grid.drain(r0..=r1);
+                // References and format rules follow the rows below; those of the deleted rows go.
+                let gone = r1 - r0 + 1;
+                let moved: Vec<usize> = (0..rows).map(|r| if r < r0 { r } else if r <= r1 { crate::refs::GONE } else { r - gone }).collect();
+                let same: Vec<usize> = (0..self.dims().1).collect();
+                let sheet = self.view.sheet;
+                self.with_doc(|doc| {
+                    crate::refs::update_document(doc, sheet, &crate::refs::Moves { rows: &moved, cols: &same });
+                    if let Some(t) = table_mut(doc, sheet) {
+                        data_layers::pad_layers(t);
+                        for grid in t.grids_mut() {
+                            grid.drain(r0..=r1);
+                        }
                     }
                 });
                 self.view.anchor = None;
@@ -5162,7 +5170,14 @@ impl App {
                 if c1 - c0 + 1 >= cols {
                     return self.error("cannot delete the last column");
                 }
-                self.with_table(|t| {
+                // References and format rules follow the columns on the right; those of the deleted ones go.
+                let gone = c1 - c0 + 1;
+                let moved: Vec<usize> = (0..cols).map(|c| if c < c0 { c } else if c <= c1 { crate::refs::GONE } else { c - gone }).collect();
+                let same: Vec<usize> = (0..self.dims().0).collect();
+                let sheet = self.view.sheet;
+                self.with_doc(|doc| {
+                    crate::refs::update_document(doc, sheet, &crate::refs::Moves { rows: &same, cols: &moved });
+                    let Some(t) = table_mut(doc, sheet) else { return };
                     t.columns.drain(c0..=c1);
                     let layer_rows = t.layers.iter_mut().flat_map(|l| &mut l.rows);
                     for row in t.rows.iter_mut().chain(t.footer.iter_mut().map(|f| &mut f.cells)).chain(layer_rows) {

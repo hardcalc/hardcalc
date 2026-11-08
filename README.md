@@ -161,7 +161,10 @@ In the **pivot view**, two axes show rows and columns, the others are filters
 When **moving** and **sorting**, references follow: A1 references in formulas
 (`B2`, `B2:B4`, `B`, also `Expenses!B2` from other tables) and the targets of
 layer rules (e.g. a comment on `B1`). References by column name need no
-change; indexes like `Expenses[2, 3]` stay where they are.
+change; indexes like `Expenses[2, 3]` stay where they are. The same holds when
+rows and columns are **inserted** or **deleted**: colors, comments and checks
+stay with their cells. After a deletion a range shrinks, the rules of the
+deleted cells go, and a formula that pointed at a deleted cell shows `#REF!`.
 
 **Formula columns** stay uniform, as in Excel tables: if a column holds the
 same formula everywhere (except for references that move along, e.g.
