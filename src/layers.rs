@@ -229,6 +229,9 @@ pub struct CellStyle {
     /// Show as percentage with n decimals.
     pub percent: Option<u8>,
     pub decimals: Option<u8>,
+    /// Break long text into lines (`wrap`, `wrap 30`): the column width in
+    /// characters, 0 for the usual maximum.
+    pub wrap: Option<u16>,
     /// What a rule switches off for the rules before it: `nobold`,
     /// `noitalic`, `nounderline`, `fg none`, `bg none`. Only in parsed
     /// rules; a merged style has these false.
@@ -243,6 +246,7 @@ pub struct Off {
     pub underline: bool,
     pub fg: bool,
     pub bg: bool,
+    pub wrap: bool,
 }
 
 /// The rule words that set the text style, as named in the format layer.
@@ -276,7 +280,7 @@ impl CellStyle {
     pub fn parse(body: &str) -> (CellStyle, Vec<String>) {
         let mut st = CellStyle::default();
         let mut errors = Vec::new();
-        let mut words = body.split_whitespace();
+        let mut words = body.split_whitespace().peekable();
         let arg = |w: &str, name: &str| -> Option<Option<u8>> {
             let rest = w.strip_prefix(name)?;
             if rest.is_empty() {
@@ -302,6 +306,14 @@ impl CellStyle {
                     },
                     None => errors.push(format!("{w}: missing color")),
                 },
+                "wrap" => {
+                    let width = words.next_if(|n| n.parse::<u16>().is_ok()).and_then(|n| n.parse::<u16>().ok());
+                    match width {
+                        Some(0) => errors.push("wrap: the width must be at least 1".to_string()),
+                        w => st.wrap = Some(w.unwrap_or(0)),
+                    }
+                }
+                "nowrap" => st.off.wrap = true,
                 "bold" => st.bold = true,
                 "italic" => st.italic = true,
                 "underline" => st.underline = true,
@@ -342,6 +354,12 @@ impl CellStyle {
         self.bold = (self.bold && !other.off.bold) || other.bold;
         self.italic = (self.italic && !other.off.italic) || other.italic;
         self.underline = (self.underline && !other.off.underline) || other.underline;
+        if other.off.wrap {
+            self.wrap = None;
+        }
+        if other.wrap.is_some() {
+            self.wrap = other.wrap;
+        }
         if other.percent.is_some() {
             self.percent = other.percent;
         }

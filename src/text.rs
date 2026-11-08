@@ -183,3 +183,49 @@ mod tests {
         assert_eq!(joined, ["a b c"]);
     }
 }
+
+/// Breaks `s` at spaces into lines of at most `w` columns; a word longer than
+/// a line is cut. Always at least one line.
+pub fn wrap_plain(s: &str, w: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let w = w.max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut used = 0;
+    for word in s.split(' ').filter(|x| !x.is_empty()) {
+        let ww = word.width();
+        if used > 0 && used + 1 + ww <= w {
+            line.push(' ');
+            line.push_str(word);
+            used += 1 + ww;
+            continue;
+        }
+        if used > 0 {
+            lines.push(std::mem::take(&mut line));
+            used = 0;
+        }
+        for c in word.chars() {
+            let cw = c.width().unwrap_or(0);
+            if used + cw > w {
+                lines.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            line.push(c);
+            used += cw;
+        }
+    }
+    lines.push(line);
+    lines
+}
+
+#[cfg(test)]
+mod wrap_plain_tests {
+    use super::wrap_plain;
+
+    #[test]
+    fn breaks_at_spaces_and_cuts_long_words() {
+        assert_eq!(wrap_plain("aa bb cc", 5), vec!["aa bb", "cc"]);
+        assert_eq!(wrap_plain("abcdefgh", 3), vec!["abc", "def", "gh"]);
+        assert_eq!(wrap_plain("", 4), vec![""]);
+    }
+}

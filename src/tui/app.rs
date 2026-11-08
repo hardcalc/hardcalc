@@ -2224,7 +2224,7 @@ impl App {
                         let v = self.table_cell_view_in((s, r, c), z);
                         let color = if v.error { Some((190, 0, 0)) } else { v.style.fg.as_ref().and_then(print::print_color) };
                         let bg = v.style.bg.as_ref().and_then(print::print_bg);
-                        let style = SpanStyle { bold: v.style.bold, italic: v.style.italic, color, shade: false, bg };
+                        let style = SpanStyle { bold: v.style.bold, italic: v.style.italic, color, shade: false, bg, wrap: v.style.wrap };
                         PrintCell { text: v.text, align: v.align, style }
                     })
                     .collect()
@@ -2267,7 +2267,7 @@ impl App {
                     let text = if v.is_error() { "#ERR".to_string() } else { self.wb.display(id) };
                     let align = if matches!(v, Value::Num(..) | Value::Date(_)) { Align::Right } else { Align::Left };
                     let color = v.is_error().then_some((190, 0, 0));
-                    PrintCell { text, align, style: SpanStyle { bold: true, italic: false, color, shade: false, bg: None } }
+                    PrintCell { text, align, style: SpanStyle { bold: true, italic: false, color, shade: false, bg: None, wrap: None } }
                 })
                 .collect();
             if let Some(first) = line.first_mut() {

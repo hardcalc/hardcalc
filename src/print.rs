@@ -113,6 +113,8 @@ pub struct SpanStyle {
     pub shade: bool,
     /// Background color of the cell (layer `bg`), already light for paper.
     pub bg: Option<(u8, u8, u8)>,
+    /// Break the text into lines (layer `wrap`): the width, 0 for the usual maximum.
+    pub wrap: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -271,14 +273,24 @@ pub fn fit(text: &str, w: usize, align: Align) -> String {
     }
 }
 
+/// Column width in characters of a `wrap` rule (0: the usual maximum).
+fn wrap_width(n: u16) -> usize {
+    if n == 0 { MAX_COL } else { n as usize }
+}
+
 fn column_widths(t: &PrintTable) -> Vec<usize> {
     (0..t.headers.len())
         .map(|c| {
+            let cells = || t.rows.iter().filter_map(|r| r.get(c));
+            let widest = cells().filter_map(|cell| cell.style.wrap).map(wrap_width).fold(MAX_COL, usize::max);
             std::iter::once(t.headers[c].width())
-                .chain(t.rows.iter().filter_map(|r| r.get(c)).map(|cell| cell.text.width()))
+                .chain(cells().map(|cell| match cell.style.wrap {
+                    Some(n) => cell.text.width().min(wrap_width(n)),
+                    None => cell.text.width(),
+                }))
                 .max()
                 .unwrap_or(0)
-                .clamp(3, MAX_COL)
+                .clamp(3, widest)
         })
         .collect()
 }
@@ -499,27 +511,40 @@ pub fn paginate(title: &str, items: &[PrintItem], setup: &PageSetup, footer: &st
             page.push(heading(false));
             page.push(header.clone());
             for row in &t.rows {
-                if page.len() >= body {
+                // Wrapped cells make a row several lines high; it stays together.
+                let cell_lines: Vec<Vec<String>> = band
+                    .clone()
+                    .enumerate()
+                    .map(|(i, c)| match row.get(c) {
+                        Some(cell) if cell.style.wrap.is_some() => crate::text::wrap_plain(&cell.text, band_widths[i].min(cols)),
+                        Some(cell) => vec![cell.text.clone()],
+                        None => vec![String::new()],
+                    })
+                    .collect();
+                let height = cell_lines.iter().map(Vec::len).max().unwrap_or(1);
+                if page.len() + height > body {
                     pages.push(std::mem::take(&mut page));
                     page.push(heading(true));
                     page.push(header.clone());
                 }
-                let mut spans = Vec::new();
-                let mut x = 0;
-                for (i, c) in band.clone().enumerate() {
-                    let w = band_widths[i];
-                    if x >= cols {
-                        break;
+                for k in 0..height {
+                    let mut spans = Vec::new();
+                    let mut x = 0;
+                    for (i, c) in band.clone().enumerate() {
+                        let w = band_widths[i];
+                        if x >= cols {
+                            break;
+                        }
+                        if let Some(cell) = row.get(c) {
+                            let part = cell_lines[i].get(k).map_or("", String::as_str);
+                            if !part.is_empty() || cell.style.bg.is_some() {
+                                spans.push(Span { col: x, text: fit(part, w.min(cols - x), cell.align), style: cell.style.clone() });
+                            }
+                        }
+                        x += w + COL_GAP;
                     }
-                    if let Some(cell) = row.get(c)
-                        && !cell.text.is_empty()
-                    {
-                        let text = fit(&cell.text, w.min(cols - x), cell.align);
-                        spans.push(Span { col: x, text, style: cell.style.clone() });
-                    }
-                    x += w + COL_GAP;
+                    page.push(Line { kind: LineKind::Row, spans, width: shown });
                 }
-                page.push(Line { kind: LineKind::Row, spans, width: shown });
             }
             if band.end == widths.len() {
                 let gray = SpanStyle { color: Some((80, 80, 80)), ..SpanStyle::default() };
@@ -557,6 +582,7 @@ pub fn styled_line(kind: LineKind, pieces: &[crate::text::Styled], base: Option<
             color: base.and_then(|b| b.color),
             shade: base.is_some_and(|b| b.shade),
             bg: base.and_then(|b| b.bg),
+            wrap: base.and_then(|b| b.wrap),
         };
         spans.push(Span { col, text: p.text.clone(), style });
         col += p.text.width();

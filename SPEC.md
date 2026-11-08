@@ -394,12 +394,15 @@ Every line has the form `<target>: <rule>`. Targets:
 
 Rules: `align left|right|center`, `fg <color>`, `bg <color>`, `bold`,
 `italic`, `underline`, `percent(n)` (value × 100 with n places and `%`),
-`decimals(n)`. Several settings are combined with spaces
+`decimals(n)`, `wrap` / `wrap n` (break long text into lines of at most n
+characters, without n: 40; the file keeps the text as it is, only the
+display, the PDF and spreadsheet exports break lines; numbers are never
+broken). Several settings are combined with spaces
 (`fg yellow bold`); later rules override earlier ones. Colors: names (`red`,
 `lightblue`, `darkgray` …) or `#rrggbb`.
 
 To take back what an earlier rule sets: `nobold`, `noitalic`,
-`nounderline`, `fg none`, `bg none` – e.g. a cell in a bold column:
+`nounderline`, `nowrap`, `fg none`, `bg none` – e.g. a cell in a bold column:
 
 ```layer format
 B: bold

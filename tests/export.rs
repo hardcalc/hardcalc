@@ -171,3 +171,14 @@ fn footer_rows_are_exported() {
     assert_eq!(f(5, 1), "AVERAGE($B$2:$B$4)");
     assert_eq!(values.get_value((5, 4)), Some(&Data::String("estimated".into())));
 }
+
+#[test]
+fn wrap_and_range_bg_reach_the_pdf() {
+    let src = "## T :: matrix\n\n| N | Note |\n|---|------|\n| 1 | the quick brown fox jumps over the lazy dog |\n| 2 | short |\n\n```layer format\nNote: wrap 12\n```\n";
+    let doc = hardcalc::parse(src).unwrap();
+    let mut app = hardcalc::tui::app::App::new(std::path::PathBuf::from("t.hcmd"), doc);
+    let layout = app.layout(&hardcalc::print::PageSetup { scope: hardcalc::print::Scope::Document, ..Default::default() });
+    let text: Vec<String> = layout.pages[0].iter().map(|l| l.plain()).collect();
+    assert!(text.iter().any(|l| l.contains("the quick") ), "{text:#?}");
+    assert!(text.iter().any(|l| l.contains("lazy dog")), "{text:#?}");
+}

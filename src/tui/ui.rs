@@ -42,9 +42,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let data_left = if app.view.is_data() { app.left_focused } else { true };
     // The data layers of that window's table get a line of their own.
     let stacked = app.with_window(data_left, |app| app.view.kind == ViewKind::Table && app.view.pivot.is_none() && app.layer_count() > 0);
+    let screen = f.area();
+    let bar_height = app.with_window(data_left, |app| bar_text(app, screen.width).0.len().clamp(1, (screen.height as usize / 4).clamp(1, 8)) as u16);
     let [top, bar, body, stack, layers, status, fkeys] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(bar_height),
         Constraint::Min(3),
         Constraint::Length(u16::from(stacked)),
         Constraint::Length(1),
@@ -776,30 +778,73 @@ fn tab_style(active: bool) -> Style {
     }
 }
 
+/// The formula bar's text broken into lines of the room it has (by
+/// characters, so every edit position has a place), and the caret as
+/// (line, column) while editing.
+fn bar_text(app: &App, width: u16) -> (Vec<String>, Option<(usize, usize)>) {
+    let label = format!(" {:<6}", app.cursor_label());
+    let x = label.width() + 2;
+    let info_w = app.cursor_column_info().width() + 1;
+    let room = (width as usize).saturating_sub(x + info_w + 1).max(8);
+    let (text, caret) = match &app.mode {
+        Mode::Edit { buf, cursor } => (buf.clone(), Some(*cursor)),
+        _ => (app.cursor_raw(), None),
+    };
+    let mut lines = vec![String::new()];
+    let mut used = 0;
+    let mut at = None;
+    let place = |lines: &Vec<String>, used: usize| (lines.len() - 1, used);
+    for (i, c) in text.chars().enumerate() {
+        if caret == Some(i) {
+            at = Some(place(&lines, used));
+        }
+        let cw = c.width().unwrap_or(0);
+        if used + cw > room {
+            lines.push(String::new());
+            used = 0;
+            if caret == Some(i) {
+                at = Some(place(&lines, used));
+            }
+        }
+        lines.last_mut().unwrap().push(c);
+        used += cw;
+    }
+    if caret.is_some() && at.is_none() {
+        if used >= room {
+            lines.push(String::new());
+            used = 0;
+        }
+        at = Some(place(&lines, used));
+    }
+    (lines, at)
+}
+
 fn draw_formula_bar(f: &mut Frame, app: &mut App, area: Rect) {
     let label = format!(" {:<6}", app.cursor_label());
     f.buffer_mut().set_string(area.x, area.y, &label, Style::new().bold());
     let x = area.x + label.width() as u16;
-    f.buffer_mut().set_string(x, area.y, "│ ", Style::new().fg(Color::DarkGray));
-    let x = x + 2;
     let info = app.cursor_column_info();
     let info_w = info.width() as u16 + 1;
-    let room = area.right().saturating_sub(x + info_w + 1) as usize;
-    match &app.mode {
-        Mode::Edit { buf, cursor } => {
-            // Keep the cursor visible in long contents.
-            let before: String = buf.chars().take(*cursor).collect();
-            let skip = before.width().saturating_sub(room.saturating_sub(1));
-            let shown = skip_width(buf, skip);
-            f.buffer_mut().set_stringn(x, area.y, &shown, room, Style::new().fg(Color::Yellow));
-            let cx = x + (before.width() - skip) as u16;
-            f.set_cursor_position((cx.min(area.right() - 1), area.y));
-        }
-        _ => {
-            let raw = app.cursor_raw();
-            let style = if raw.starts_with('=') { Style::new().fg(Color::Cyan) } else { Style::new() };
-            f.buffer_mut().set_stringn(x, area.y, &raw, room, style);
-        }
+    let (lines, caret) = bar_text(app, area.width);
+    let height = area.height as usize;
+    // Long contents: the lines around the caret.
+    let first = caret.map_or(0, |(l, _)| (l + 1).saturating_sub(height));
+    let editing = matches!(app.mode, Mode::Edit { .. });
+    let style = if editing {
+        Style::new().fg(Color::Yellow)
+    } else if app.cursor_raw().starts_with('=') {
+        Style::new().fg(Color::Cyan)
+    } else {
+        Style::new()
+    };
+    for (row, line) in lines.iter().skip(first).take(height).enumerate() {
+        let y = area.y + row as u16;
+        f.buffer_mut().set_string(x, y, "│ ", Style::new().fg(Color::DarkGray));
+        f.buffer_mut().set_string(x + 2, y, line, style);
+    }
+    if let Some((l, c)) = caret {
+        let cx = x + 2 + c as u16;
+        f.set_cursor_position((cx.min(area.right() - 1), area.y + (l - first) as u16));
     }
     if area.width > info_w + 10 {
         f.buffer_mut().set_string(area.right() - info_w, area.y, &info, Style::new().fg(Color::DarkGray));
@@ -907,63 +952,96 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     }
     app.view.scroll.0 = app.view.scroll.0.min(rows.saturating_sub(1));
     app.view.scroll.1 = app.view.scroll.1.min(cols.saturating_sub(1));
-    let row_range = app.view.scroll.0..rows.min(app.view.scroll.0 + vis_rows);
-
-    let gutter = {
-        let headers = row_range.clone().map(|r| app.row_header(r).width()).max().unwrap_or(1);
-        headers.max(app.corner().width()).max(2) + 1
-    };
-    let avail = (area.width as usize).saturating_sub(gutter);
 
     // Filling tables get Excel-like column widths.
     let min_col = if app.fills() { FILL_MIN_COL } else { MIN_COL };
-    // Column views are computed lazily, only for visible rows.
-    let mut cache: HashMap<usize, (usize, Vec<CellView>)> = HashMap::new();
-    let mut column = |app: &mut App, c: usize| -> usize {
-        if let Some((w, _)) = cache.get(&c) {
-            return *w;
-        }
-        let views: Vec<CellView> = row_range.clone().map(|r| app.cell_view(r, c)).collect();
-        let (top, name) = app.col_header(c);
-        let w = views
-            .iter()
-            .map(|v| v.text.width())
-            .chain([top.width(), name.width()])
-            .max()
-            .unwrap_or(0)
-            .clamp(min_col, MAX_COL);
-        cache.insert(c, (w, views));
-        w
-    };
-    // Columns from `start` that fit: (col, x offset, width, fully visible).
-    let layout = |app: &mut App, column: &mut dyn FnMut(&mut App, usize) -> usize, start: usize| {
-        let mut out = Vec::new();
-        let mut x = 0;
-        for c in start..cols {
-            if x >= avail {
-                break;
+    // Rows with wrapped cells are several lines high, so fewer rows fit; the
+    // scroll position moves on until the cursor row is shown completely.
+    let (row_range, cache, visible, heights, gutter) = loop {
+        let row_range = app.view.scroll.0..rows.min(app.view.scroll.0 + vis_rows);
+        let gutter = {
+            let headers = row_range.clone().map(|r| app.row_header(r).width()).max().unwrap_or(1);
+            headers.max(app.corner().width()).max(2) + 1
+        };
+        let avail = (area.width as usize).saturating_sub(gutter);
+        // Column views are computed lazily, only for visible rows.
+        let mut cache: HashMap<usize, (usize, Vec<CellView>)> = HashMap::new();
+        let mut column = |app: &mut App, c: usize| -> usize {
+            if let Some((w, _)) = cache.get(&c) {
+                return *w;
             }
-            let w = column(app, c);
-            out.push((c, x, w.min(avail - x), x + w <= avail));
-            x += w + 1;
-        }
-        out
-    };
+            let views: Vec<CellView> = row_range.clone().map(|r| app.cell_view(r, c)).collect();
+            let (top, name) = app.col_header(c);
+            let widest = views.iter().filter_map(|v| v.style.wrap).map(wrap_width).fold(MAX_COL, usize::max);
+            let w = views
+                .iter()
+                .map(|v| match v.style.wrap {
+                    Some(n) => v.text.width().min(wrap_width(n)),
+                    None => v.text.width().min(MAX_COL),
+                })
+                .chain([top.width(), name.width()])
+                .max()
+                .unwrap_or(0)
+                .clamp(min_col, widest);
+            cache.insert(c, (w, views));
+            w
+        };
+        // Columns from `start` that fit: (col, x offset, width, fully visible).
+        let layout = |app: &mut App, column: &mut dyn FnMut(&mut App, usize) -> usize, start: usize| {
+            let mut out = Vec::new();
+            let mut x = 0;
+            for c in start..cols {
+                if x >= avail {
+                    break;
+                }
+                let w = column(app, c);
+                out.push((c, x, w.min(avail - x), x + w <= avail));
+                x += w + 1;
+            }
+            out
+        };
 
-    // Horizontal scrolling: move right until the cursor column fits completely.
-    if app.view.follow {
-        if focus.1 < app.view.scroll.1 {
-            app.view.scroll.1 = focus.1;
+        // Horizontal scrolling: move right until the cursor column fits completely.
+        if app.view.follow {
+            if focus.1 < app.view.scroll.1 {
+                app.view.scroll.1 = focus.1;
+            }
+            while app.view.scroll.1 < focus.1 {
+                let l = layout(app, &mut column, app.view.scroll.1);
+                if l.iter().any(|&(c, _, _, full)| c == focus.1 && full) {
+                    break;
+                }
+                app.view.scroll.1 += 1;
+            }
         }
-        while app.view.scroll.1 < focus.1 {
-            let l = layout(app, &mut column, app.view.scroll.1);
-            if l.iter().any(|&(c, _, _, full)| c == focus.1 && full) {
+        let visible = layout(app, &mut column, app.view.scroll.1);
+
+        // Height of each row in lines; the rows that fit on the screen.
+        let mut heights = Vec::new();
+        let mut used = 0;
+        for i in 0..row_range.len() {
+            let h = visible
+                .iter()
+                .map(|&(c, _, w, _)| {
+                    let v = &cache[&c].1[i];
+                    if v.style.wrap.is_some() { crate::text::wrap_plain(&v.text, w).len() } else { 1 }
+                })
+                .max()
+                .unwrap_or(1);
+            if used + h > vis_rows && !heights.is_empty() {
                 break;
             }
-            app.view.scroll.1 += 1;
+            used += h;
+            heights.push(h);
         }
-    }
-    let visible = layout(app, &mut column, app.view.scroll.1);
+        let shown = heights.len();
+        if app.view.follow && focus.0 < rows && focus.0 >= app.view.scroll.0 + shown && app.view.scroll.0 < focus.0 {
+            app.view.scroll.0 += 1;
+            continue;
+        }
+        let row_range = row_range.start..row_range.start + shown;
+        break (row_range, cache, visible, heights, gutter);
+    };
 
     let ((r0, c0), (r1, c1)) = app.selection();
     let has_range = app.has_range();
@@ -1025,8 +1103,11 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         app.hits.push((Rect::new(x, area.y, w as u16, HEADER_LINES), Hit::ColHeader(c)));
     }
 
+    let mut y_off = 0u16;
     for (i, r) in row_range.clone().enumerate() {
-        let y = area.y + HEADER_LINES + i as u16;
+        let y = area.y + HEADER_LINES + y_off;
+        let lines = heights[i] as u16;
+        y_off += lines;
         let current_row = r == app.view.cursor.0;
         let gstyle = match on_header {
             Some(Header::Row) if current_row => header_cursor,
@@ -1036,7 +1117,10 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             _ => header_style,
         };
         buf.set_stringn(area.x, y, fit(&app.row_header(r), gutter - 1, Align::Right), gutter - 1, gstyle);
-        app.hits.push((Rect::new(area.x, y, (gutter - 1) as u16, 1), Hit::RowHeader(r)));
+        for extra in 1..lines {
+            buf.set_stringn(area.x, y + extra, " ".repeat(gutter - 1), gutter - 1, gstyle);
+        }
+        app.hits.push((Rect::new(area.x, y, (gutter - 1) as u16, lines), Hit::RowHeader(r)));
 
         let shade = |c: usize| bands.then(|| super::theme::band(r % 2 == 1, c % 2 == 1, light, truecolor)).flatten().filter(|_| !placeholder(r, c));
         for (k, &(c, x, w, _)) in visible.iter().enumerate() {
@@ -1048,7 +1132,9 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 && !placeholder(r, next)
                 && let Some(bg) = super::theme::band(r % 2 == 1, false, light, truecolor)
             {
-                buf.set_string(x + w as u16, y, " ", Style::new().bg(bg));
+                for extra in 0..lines {
+                    buf.set_string(x + w as u16, y + extra, " ", Style::new().bg(bg));
+                }
             }
             let view = &cache[&c].1[i];
             let mut style = cell_style(&view.style);
@@ -1093,6 +1179,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             } else if (r, c) == app.view.cursor {
                 style = if editing { style.fg(Color::Black).bg(Color::Yellow) } else { style.add_modifier(Modifier::REVERSED) };
             }
+            let wrapped = view.style.wrap.is_some() && !(editing && (r, c) == app.view.cursor && on_header.is_none());
             let text = match &edit {
                 // While editing, the cell shows the input; if it is too long,
                 // the part around the cursor (normally the end).
@@ -1104,18 +1191,34 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 }
                 _ => fit(&view.text, w, view.align),
             };
-            buf.set_stringn(x, y, text, w, style);
-            app.hits.push((Rect::new(x, y, w as u16, 1), Hit::Cell(r, c)));
+            if wrapped {
+                let mut parts = crate::text::wrap_plain(&view.text, w).into_iter();
+                for extra in 0..lines {
+                    let part = parts.next().unwrap_or_default();
+                    buf.set_stringn(x, y + extra, fit(&part, w, view.align), w, style);
+                }
+            } else {
+                buf.set_stringn(x, y, text, w, style);
+                for extra in 1..lines {
+                    buf.set_stringn(x, y + extra, " ".repeat(w), w, style);
+                }
+            }
+            app.hits.push((Rect::new(x, y, w as u16, lines), Hit::Cell(r, c)));
             if handle == Some((r, c)) && x + (w as u16) < area.right() {
                 let hx = x + w as u16;
-                buf.set_string(hx, y, "▪", Style::new().fg(Color::Cyan).bold());
-                app.hits.push((Rect::new(hx, y, 1, 1), Hit::FillHandle));
+                buf.set_string(hx, y + lines - 1, "▪", Style::new().fg(Color::Cyan).bold());
+                app.hits.push((Rect::new(hx, y + lines - 1, 1, 1), Hit::FillHandle));
             }
         }
     }
     if let Some(pos) = edit_cursor {
         f.set_cursor_position(pos);
     }
+}
+
+/// Column width in characters of a `wrap` rule (0: the usual maximum).
+fn wrap_width(n: u16) -> usize {
+    if n == 0 { MAX_COL } else { n as usize }
 }
 
 /// The longest prefix of `s` that fits into `w` columns.

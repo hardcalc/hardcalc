@@ -375,6 +375,9 @@ fn cell_format(style: &CellStyle, number: Option<String>, header: bool) -> xl::F
     if style.underline {
         f = f.set_underline(xl::FormatUnderline::Single);
     }
+    if style.wrap.is_some() {
+        f = f.set_text_wrap();
+    }
     if let Some(c) = style.fg.as_ref().and_then(rgb) {
         f = f.set_font_color(xl::Color::RGB(c));
     }
@@ -683,6 +686,18 @@ pub fn export_xlsx(doc: &Document, path: &Path) -> Result<ExportReport, String> 
         }
         ws.set_freeze_panes(1, 0).map_err(err)?;
         ws.autofit();
+        // Wrapped columns get the width of their rule, not that of the longest line.
+        for c in 0..sheet.headers.len() {
+            let wrapped: Vec<(usize, usize)> = sheet
+                .cells
+                .iter()
+                .filter_map(|row| row.get(c))
+                .filter_map(|cell| cell.style.wrap.map(|n| (if n == 0 { 40 } else { n as usize }, cell.value.display(None, false).chars().count())))
+                .collect();
+            if let Some(width) = wrapped.iter().map(|&(n, len)| len.min(n)).max() {
+                ws.set_column_width(c as u16, (width.max(sheet.headers[c].chars().count()) + 2) as f64).map_err(err)?;
+            }
+        }
     }
 
     // Charts: next to their table; tensor and histogram charts get their data
@@ -939,6 +954,9 @@ impl OdsStyles {
         }
         if let Some(c) = style.fg.as_ref().and_then(rgb) {
             text_props.push_str(&format!(" fo:color=\"{}\"", hex(c)));
+        }
+        if style.wrap.is_some() {
+            cell_props.push_str(" fo:wrap-option=\"wrap\"");
         }
         let bg = if header { Some(0xDDDDDD) } else { style.bg.as_ref().and_then(bg_rgb) };
         if let Some(c) = bg {

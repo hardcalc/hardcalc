@@ -2848,3 +2848,80 @@ fn bg_on_a_selection_can_be_removed_after_reload() {
     let out = hardcalc::write(&b.doc);
     assert!(!out.contains("bg blue"), "{text}\n---\n{out}");
 }
+
+fn wrap_app(rule: &str) -> App {
+    let src = format!(
+        "## T :: matrix\n\n| N | Note |\n|---|------|\n| 1 | the quick brown fox jumps over the lazy dog |\n| 2 | short |\n| 3 | last |\n\n```layer format\n{rule}\n```\n"
+    );
+    App::new(PathBuf::from("t.hcmd"), hardcalc::parse(&src).unwrap())
+}
+
+#[test]
+fn wrapped_cells_span_several_lines() {
+    let mut a = wrap_app("Note: wrap 16");
+    let screen = render(&mut a);
+    assert!(screen.contains("the quick brown"), "{screen}");
+    assert!(screen.contains("fox jumps over"), "{screen}");
+    assert!(screen.contains("the lazy dog"), "{screen}");
+    // Rows 2 and 3 follow below the three lines of row 1.
+    let lines: Vec<&str> = screen.lines().collect();
+    let at = |t: &str| lines.iter().position(|l| l.contains(t)).unwrap();
+    assert_eq!(at("short") - at("the quick brown"), 3, "{screen}");
+    assert_eq!(at("last") - at("short"), 1, "{screen}");
+}
+
+#[test]
+fn without_wrap_long_text_is_cut() {
+    let mut a = wrap_app("Note: bold");
+    let screen = render(&mut a);
+    assert!(!screen.contains("the lazy dog"), "{screen}");
+}
+
+#[test]
+fn cursor_row_stays_visible_with_wrapped_rows() {
+    let mut a = wrap_app("Note: wrap 16");
+    for _ in 0..2 {
+        key(&mut a, KeyCode::Down);
+    }
+    let screen = render(&mut a);
+    assert!(screen.contains("last"), "{screen}");
+}
+
+#[test]
+fn scrolling_shows_the_whole_wrapped_cursor_row() {
+    let mut src = String::from("## T :: matrix\n\n| N | Note |\n|---|------|\n");
+    for i in 1..=30 {
+        src.push_str(&format!("| {i} | alpha beta gamma delta epsilon{i} zeta eta theta |\n"));
+    }
+    src.push_str("\n```layer format\nNote: wrap 12\n```\n");
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(&src).unwrap());
+    for _ in 0..29 {
+        key(&mut a, KeyCode::Down);
+    }
+    let screen = render(&mut a);
+    assert!(screen.contains("epsilon30"), "{screen}");
+    assert!(screen.lines().filter(|l| l.contains("theta")).count() >= 1, "{screen}");
+    let last = screen.lines().filter(|l| l.contains("30")).count();
+    assert!(last >= 1, "{screen}");
+}
+
+#[test]
+fn long_input_wraps_in_the_formula_bar() {
+    let mut a = app();
+    key(&mut a, KeyCode::Enter);
+    key(&mut a, KeyCode::End);
+    for _ in 0..30 {
+        key(&mut a, KeyCode::Backspace);
+    }
+    let long = format!("={}", vec!["1"; 90].join("+"));
+    typ(&mut a, &long);
+    let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    term.draw(|f| ui::draw(f, &mut a)).unwrap();
+    let buf = term.backend().buffer();
+    let rows: Vec<String> = (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect();
+    // The text continues on the second and third line instead of running off.
+    assert!(rows[1].contains("1+1+1"), "{rows:#?}");
+    assert!(rows[2].contains("1+1+1") && !rows[2].contains("Item"), "{rows:#?}");
+    let end = rows.iter().take(8).map(|r| r.matches('1').count()).sum::<usize>();
+    assert!(end >= 90, "{end}\n{rows:#?}");
+}
