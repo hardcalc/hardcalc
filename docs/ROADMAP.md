@@ -55,6 +55,22 @@ This page lists open points and ideas. Suggestions are welcome as
 
 - **Charts in the ODS export**.
 
+## LibreOffice extension
+
+- **Publish on extensions.libreoffice.org**, so that the extension can be
+  found under *Tools → Extensions → Get more extensions online*. Needs a
+  TDF account, a project page (description, category Calc, MIT, logo,
+  screenshot) and one uploaded `.oxt` per release. Deliberately not
+  installed by the Homebrew formula: a formula must not write into the
+  LibreOffice user profile, and uninstalling or upgrading would leave a
+  stale extension behind.
+- **Update check**: build the `.oxt` with
+  `--update-url https://github.com/hardcalc/hardcalc/releases/latest/download/update.xml`
+  and attach `.oxt` and `update.xml` to every GitHub release in CI, so that
+  LibreOffice reports new versions itself.
+- **Complete `description.xml`**: an icon, the license, and
+  `LibreOffice-minimal-version` instead of `OpenOffice.org-minimal-version`.
+
 ## hardconf
 
 - Renaming map entries, with updating of the `ref` references.
