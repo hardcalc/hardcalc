@@ -5,6 +5,8 @@ const USAGE: &str = "\
 usage: hardcalc                   new document (a playground) in the terminal UI
        hardcalc <file>            open the file in the terminal UI
        hardcalc <command> <file>
+       hardcalc desktop install    start menu entry and .hcmd file association
+       hardcalc desktop uninstall  remove them again
        hardcalc --version
        hardcalc --keymap-markdown   the key / mouse matrix (docs/keys.md)
 
@@ -47,6 +49,21 @@ fn main() -> ExitCode {
         [path] if !path.starts_with('-') => {
             return match hardcalc::tui::run(Some(std::path::Path::new(path))) {
                 Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        [cmd, action] if cmd == "desktop" && (action == "install" || action == "uninstall") => {
+            let result = if action == "install" { hardcalc::desktop::install() } else { hardcalc::desktop::uninstall() };
+            return match result {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    ExitCode::SUCCESS
+                }
                 Err(e) => {
                     eprintln!("{e}");
                     ExitCode::FAILURE

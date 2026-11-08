@@ -59,6 +59,27 @@ from the project folder:
 cargo run --release -- examples/budget.hcmd
 ```
 
+### Start menu and file association
+
+```bash
+hardcalc desktop install     # start menu entry, .hcmd files open in hardcalc
+hardcalc desktop uninstall   # remove both again
+```
+
+The installers leave your desktop alone; this command adds hardcalc to the
+start menu and associates `.hcmd` files with it, in your own profile and
+without administrator rights. hardcalc opens in a terminal window:
+
+- **Linux**: an application entry with `Terminal=true` and the MIME type
+  `text/x-hardcalc` below `~/.local/share`.
+- **Windows**: a shortcut in the start menu and the file type `hardcalc.hcmd`
+  below `HKCU\Software\Classes`; it opens in your default terminal.
+- **macOS**: a small app `~/Applications/hardcalc.app` that runs hardcalc in
+  Terminal. On first use macOS asks once whether it may control Terminal.
+
+Run it again after moving hardcalc. If the LibreOffice extension is installed
+as well, both appear under *Open with*.
+
 Optional: for the image preview when printing, hardcalc renders the PDF page
 with `pdftoppm` (poppler) or `mutool` (MuPDF); on macOS the built-in `sips`
 is enough. Printing from hardcalc uses `lp` (macOS, Linux).
@@ -560,6 +581,7 @@ without saving leaves the file untouched. The format is described in
 hardcalc                               # interface with a new document (playground)
 hardcalc <file>                        # interface (.hcmd, or import of xlsx/ods/csv …)
 hardcalc --version                     # version
+hardcalc desktop install|uninstall     # start menu entry and .hcmd file association
 hardcalc check <file>                  # overview, type, formula, chart and validation errors
 hardcalc fmt <file>                    # print the file in canonical form
 hardcalc eval <file>                   # print the file with calculated values instead of formulas
