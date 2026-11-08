@@ -46,6 +46,16 @@ pub const BUILTINS: &[Builtin] = &[
     b("averageif", "AVERAGEIF", "averageif(range, criterion, [avg_range])", "average where the criterion holds", "rvr"),
     b("sumifs", "SUMIFS", "sumifs(sum_range, range, criterion, …)", "sum where all criteria hold", "rrv"),
     b("countifs", "COUNTIFS", "countifs(range, criterion, …)", "count where all criteria hold", "rv"),
+    b("averageifs", "AVERAGEIFS", "averageifs(avg_range, range, criterion, …)", "average where all criteria hold", "rrv"),
+    b("minifs", "MINIFS", "minifs(min_range, range, criterion, …)", "smallest value where all criteria hold (0 if none)", "rrv"),
+    b("maxifs", "MAXIFS", "maxifs(max_range, range, criterion, …)", "largest value where all criteria hold (0 if none)", "rrv"),
+    b("ifs", "IFS", "ifs(condition, value, …)", "the value of the first true condition (only that branch is computed)", "v"),
+    b("switch", "SWITCH", "switch(expr, case, value, …, [default])", "the value of the first case equal to expr (only that branch is computed)", "v"),
+    // Information
+    b("isblank", "ISBLANK", "isblank(x)", "true for an empty cell", "v"),
+    b("isnumber", "ISNUMBER", "isnumber(x)", "true for a number or a date", "v"),
+    b("istext", "ISTEXT", "istext(x)", "true for text", "v"),
+    b("iserror", "ISERROR", "iserror(x)", "true if x is an error", "v"),
     // Lookup
     b("xlookup", "XLOOKUP", "xlookup(key, lookup, result, [not_found])", "the result next to the key", "vrrv"),
     b("match", "MATCH", "match(key, values, [0])", "position of the key (1 = first)", "vrv"),
@@ -73,6 +83,9 @@ pub const BUILTINS: &[Builtin] = &[
     b("month", "MONTH", "month(date)", "month of a date (1–12)", "v"),
     b("day", "DAY", "day(date)", "day of the month", "v"),
     b("weekday", "WEEKDAY", "weekday(date)", "day of the week (1 = Sunday … 7 = Saturday)", "v"),
+    b("edate", "EDATE", "edate(date, months)", "the date some months earlier or later (the day is kept, at most the month's last)", "v"),
+    b("eomonth", "EOMONTH", "eomonth(date, months)", "last day of the month, some months earlier or later", "v"),
+    b("datedif", "DATEDIF", "datedif(start, end, unit)", "difference of two dates; unit \"Y\", \"M\", \"D\", \"MD\", \"YM\" or \"YD\" (as in Calc)", "v"),
     // Text
     b("len", "LEN", "len(text)", "number of characters", "v"),
     b("left", "LEFT", "left(text, [n])", "the first n characters", "v"),
@@ -211,6 +224,63 @@ fn criterion(c: &Value) -> impl Fn(&Value) -> bool + use<> {
         };
         matches!(compare(op, v, want.clone()), Value::Bool(true))
     }
+}
+
+/// Whether two values are equal for `switch` (text without regard to case).
+pub fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Text(x), Value::Text(y)) => x.to_lowercase() == y.to_lowercase(),
+        _ => matches!(compare(BinOp::Eq, a.clone(), b.clone()), Value::Bool(true)),
+    }
+}
+
+/// A date argument: a date, or a text that reads as one.
+fn date_arg(v: &Value) -> Result<i64, Value> {
+    match v {
+        Value::Date(d) => Ok(*d),
+        Value::Text(s) => parse_date(s).ok_or_else(|| Value::err(format!("not a date: {s}"))),
+        e @ Value::Error(_) => Err(e.clone()),
+        other => Err(Value::err(format!("not a date: {}", text(other)))),
+    }
+}
+
+/// Applies `f` to two values, element-wise if one or both are vectors.
+fn lift2(a: &Value, b: &Value, f: &dyn Fn(&Value, &Value) -> Value) -> Value {
+    match (a, b) {
+        (Value::Vector(x), Value::Vector(y)) if x.len() == y.len() => Value::Vector(x.iter().zip(y).map(|(x, y)| lift2(x, y, f)).collect()),
+        (Value::Vector(_), Value::Vector(_)) => Value::err("the ranges differ in length"),
+        (Value::Vector(x), y) => Value::Vector(x.iter().map(|x| lift2(x, y, f)).collect()),
+        (x, Value::Vector(y)) => Value::Vector(y.iter().map(|y| lift2(x, y, f)).collect()),
+        (x, y) => f(x, y),
+    }
+}
+
+/// `datedif` as Calc computes it (`unit` in lower case).
+fn date_diff(d1: i64, d2: i64, unit: &str) -> Value {
+    if d1 > d2 {
+        return Value::err("datedif: the start date is after the end date");
+    }
+    let days = d2 - d1;
+    if days == 0 || unit == "d" {
+        return Value::num(days as f64);
+    }
+    let (c1, c2) = (civil_from_days(d1), civil_from_days(d2));
+    let ((y1, m1, day1), (y2, m2, day2)) = ((c1.0, c1.1 as i64, c1.2 as i64), (c2.0, c2.1 as i64, c2.2 as i64));
+    let months = || m2 - m1 + 12 * (y2 - y1) - i64::from(day1 > day2);
+    let complete = m2 > m1 || (m2 == m1 && day2 >= day1);
+    Value::num(match unit {
+        "m" => months() as f64,
+        "y" => (if y2 > y1 { y2 - y1 - i64::from(!complete) } else { 0 }) as f64,
+        "ym" => (months() % 12) as f64,
+        // The days left over after whole months; a day the earlier month lacks rolls over.
+        "md" if day1 <= day2 => (day2 - day1) as f64,
+        "md" => {
+            let (y, m) = if m2 == 1 { (y2 - 1, 12) } else { (y2, m2 - 1) };
+            (d2 - days_from_civil(y, m, day1)) as f64
+        }
+        "yd" => (d2 - days_from_civil(if complete { y2 } else { y2 - 1 }, m1, day1)) as f64,
+        _ => return Value::err("datedif: the unit is \"Y\", \"M\", \"D\", \"MD\", \"YM\" or \"YD\""),
+    })
 }
 
 /// Items of the range arguments, matched by position.
@@ -369,12 +439,12 @@ pub fn call(name: &str, args: Vec<Value>) -> Value {
                 _ => call("avg", vec![Value::Vector(picked)]),
             }
         }
-        "sumifs" | "countifs" => {
-            let (values, pairs) = if name == "sumifs" {
-                let Some((first, rest)) = args.split_first() else { return Value::err("sumifs needs a sum range") };
-                (Some(items(first)), rest)
-            } else {
+        "sumifs" | "countifs" | "averageifs" | "minifs" | "maxifs" => {
+            let (values, pairs) = if name == "countifs" {
                 (None, &args[..])
+            } else {
+                let Some((first, rest)) = args.split_first() else { return Value::err(format!("{name} needs a value range")) };
+                (Some(items(first)), rest)
             };
             if pairs.is_empty() || pairs.len() % 2 != 0 {
                 return Value::err(format!("{name} needs pairs of range and criterion"));
@@ -382,11 +452,46 @@ pub fn call(name: &str, args: Vec<Value>) -> Value {
             let tests: Vec<(Vec<Value>, _)> = pairs.chunks(2).map(|p| (items(&p[0]), criterion(&p[1]))).collect();
             let n = tests[0].0.len();
             let rows: Vec<usize> = (0..n).filter(|&i| tests.iter().all(|(r, t)| r.get(i).is_some_and(t))).collect();
-            match values {
-                Some(v) => call("sum", vec![Value::Vector(rows.iter().filter_map(|&i| v.get(i).cloned()).collect())]),
-                None => Value::num(rows.len() as f64),
+            let Some(v) = values else { return Value::num(rows.len() as f64) };
+            let picked = Value::Vector(rows.iter().filter_map(|&i| v.get(i).cloned()).collect());
+            match name {
+                "sumifs" => call("sum", vec![picked]),
+                "averageifs" => call("avg", vec![picked]),
+                // Like Calc, no match gives 0.
+                _ if rows.is_empty() => Value::num(0.0),
+                "minifs" => call("min", vec![picked]),
+                _ => call("max", vec![picked]),
             }
         }
+        "ifs" => {
+            if args.is_empty() || !args.len().is_multiple_of(2) {
+                return Value::err("ifs needs pairs of condition and value");
+            }
+            for pair in args.chunks(2) {
+                match pair[0].truthy() {
+                    Ok(true) => return pair[1].clone(),
+                    Ok(false) => {}
+                    Err(e) => return e,
+                }
+            }
+            Value::err("ifs: no condition is true")
+        }
+        "switch" => {
+            let Some((expr, rest)) = args.split_first() else { return Value::err("switch needs an expression") };
+            if rest.len() < 2 {
+                return Value::err("switch needs at least one case and value");
+            }
+            for pair in rest.chunks_exact(2) {
+                if values_equal(expr, &pair[0]) {
+                    return pair[1].clone();
+                }
+            }
+            if !rest.len().is_multiple_of(2) { rest[rest.len() - 1].clone() } else { Value::err("switch: no case matches") }
+        }
+        "isblank" => map1(args.first().cloned().unwrap_or(Value::Null), &|v| Value::Bool(matches!(v, Value::Null))),
+        "isnumber" => map1(args.first().cloned().unwrap_or(Value::Null), &|v| Value::Bool(matches!(v, Value::Num(..) | Value::Date(_)))),
+        "istext" => map1(args.first().cloned().unwrap_or(Value::Null), &|v| Value::Bool(matches!(v, Value::Text(_)))),
+        "iserror" => map1(args.first().cloned().unwrap_or(Value::Null), &|v| Value::Bool(matches!(v, Value::Error(_)))),
 
         "xlookup" => {
             let (Some(key), Some(look), Some(result)) = (args.first(), args.get(1), args.get(2)) else {
@@ -476,6 +581,30 @@ pub fn call(name: &str, args: Vec<Value>) -> Value {
 
         "today" => Value::Date(today()),
         "date" => try_((|| Ok(Value::Date(days_from_civil(int_arg(&args, 0, None)?, int_arg(&args, 1, None)?, int_arg(&args, 2, None)?))))()),
+        "edate" | "eomonth" => match int_arg(&args, 1, None) {
+            Ok(months) => each(&args, &|v| match date_arg(&v) {
+                Ok(d) => {
+                    let (y, m, day) = civil_from_days(d);
+                    let (m, day) = (m as i64, day as i64);
+                    let total = y * 12 + (m - 1) + months;
+                    let (ny, nm) = (total.div_euclid(12), total.rem_euclid(12) + 1);
+                    let last = days_from_civil(ny, nm + 1, 1) - days_from_civil(ny, nm, 1);
+                    Value::Date(days_from_civil(ny, nm, if name == "eomonth" { last } else { day.min(last) }))
+                }
+                Err(e) => e,
+            }),
+            Err(e) => e,
+        },
+        "datedif" => match (args.first(), args.get(1), args.get(2)) {
+            (Some(a), Some(b), Some(Value::Text(unit))) => {
+                let unit = unit.to_lowercase();
+                lift2(a, b, &|a, b| match (date_arg(a), date_arg(b)) {
+                    (Ok(d1), Ok(d2)) => date_diff(d1, d2, &unit),
+                    (Err(e), _) | (_, Err(e)) => e,
+                })
+            }
+            _ => Value::err("datedif needs a start date, an end date and a unit (\"Y\", \"M\", \"D\", \"MD\", \"YM\", \"YD\")"),
+        },
         "year" | "month" | "day" | "weekday" => each(&args, &|v| match v {
             Value::Date(d) => {
                 let (y, m, day) = civil_from_days(d);

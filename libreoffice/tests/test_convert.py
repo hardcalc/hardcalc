@@ -150,6 +150,12 @@ class ToCalc(unittest.TestCase):
         self.assertEqual(self.f("Metrics", 3, 1), ("f", "=B4-B2"))
         self.assertEqual(self.f("Metrics", 4, 1), ("f", "=12*B7"), "row label → value column")
 
+    def test_xlookup_is_written_without_xlookup(self):
+        """XLOOKUP exists in Calc 24.8 and later only; older versions must work too."""
+        book = Book([TableInfo("T", "T", ["Key", "Val"], 3, ["a", "b", "c"])])
+        self.assertEqual(to_calc('=xlookup("b", Key, Val)', book, 0, 0), '=INDEX($B$2:$B$4;MATCH("b";$A$2:$A$4;0))')
+        self.assertEqual(to_calc('=xlookup("z", Key, Val, 0)', book, 0, 0), '=IFNA(INDEX($B$2:$B$4;MATCH("z";$A$2:$A$4;0));0)')
+
     def test_untranslatable_formula_stays_text(self):
         self.assertEqual(self.f("Metrics", 6, 1), ("s", "=spark(Expenses!Gross)"))
         plan = [p for p in self.plans if p.sheet == "Metrics"][0]
@@ -199,6 +205,13 @@ class FromCalc(unittest.TestCase):
         self.assertEqual(self.t("=B2:B4*2"), "=B1:B3*2", "outside functions a range stays a range")
         self.assertEqual(self.t("=IF(A2=\"x\";TRUE();FALSE())"), "=if(A1=\"x\",true,false)")
         self.assertEqual(self.t("=ROUND(B3;2)"), "=round(B2,2)")
+
+    def test_new_functions(self):
+        self.assertEqual(self.t("=ISBLANK(B2)"), "=isblank(B1)")
+        self.assertEqual(self.t("=EDATE(B2;1)"), "=edate(B1,1)")
+        self.assertEqual(self.t("=DATEDIF(A2;B2;\"MD\")"), "=datedif(A1,B1,\"MD\")")
+        self.assertEqual(self.t("=IFS(A2>1;1;TRUE();2)"), "=ifs(A1>1,1,true,2)")
+        self.assertEqual(self.t("=MAXIFS(B2:B4;A2:A4;\"x\")"), "=maxifs(B,A,\"x\")", "whole data columns become the column")
 
     def test_other_sheets(self):
         self.assertEqual(self.t("=$'Meine Costs'.B2+1"), "=\"Meine Costs\"!B1+1")

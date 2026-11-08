@@ -293,12 +293,18 @@ matter); the tab **ƒ functions** shows the complete list with descriptions:
 | Group | Functions |
 |---|---|
 | Aggregates | `sum`, `avg` (`average`, `mean`), `min`, `max`, `count`, `counta`, `countblank`, `product`, `median`, `stdev` |
-| Conditions | `if`, `iferror`, `and`, `or`, `not`, `sumif`, `countif`, `averageif`, `sumifs`, `countifs` |
+| Conditions | `if`, `ifs`, `switch`, `iferror`, `and`, `or`, `not`, `sumif`, `countif`, `averageif`, `sumifs`, `countifs`, `averageifs`, `minifs`, `maxifs` |
+| Information | `isblank`, `isnumber`, `istext`, `iserror` |
 | Lookup | `xlookup`, `match`, `index` |
 | Math | `abs`, `sqrt`, `round`, `roundup`, `rounddown`, `int`, `mod`, `power`, `sign`, `ceiling`, `floor`, `exp`, `ln`, `log`, `pi` |
-| Date | `today`, `date`, `year`, `month`, `day`, `weekday` |
+| Date | `today`, `date`, `year`, `month`, `day`, `weekday`, `edate`, `eomonth`, `datedif` |
 | Text | `len`, `left`, `right`, `mid`, `upper`, `lower`, `proper`, `trim`, `concat` (`concatenate`), `textjoin`, `substitute`, `find`, `search`, `rept`, `exact`, `value`, `text` |
 | hardcalc | `spark(values)` – sparkline as text |
+
+Names, units and options are always English and do not depend on the
+language settings (`datedif(a, b, "YM")`, `text(d, "dd.mm.yyyy")`); where
+Excel and LibreOffice Calc differ, hardcalc follows Calc (`datedif` with
+`"MD"` and `"YD"`, `minifs` / `maxifs` without a match give 0).
 
 Criteria as in Excel: `">100"`, `"<>open"`, `"open"`. German names of
 German Excel are understood too: `summe`, `mittelwert`, `anzahl`, `wenn`,

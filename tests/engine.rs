@@ -153,3 +153,80 @@ fn at_references_take_this_row() {
     assert_eq!(v(&mut wb, 0, 3), "A: 6", "@ inside a function that would otherwise take the column");
     assert_eq!(v(&mut wb, 1, 3), "B");
 }
+
+mod block1_functions {
+    use hardcalc::value::Value;
+    use hardcalc::Workbook;
+
+    const DOC: &str = "## T :: matrix\n\n| Name | Start | Grp | Amount |\n|------|-------|-----|--------|\n| a | 2024-01-31 | x | 10 |\n| b |  | y | 20 |\n| c | 2020-02-29 | x | 5 |\n";
+
+    fn eval(src: &str) -> Value {
+        let doc = hardcalc::parse(DOC).unwrap();
+        let (mut wb, diags) = Workbook::from_document(&doc);
+        assert!(diags.is_empty(), "{diags:?}");
+        wb.eval_formula(src, 0)
+    }
+
+    fn text(src: &str) -> String {
+        eval(src).display(None, false)
+    }
+
+    #[test]
+    fn information_functions() {
+        assert_eq!(text("isblank(B2)"), "true");
+        assert_eq!(text("isblank(B1)"), "false");
+        assert_eq!(text("isnumber(5)"), "true");
+        assert_eq!(text("isnumber(B1)"), "true");
+        assert_eq!(text("isnumber(\"5\")"), "false");
+        assert_eq!(text("istext(\"a\")"), "true");
+        assert_eq!(text("iserror(1/0)"), "true");
+        assert_eq!(text("iserror(1)"), "false");
+        assert_eq!(text("isblank(B)"), "[false; true; false]");
+    }
+
+    #[test]
+    fn month_arithmetic() {
+        assert_eq!(text("edate(B1, 1)"), "2024-02-29");
+        assert_eq!(text("edate(date(2024,1,31), -2)"), "2023-11-30");
+        assert_eq!(text("edate(date(2023,12,15), 1)"), "2024-01-15");
+        assert_eq!(text("eomonth(B3, 12)"), "2021-02-28");
+        assert_eq!(text("eomonth(date(2024,2,10), 0)"), "2024-02-29");
+        assert!(eval("edate(B2, 1)").is_error(), "an empty cell is no date");
+    }
+
+    #[test]
+    fn datedif_as_calc_computes_it() {
+        let d = |a: &str, b: &str, u: &str| text(&format!("datedif({a}, {b}, \"{u}\")"));
+        assert_eq!(d("date(2020,2,29)", "date(2024,2,28)", "Y"), "3");
+        assert_eq!(d("date(2020,1,15)", "date(2024,3,10)", "M"), "49");
+        assert_eq!(d("date(2020,1,15)", "date(2024,3,10)", "YM"), "1");
+        assert_eq!(d("date(2020,1,15)", "date(2020,1,25)", "d"), "10");
+        // The roll-over cases from Calc's source.
+        assert_eq!(d("date(2012,1,28)", "date(2012,3,1)", "MD"), "2");
+        assert_eq!(d("date(2011,1,29)", "date(2011,3,1)", "MD"), "0");
+        assert_eq!(d("date(1988,6,22)", "date(2012,5,11)", "YD"), "324");
+        assert!(eval("datedif(date(2020,1,15), date(2020,1,10), \"D\")").is_error());
+        assert!(eval("datedif(date(2020,1,15), date(2021,1,10), \"X\")").is_error());
+    }
+
+    #[test]
+    fn ifs_and_switch_take_one_branch() {
+        assert_eq!(text("ifs(1>2, \"a\", 2>1, \"b\")"), "b");
+        assert_eq!(text("ifs(true, 1, 1/0, 2)"), "1");
+        assert!(eval("ifs(1>2, 1)").is_error());
+        assert_eq!(text("switch(3, 1, \"one\", 3, \"three\", \"other\")"), "three");
+        assert_eq!(text("switch(9, 1, \"one\", \"other\")"), "other");
+        assert_eq!(text("switch(\"X\", \"x\", 1, 2)"), "1", "text without regard to case");
+        assert!(eval("switch(9, 1, 2)").is_error());
+        assert_eq!(text("switch(1, 1, 5, 1/0)"), "5");
+    }
+
+    #[test]
+    fn conditional_aggregates() {
+        assert_eq!(text("averageifs(Amount, Grp, \"x\")"), "7.5");
+        assert_eq!(text("minifs(Amount, Grp, \"x\")"), "5");
+        assert_eq!(text("maxifs(Amount, Grp, \"x\")"), "10");
+        assert_eq!(text("maxifs(Amount, Grp, \"z\")"), "0", "no match gives 0, like Calc");
+        assert_eq!(text("sumifs(Amount, Grp, \"x\")"), "15");
+    }
+}

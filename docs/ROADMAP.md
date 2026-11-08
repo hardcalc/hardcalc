@@ -78,3 +78,27 @@ This page lists open points and ideas. Suggestions are welcome as
 - Schema from a separate file (`#%include`), conditionally required fields,
   documentation per enum variant, a derive macro that generates the schema
   from Rust structs.
+
+## Functions (follow LibreOffice Calc; English names only)
+
+Block 1 is done (`isblank`, `isnumber`, `istext`, `iserror`, `edate`,
+`eomonth`, `datedif`, `ifs`, `switch`, `averageifs`, `minifs`, `maxifs`).
+A new function goes into `BUILTINS` in `src/builtins.rs` *and* into
+`libreoffice/extension/pythonpath/hardcalc_lo/builtins.py` (a test compares
+the two), and into the table in `SPEC.md`.
+
+- **Block 2, common**: `vlookup`, `hlookup`, `sumproduct`, `now`, `pmt`, `fv`,
+  `pv`, `npv`, `irr`, `rate`, `nper`.
+- **Block 3, also common**: `days`, `networkdays`, `workday`, `weeknum`,
+  `datevalue`; `rank`, `large`, `small`, `percentile`, `var`, `mode`;
+  `trunc`, `mround`, `fact`, `gcd`, `lcm`, `quotient`; `sin`, `cos`, `tan`,
+  `asin`, `acos`, `atan`, `atan2`, `radians`, `degrees`; `replace`, `char`,
+  `code`, `clean`, `numbervalue`, `fixed`; `choose`, `na`, `xor`;
+  `subtotal`, `aggregate`, `averagea`, `maxa`, `mina`; `ipmt`, `ppmt`.
+- **Later**: `correl`, `forecast`, `slope`, `intercept`; `rand`, `randbetween`
+  (change on every calculation); dynamic arrays (`filter`, `sort`, `unique`,
+  `sequence`, `xmatch`, `let`: Calc 24.8 and later only).
+- **Not planned**: `indirect`, `offset`, `cell` (cannot be traced by the
+  dependency tracking).
+- Check `text(value, format)` against Calc: format codes there depend on the
+  language settings; hardcalc's must not.

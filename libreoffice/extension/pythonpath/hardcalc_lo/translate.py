@@ -335,6 +335,10 @@ class _ToCalc(object):
         parts = [self.expr(a, row, builtins.range_arg(kinds, i)) for i, a in enumerate(args)]
         if calc == "ROUND" and len(parts) == 1:
             parts.append("0")
+        if calc == "XLOOKUP" and len(parts) in (3, 4):
+            # XLOOKUP only exists in Calc 24.8 and later; this works everywhere.
+            found = "INDEX(%s;MATCH(%s;%s;0))" % (parts[2], parts[0], parts[1])
+            return "IFNA(%s;%s)" % (found, parts[3]) if len(parts) == 4 else found
         return "%s(%s)" % (calc, ";".join(parts))
 
 

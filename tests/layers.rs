@@ -195,3 +195,27 @@ fn layer_errors_know_their_line() {
     assert_eq!(f.errors.len(), 1);
     assert_eq!(f.errors[0].line, 9);
 }
+
+/// The function table of the LibreOffice extension must list the same functions
+/// as `BUILTINS`: same Calc name and argument kinds.
+#[test]
+fn extension_knows_every_builtin() {
+    let py = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/libreoffice/extension/pythonpath/hardcalc_lo/builtins.py")).unwrap();
+    let table = py.split("BUILTINS = {").nth(1).unwrap().split("\n}").next().unwrap();
+    let mut python: Vec<(String, String, String)> = table
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let (name, rest) = l.strip_prefix('"')?.split_once("\": (\"")?;
+            let (excel, rest) = rest.split_once("\", \"")?;
+            Some((name.to_string(), excel.to_string(), rest.split('"').next()?.to_string()))
+        })
+        .collect();
+    let mut rust: Vec<(String, String, String)> = hardcalc::builtins::BUILTINS
+        .iter()
+        .filter_map(|b| b.excel.map(|e| (b.name.to_string(), e.to_string(), b.args.to_string())))
+        .collect();
+    python.sort();
+    rust.sort();
+    assert_eq!(python, rust, "hardcalc_lo/builtins.py and src/builtins.rs differ");
+}

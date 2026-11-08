@@ -977,6 +977,38 @@ impl Evaluator<'_> {
                     },
                 }
             }
+            // `ifs` and `switch` too only evaluate what they take.
+            Expr::Call(name, args) if name == "ifs" && !args.is_empty() && args.len().is_multiple_of(2) && !self.functions.contains_key(name) => {
+                for pair in args.chunks(2) {
+                    match self.eval(&pair[0], sheet) {
+                        Value::Vector(_) => {
+                            let all: Vec<Value> = args.iter().map(|a| self.eval(a, sheet)).collect();
+                            return call(name, all);
+                        }
+                        c => match c.truthy() {
+                            Ok(true) => return self.eval(&pair[1], sheet),
+                            Ok(false) => {}
+                            Err(e) => return e,
+                        },
+                    }
+                }
+                Value::err("ifs: no condition is true")
+            }
+            Expr::Call(name, args) if name == "switch" && args.len() >= 3 && !self.functions.contains_key(name) => {
+                let expr = self.eval(&args[0], sheet);
+                if matches!(expr, Value::Vector(_)) || expr.is_error() {
+                    let all: Vec<Value> = args.iter().map(|a| self.eval(a, sheet)).collect();
+                    return call(name, all);
+                }
+                let rest = &args[1..];
+                for pair in rest.chunks_exact(2) {
+                    let case = self.eval(&pair[0], sheet);
+                    if crate::builtins::values_equal(&expr, &case) {
+                        return self.eval(&pair[1], sheet);
+                    }
+                }
+                if !rest.len().is_multiple_of(2) { self.eval(&rest[rest.len() - 1], sheet) } else { Value::err("switch: no case matches") }
+            }
             Expr::Call(name, args) => {
                 let args: Vec<Value> = args.iter().map(|a| self.eval(a, sheet)).collect();
                 match self.functions.get(name) {
