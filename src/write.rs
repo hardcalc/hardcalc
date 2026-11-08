@@ -61,7 +61,7 @@ fn write_footer(t: &Table) -> String {
                 .collect()
         })
         .collect();
-    let lines = grid_lines(&header, &rows, t.compact);
+    let lines = grid_lines(&header, &rows, t.is_compact());
     let info = match &t.name {
         Some(name) => format!("footer {name}"),
         None => "footer".into(),
@@ -78,7 +78,7 @@ fn write_layer(t: &Table, l: &DataLayer) -> String {
         .iter()
         .map(|r| (0..t.columns.len()).map(|c| escape_cell(r.get(c).map_or("", |s| s.as_str()))).collect())
         .collect();
-    fence(&format!("{} {}", l.kind.name(), l.name), &grid_lines(&header, &rows, t.compact))
+    fence(&format!("{} {}", l.kind.name(), l.name), &grid_lines(&header, &rows, t.is_compact()))
 }
 
 /// Header, separator and rows of a table inside a block, columns padded
@@ -151,7 +151,7 @@ fn write_table_as_is(t: &Table) -> String {
                 .map(|s| s.width())
                 .max()
                 .unwrap_or(0);
-            if t.compact { 1 } else { w.max(3) }
+            if t.is_compact() { 1 } else { w.max(3) }
         })
         .collect();
 
@@ -163,12 +163,12 @@ fn write_table_as_is(t: &Table) -> String {
             Some(false) => " nofill",
             None => "",
         };
-        let compact = if t.compact { " compact" } else { "" };
-        out.push_str(&format!("{} {} :: {}{fill}{compact}{layer}\n\n", "#".repeat(level), name, t.shape));
+        let aligned = if t.is_compact() { "" } else { " aligned" };
+        out.push_str(&format!("{} {} :: {}{fill}{aligned}{layer}\n\n", "#".repeat(level), name, t.shape));
     }
 
     let pad = |s: &str, w: usize, align: Align| {
-        if t.compact {
+        if t.is_compact() {
             return s.to_string();
         }
         let fill = w.saturating_sub(s.width());

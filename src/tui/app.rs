@@ -463,7 +463,7 @@ fn table_mut(doc: &mut Document, sheet: usize) -> Option<&mut Table> {
 
 fn new_table(name: &str) -> Table {
     Table {
-        compact: false,
+        compact: true,
         line: Default::default(),
         heading_level: Some(2),
         name: Some(name.to_string()),
@@ -5292,13 +5292,16 @@ impl App {
                     None => !self.table().compact,
                     _ => return self.error("usage: :compact [on|off]"),
                 };
+                if !on && (self.table().name.is_none() || self.table().heading_level.is_none()) {
+                    return self.error("a table without a heading is always compact – only a heading can say `aligned`");
+                }
                 if self.table().compact != on {
                     self.with_table(|t| t.compact = on);
                 }
                 self.info(if on {
-                    "compact: the table is saved without padding – a changed value changes only its line in a diff"
+                    "compact (the default): saved without padding – a changed value changes only its line in a diff"
                 } else {
-                    "compact off: the table is saved with aligned columns"
+                    "aligned: the table is saved with padded columns (`aligned` in the heading)"
                 });
             }
             "fill" => {

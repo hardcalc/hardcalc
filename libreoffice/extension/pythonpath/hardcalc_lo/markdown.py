@@ -285,8 +285,9 @@ def write_table(table):
     rows = [[escape_cell(c) for c in r] for r in table.rows]
     ncols = len(header)
     aligns = (list(table.aligns) + [""] * ncols)[:ncols]
-    # `compact` in the heading: written without padding (small diffs in Git).
-    compact = "compact" in (table.shape or "").replace("[", " [").split()
+    # Without padding (small diffs in Git), unless the heading says `aligned`;
+    # a table without a heading cannot say it.
+    compact = "aligned" not in (table.shape or "").replace("[", " [").split() or table.level is None or table.name is None
     widths = []
     for i in range(ncols):
         w = max([width(header[i])] + [width(r[i]) for r in rows if i < len(r)])

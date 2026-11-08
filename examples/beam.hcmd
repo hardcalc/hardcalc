@@ -5,9 +5,9 @@ Section properties from the profile table:
 ## Profiles :: matrix
 
 | Profile | W_y:decimal(0) unit "cm³" |
-|---------|--------------------------:|
-| IPE 200 |                       194 |
-| IPE 240 |                       324 |
+|---|--:|
+| IPE 200 | 194 |
+| IPE 240 | 324 |
 
 ```hardcalc
 ## Bending check

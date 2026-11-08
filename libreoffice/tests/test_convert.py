@@ -119,21 +119,21 @@ class Markdown(unittest.TestCase):
         self.assertEqual(t.aligns, ["", "right"])
         self.assertEqual(t.rows, [["1", "x | y"]])
 
-    def test_compact_table_is_written_without_padding(self):
-        t = markdown.Table(2, "A", "matrix compact", ["Item", "Amount:Euro"], ["", "right"], [["Rent", "1200,00"], ["a longer item", "5"]])
+    def test_tables_are_compact_by_default(self):
+        t = markdown.Table(2, "A", "matrix", ["Item", "Amount:Euro"], ["", "right"], [["Rent", "1200,00"], ["x|y", "5"]])
         self.assertEqual(markdown.write_table(t), "\n".join([
-            "## A :: matrix compact",
+            "## A :: matrix",
             "",
             "| Item | Amount:Euro |",
             "|---|--:|",
             "| Rent | 1200,00 |",
-            "| a longer item | 5 |",
+            "| x\\|y | 5 |",
         ]))
 
-    def test_canonical_table(self):
-        t = markdown.Table(2, "A", "matrix", ["Item", "Amount:Euro"], ["", "right"], [["Rent", "1200,00"], ["x|y", "5"]])
+    def test_aligned_in_the_heading_keeps_the_padding(self):
+        t = markdown.Table(2, "A", "matrix aligned", ["Item", "Amount:Euro"], ["", "right"], [["Rent", "1200,00"], ["x|y", "5"]])
         self.assertEqual(markdown.write_table(t), "\n".join([
-            "## A :: matrix",
+            "## A :: matrix aligned",
             "",
             "| Item | Amount:Euro |",
             "|------|------------:|",
@@ -255,8 +255,8 @@ class Export(unittest.TestCase):
     def test_changed_value_rewrites_only_its_table(self):
         self.sheets[0].values[2][1] = 90.25
         out = convert.export(self.sheets, self.state)
-        self.assertIn("|       90.25 | open ", out)
-        self.assertIn("|     1200.00 |", out, "the column keeps two decimals")
+        self.assertIn("| Power | 90.25 | open ", out)
+        self.assertIn("| Rent | 1200.00 |", out, "the column keeps two decimals")
         self.assertIn("=Amount * 1.19", out, "unchanged formulas keep their spelling")
         rest = out.split("## Sales", 1)[1]
         self.assertEqual(rest, self.src.split("## Sales", 1)[1])
@@ -266,14 +266,14 @@ class Export(unittest.TestCase):
         a.values.append(["Water", 20.0, "", 0.0, ""])
         a.formulas[(4, 3)] = "=B5/SUM($B$2:$B$5)"
         out = convert.export(self.sheets, self.state)
-        self.assertIn("| Water    |       20.00 |               | =B4/sum(B)       |", out)
+        self.assertIn("| Water | 20.00 |  | =B4/sum(B) |  |", out)
 
     def test_new_sheet_and_untranslatable_formula(self):
         self.sheets.append(convert.SheetData("New", [["Name", "Value"], ["a", 1.5], ["", 7.0]],
                                              {(2, 1): "=VLOOKUP(1;A2:B3;2;0)"}))
         out = convert.export(self.sheets, self.state)
         self.assertTrue(out.startswith(self.src.rstrip("\n")))
-        self.assertIn("## New :: matrix\n\n| Name | Value |\n|------|-------|\n| a    | 1.5   |\n|      | 7     |\n", out)
+        self.assertIn("## New :: matrix\n\n| Name | Value |\n|---|---|\n| a | 1.5 |\n|  | 7 |\n", out)
         self.assertIn("```layer comments @New\nB2: original formula: =VLOOKUP(1;A2:B3;2;0)\n```\n", out)
 
     def test_saving_twice_gives_the_same_text(self):
@@ -299,9 +299,9 @@ class Export(unittest.TestCase):
         self.assertEqual(convert.export(sheets, None), "\n".join([
             "## Sheet1 :: matrix",
             "",
-            "| Name  | Amount      |",
-            "|-------|-------------|",
-            "| Rent  | 1200.5      |",
+            "| Name | Amount |",
+            "|---|---|",
+            "| Rent | 1200.5 |",
             "| Total | =sum(B1:B1) |",
             "",
         ]))
@@ -311,7 +311,7 @@ class Export(unittest.TestCase):
         plans, state = convert.plan_import(src)
         sheets = calc(plans, state)
         sheets[0].values[1][0] = 2.0
-        self.assertEqual(convert.export(sheets, state), "# T\r\n\r\n| a   |\r\n|-----|\r\n| 2   |\r\n")
+        self.assertEqual(convert.export(sheets, state), "# T\r\n\r\n| a |\r\n|---|\r\n| 2 |\r\n")
 
 
 class Styles(unittest.TestCase):
@@ -413,7 +413,7 @@ class ExportFormats(unittest.TestCase):
         u = self.sheets[1]  # Sales, no format layer
         set_style(u, 1, 3, bold=True)
         out = convert.export(self.sheets, self.state)
-        self.assertIn("| Feb   | South  | B       | 42.10      |\n\n```layer format\nD1: bold\n```\n\n```chart SalesTrend", out)
+        self.assertIn("| Feb | South | B | 42.10 |\n\n```layer format\nD1: bold\n```\n\n```chart SalesTrend", out)
         # Saved, opened again, the formatting removed: the block goes again.
         plans, state = convert.plan_import(out)
         sheets = calc(plans, state)

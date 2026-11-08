@@ -147,9 +147,9 @@ edge, columns are called A, B, C … Input anywhere makes the table grow up to
 there; only the used range is saved, empty rows and columns at the edge are
 dropped. `:fill` fills other tables too (and turns it off for a playground);
 this is saved in the heading as `fill` or `nofill` after the shape.
-`:compact` saves a table without padded columns (`## Name :: matrix compact`):
-a longer value then changes only its own line in a Git diff, not the whole
-table. `:shape matrix` turns a playground into a normal table, provided that values,
+Tables are saved without padded columns: a longer value changes only its own
+line in a Git diff, not the whole table. `:compact off` (`aligned` in the
+heading) keeps a table padded instead. `:shape matrix` turns a playground into a normal table, provided that values,
 commented cells and named column headers form one connected range (also
 diagonally adjacent); empty edges are dropped, references follow.
 `:shape playground` does the reverse. Column and row headers can be reached

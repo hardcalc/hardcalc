@@ -1548,7 +1548,7 @@ fn playground_fills_the_window_and_saves_the_used_area() {
 
 #[test]
 fn fill_flag_in_the_heading() {
-    let src = "## Account :: matrix fill [January]\n\n| A   | B   |\n|-----|-----|\n| 1   | 2   |\n\n## P :: playground nofill\n\n| A   |\n|-----|\n| 1   |\n";
+    let src = "## Account :: matrix fill [January]\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n## P :: playground nofill\n\n| A |\n|---|\n| 1 |\n";
     let doc = hardcalc::parse(src).unwrap();
     assert_eq!(hardcalc::write(&doc), src);
     let mut a = App::new(PathBuf::from("x.hcmd"), doc);
@@ -2243,7 +2243,7 @@ fn new_layer_from_the_ui() {
     a.command("layer new validate");
     assert_eq!(a.solo.as_deref(), Some("validate"));
     assert!(a.layer_names.iter().any(|n| n == "validate"));
-    assert!(hardcalc::write(&a.doc).contains("| 4   |\n\n```layer validate\n```\n\nText"), "{}", hardcalc::write(&a.doc));
+    assert!(hardcalc::write(&a.doc).contains("| 4 |\n\n```layer validate\n```\n\nText"), "{}", hardcalc::write(&a.doc));
 
     // The layer view edits its rules; back in the normal view they act.
     a.view.cursor = (0, 1);
@@ -2611,8 +2611,8 @@ fn shape_turns_a_playground_into_a_matrix_without_the_empty_edges() {
     command(&mut a, "shape matrix");
     assert!(!a.message.as_ref().unwrap().error, "{:?}", a.message);
     let text = hardcalc::write(&a.doc);
-    assert!(text.contains("## P :: matrix\n\n| A   | B     |\n"), "{text}");
-    assert!(text.contains("| 1   | =A1*2 |\n| 3   | 4     |\n\n"), "{text}");
+    assert!(text.contains("## P :: matrix\n\n| A | B |\n"), "{text}");
+    assert!(text.contains("| 1 | =A1*2 |\n| 3 | 4 |\n\n"), "{text}");
     assert!(text.contains("B2: vier"), "{text}");
     assert!(text.contains("=P!B1 + sum(P!A1:A2)"), "{text}");
     assert_eq!(a.view.cursor, (1, 1));
@@ -2764,13 +2764,13 @@ fn decimal_comma_only_on_screen() {
     typ(&mut a, "99,5");
     key(&mut a, KeyCode::Enter);
     assert_eq!(a.wb.sheets[0].raw[1][1], "99.5");
-    assert!(hardcalc::write(&a.doc).contains("| Power    |        99.5 |"), "{}", hardcalc::write(&a.doc));
+    assert!(hardcalc::write(&a.doc).contains("| Power | 99.5 |"), "{}", hardcalc::write(&a.doc));
     assert!(render(&mut a).contains("99,50"));
 
     // Files written with the comma are read and written with the point.
     let doc = hardcalc::parse("## T :: matrix\n\n| a | b:decimal(2) |\n|---|---|\n| x | 1,5 |\n\n```hardcalc\nq = 1,35 kN\n```\n").unwrap();
     let out = hardcalc::write(&doc);
-    assert!(out.contains("| x   | 1.5          |") && out.contains("q = 1.35 kN"), "{out}");
+    assert!(out.contains("| x | 1.5 |") && out.contains("q = 1.35 kN"), "{out}");
 }
 
 
@@ -2969,13 +2969,16 @@ fn formula_bar_stays_one_line_while_navigating() {
 }
 
 #[test]
-fn compact_command_switches_the_saved_form() {
+fn compact_is_the_default_and_aligned_can_be_chosen() {
     let mut a = app();
-    cmd(&mut a, ":compact on");
     let out = hardcalc::write(&a.doc);
-    assert!(out.contains(":: matrix[*, 5] compact"), "{out}");
     assert!(out.contains("| Rent | 1200.00 | paid |"), "{out}");
+    assert!(!out.contains("aligned"), "{out}");
+    cmd(&mut a, ":compact off");
+    let out = hardcalc::write(&a.doc);
+    assert!(out.contains(":: matrix[*, 5] aligned"), "{out}");
+    assert!(out.contains("| Rent     |"), "{out}");
     cmd(&mut a, ":compact");
-    assert!(!hardcalc::write(&a.doc).contains("compact"));
+    assert!(!hardcalc::write(&a.doc).contains("aligned"));
     cmd(&mut a, ":compact maybe");
 }

@@ -55,8 +55,8 @@ pub struct Table {
     /// `fill` / `nofill` after the shape: whether the view fills the window
     /// with empty cells; otherwise as the shape says (playgrounds fill).
     pub fill: Option<bool>,
-    /// Written without padding (`## Name :: matrix compact`): a changed value
-    /// changes only its own line in a diff.
+    /// Written without padding, so a changed value changes only its own line in
+    /// a diff (the default). `false`: aligned columns (`## Name :: matrix aligned`).
     pub compact: bool,
 }
 
@@ -89,6 +89,12 @@ impl LayerKind {
 }
 
 impl Table {
+    /// Whether the table is written without padding. A table without a heading
+    /// cannot say otherwise (`aligned` stands in the heading), so it always is.
+    pub fn is_compact(&self) -> bool {
+        self.compact || self.heading_level.is_none() || self.name.is_none()
+    }
+
     /// The raw grids that follow the table's rows and columns: the data
     /// and every data layer (for inserting, deleting and moving lines).
     pub fn grids_mut(&mut self) -> impl Iterator<Item = &mut Vec<Vec<String>>> {

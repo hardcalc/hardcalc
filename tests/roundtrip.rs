@@ -76,11 +76,11 @@ fn rejects_bad_shape() {
 }
 
 #[test]
-fn compact_tables_are_written_without_padding() {
-    let src = "## T :: matrix compact [Jan]\n\n| Item | Amount |\n|------|-------:|\n| Rent | 1200.00 |\n| A much longer item | 5 |\n";
+fn tables_are_compact_by_default() {
+    let src = "## T :: matrix [Jan]\n\n| Item | Amount |\n|------|-------:|\n| Rent | 1200.00 |\n| A much longer item | 5 |\n";
     let doc = hardcalc::parse(src).unwrap();
     let out = hardcalc::write(&doc);
-    assert_eq!(out, "## T :: matrix compact [Jan]\n\n| Item | Amount |\n|---|--:|\n| Rent | 1200.00 |\n| A much longer item | 5 |\n");
+    assert_eq!(out, "## T :: matrix [Jan]\n\n| Item | Amount |\n|---|--:|\n| Rent | 1200.00 |\n| A much longer item | 5 |\n");
     // Reading it again changes nothing, and a longer value touches only its own line.
     assert_eq!(hardcalc::write(&hardcalc::parse(&out).unwrap()), out);
     let mut edited = hardcalc::parse(&out).unwrap();
@@ -93,9 +93,19 @@ fn compact_tables_are_written_without_padding() {
 }
 
 #[test]
-fn padded_tables_stay_padded() {
-    let src = "## T :: matrix\n\n| Item | Amount |\n|---|---|\n| Rent | 1200.00 |\n";
+fn aligned_tables_stay_aligned_and_compact_is_accepted() {
+    let src = "## T :: matrix fill aligned [Jan]\n\n| Item | Amount |\n|---|---|\n| Rent | 1200.00 |\n";
     let out = hardcalc::write(&hardcalc::parse(src).unwrap());
+    assert!(out.starts_with("## T :: matrix fill aligned [Jan]\n"), "{out}");
     assert!(out.contains("| Item | Amount  |"), "{out}");
-    assert!(!out.contains("compact"));
+    assert_eq!(hardcalc::write(&hardcalc::parse(&out).unwrap()), out);
+    // The default can be written out; it is dropped again.
+    let out = hardcalc::write(&hardcalc::parse("## T :: matrix compact\n\n| A |\n|---|\n| 1 |\n").unwrap());
+    assert!(out.starts_with("## T :: matrix\n"), "{out}");
+}
+
+#[test]
+fn anonymous_tables_are_always_compact() {
+    let out = hardcalc::write(&hardcalc::parse("| Item | A |\n|---|---|\n| Rent is long | 1 |\n").unwrap());
+    assert_eq!(out, "| Item | A |\n|---|---|\n| Rent is long | 1 |\n");
 }

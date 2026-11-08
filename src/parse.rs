@@ -241,13 +241,18 @@ fn table_heading(line: &str) -> Option<(usize, String, String)> {
 /// `matrix[*, 3] fill [January]`: the shape, `fill` / `nofill` and the name
 /// of data layer a.
 fn parse_shape_and_layer(s: &str) -> Result<(Shape, Option<bool>, Option<String>, bool), String> {
-    // `compact` sits between the fill flag and the layer name.
+    // `aligned` (padded columns) sits between the fill flag and the layer name;
+    // `compact`, the default, is accepted too.
     let split_compact = |s: &str| -> (String, bool) {
         let s = s.trim();
-        match s.strip_suffix("compact") {
-            Some(rest) if rest.ends_with(char::is_whitespace) => (rest.trim().to_string(), true),
-            _ => (s.to_string(), false),
+        for (word, compact) in [("aligned", false), ("compact", true)] {
+            if let Some(rest) = s.strip_suffix(word)
+                && rest.ends_with(char::is_whitespace)
+            {
+                return (rest.trim().to_string(), compact);
+            }
         }
+        (s.to_string(), true)
     };
     if let Some((shape, rest)) = s.trim_end().rsplit_once(" [")
         && let Some(name) = rest.strip_suffix(']').map(str::trim)
@@ -456,6 +461,6 @@ fn parse_table(lines: &[&str], start: usize) -> (Table, usize) {
         rows.push(cells);
         i += 1;
     }
-    let table = Table { compact: false, line: SrcLine(start + 1), heading_level: None, name: None, shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None };
+    let table = Table { compact: true, line: SrcLine(start + 1), heading_level: None, name: None, shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None };
     (table, i)
 }

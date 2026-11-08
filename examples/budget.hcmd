@@ -14,11 +14,11 @@ share(part, total) = part / total
 
 ## Expenses :: matrix[*, 5]
 
-| Item    | Amount:Euro | Status:Status | Share:decimal(3) | Gross:Euro       |
-|---------|------------:|---------------|------------------|------------------|
-| Rent    | 1200.00     | paid          | =B1/sum(B)       | =Amount          |
-| Power   | 85.50       | open          | =B2/sum(B)       | =Amount * 1.19   |
-| Internet| 39.99       | paid          | =B3/sum(B)       | =Amount * 119%   |
+| Item | Amount:Euro | Status:Status | Share:decimal(3) | Gross:Euro |
+|---|--:|---|---|---|
+| Rent | 1200.00 | paid | =B1/sum(B) | =Amount |
+| Power | 85.50 | open | =B2/sum(B) | =Amount * 1.19 |
+| Internet | 39.99 | paid | =B3/sum(B) | =Amount * 119% |
 
 ```layer format
 B: align right
@@ -47,11 +47,11 @@ the gross total is {=sum(Expenses!Gross)}.
 ## Sales :: tensor[Month, Region, Product]
 
 | Month | Region | Product | Value:Euro |
-|-------|--------|---------|------------|
-| Jan   | North  | A       | 120.00     |
-| Jan   | South  | A       | 80.00      |
-| Feb   | North  | A       | 135.00     |
-| Feb   | South  | B       | 42.10      |
+|---|---|---|---|
+| Jan | North | A | 120.00 |
+| Jan | South | A | 80.00 |
+| Feb | North | A | 135.00 |
+| Feb | South | B | 42.10 |
 
 ```chart SalesTrend
 type:   line
@@ -63,15 +63,15 @@ filter: Product=A
 
 ## Metrics :: vector
 
-| Metric           | Value                                |
-|------------------|--------------------------------------|
-| Total expenses   | =sum(Expenses!Gross)                 |
-| Rent             | =Expenses[Rent, Amount]              |
-| Sales North      | =sum(Sales[Region=North])            |
-| Result           | =B3 - B1                             |
-| Distance         | =12 * Speed                          |
-| Speed            | 5 m/s                                |
-| Trend            | =spark(Expenses!Gross)               |
+| Metric | Value |
+|---|---|
+| Total expenses | =sum(Expenses!Gross) |
+| Rent | =Expenses[Rent, Amount] |
+| Sales North | =sum(Sales[Region=North]) |
+| Result | =B3 - B1 |
+| Distance | =12 * Speed |
+| Speed | 5 m/s |
+| Trend | =spark(Expenses!Gross) |
 
 A plain Markdown table is an anonymous matrix:
 

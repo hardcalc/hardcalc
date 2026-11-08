@@ -210,7 +210,7 @@ fn build_document(title: &str, source: &str, sheets: &[Sheet], taken: &[String])
         }
         doc.blocks.push(Block::Table(Table {
             line: SrcLine::default(),
-            compact: false,
+            compact: true,
             heading_level: Some(2),
             name: Some(g.name.clone()),
             shape: Shape::Matrix(Vec::new()),

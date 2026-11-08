@@ -51,8 +51,8 @@ fn footer_block_belongs_to_the_table() {
 fn footer_round_trips() {
     let doc = hardcalc::parse(DOC).unwrap();
     let out = hardcalc::write(&doc);
-    assert!(out.contains("```footer Expenses\n|         | Item      | Amount "), "{out}");
-    assert!(out.contains("| Total   |           | =sum "), "{out}");
+    assert!(out.contains("```footer Expenses\n|  | Item | Amount | Status |"), "{out}");
+    assert!(out.contains("| Total |  | =sum | =counta |"), "{out}");
     assert_eq!(hardcalc::write(&hardcalc::parse(&out).unwrap()), out);
 }
 

@@ -52,9 +52,9 @@ The shape may be followed by `fill` or `nofill` (`## Lenses :: matrix fill`,
 the table with empty cells up to the edge of the window. Without it,
 playgrounds without footer rows fill, other tables do not.
 
-`compact` after the fill flag (`## Lenses :: matrix compact`, with a layer
-`## Account :: matrix fill compact [January]`) selects the compact form of the
-table, see section 9.
+`aligned` after the fill flag (`## Lenses :: matrix aligned`, with a layer
+`## Account :: matrix fill aligned [January]`) selects padded columns instead
+of the compact form, see section 9.
 
 Tables without a heading are anonymous `matrix[*, *]`.
 
@@ -530,14 +530,14 @@ are not overwritten, unless they are `transient`.
 
 ## 9. Canonical form
 
-hardcalc writes files in a fixed, deterministic form (aligned columns,
+hardcalc writes files in a fixed, deterministic form (compact tables,
 normalised separator lines) so that diffs in Git stay readable.
 `hardcalc fmt` produces this form; it is idempotent.
 
-A table whose heading has `compact` is written without padding instead:
+Tables are written without padding:
 
 ```markdown
-## Expenses :: matrix compact
+## Expenses :: matrix
 
 | Item | Amount:Euro |
 |---|--:|
@@ -545,11 +545,17 @@ A table whose heading has `compact` is written without padding instead:
 | A much longer item | 5 |
 ```
 
-Alignment is then only in the separator line (`:--` left, `--:` right,
-`:-:` centred). A longer value changes only its own line, so Git shows small
+Alignment is only in the separator line (`:--` left, `--:` right, `:-:`
+centred). A longer value changes only its own line, so Git shows small
 diffs; the table is less tidy in a plain text editor. This applies to the
-table, its footer and its slices and scenarios. `:compact [on|off]` switches
-it for the table in the interface.
+table, its footer and its slices and scenarios.
+
+`aligned` in the heading (`## Expenses :: matrix aligned`) writes the table
+with equally wide columns instead, which looks better in an editor but changes
+every line of the table when a value grows. `compact` is accepted in the
+heading too and is not written. A table without a heading cannot say
+`aligned` and is always compact. `:compact [on|off]` switches it for the
+table in the interface.
 
 ## 10. Calculation sheets
 
