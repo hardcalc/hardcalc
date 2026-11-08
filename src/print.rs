@@ -648,7 +648,14 @@ pub fn table_lines(t: &PrintTable, columns: &[String], w: usize, h: usize) -> Ve
     };
     let mut widths: Vec<usize> = picked
         .iter()
-        .map(|&c| std::iter::once(t.headers[c].width()).chain(t.rows.iter().map(|r| r[c].text.width())).max().unwrap_or(3).clamp(3, MAX_COL))
+        .map(|&c| {
+            let widest = t.rows.iter().filter_map(|r| r[c].style.wrap).map(wrap_width).fold(MAX_COL, usize::max);
+            let cell_width = |r: &Vec<PrintCell>| match r[c].style.wrap {
+                Some(n) => r[c].text.width().min(wrap_width(n)),
+                None => r[c].text.width(),
+            };
+            std::iter::once(t.headers[c].width()).chain(t.rows.iter().map(cell_width)).max().unwrap_or(3).clamp(3, widest)
+        })
         .collect();
     // Shrink the widest columns until the table fits.
     while table_width(&widths) > w {
@@ -685,10 +692,44 @@ pub fn table_lines(t: &PrintTable, columns: &[String], w: usize, h: usize) -> Ve
     let mut out = vec![Line::text(LineKind::Title, fit(&t.title, w, Align::Left), bold.clone())];
     out.push(row_line(picked.iter().map(|&c| (t.headers[c].clone(), Align::Left, bold.clone())).collect(), true));
     let room = h.saturating_sub(out.len());
-    let fits = t.rows.len() <= room;
-    let shown = if fits { t.rows.len() } else { room.saturating_sub(1) };
-    for row in t.rows.iter().take(shown) {
-        out.push(row_line(picked.iter().map(|&c| (row[c].text.clone(), row[c].align, row[c].style.clone())).collect(), false));
+    // A row with wrapped cells is several lines high.
+    let groups: Vec<Vec<Line>> = t
+        .rows
+        .iter()
+        .map(|row| {
+            let parts: Vec<Vec<String>> = picked
+                .iter()
+                .enumerate()
+                .map(|(k, &c)| match row[c].style.wrap {
+                    Some(_) => crate::text::wrap_plain(&row[c].text, widths[k]),
+                    None => vec![row[c].text.clone()],
+                })
+                .collect();
+            let height = parts.iter().map(Vec::len).max().unwrap_or(1);
+            (0..height)
+                .map(|i| {
+                    row_line(
+                        picked
+                            .iter()
+                            .enumerate()
+                            .map(|(k, &c)| (parts[k].get(i).cloned().unwrap_or_default(), row[c].align, row[c].style.clone()))
+                            .collect(),
+                        false,
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let fits = groups.iter().map(Vec::len).sum::<usize>() <= room;
+    let mut shown = 0;
+    let mut used = 0;
+    for g in &groups {
+        if !fits && used + g.len() > room.saturating_sub(1) {
+            break;
+        }
+        out.extend(g.iter().cloned());
+        used += g.len();
+        shown += 1;
     }
     if !fits {
         out.push(Line::text(LineKind::Row, format!("… {} more rows", t.rows.len() - shown), gray.clone()));

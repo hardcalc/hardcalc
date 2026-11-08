@@ -21,6 +21,8 @@ pub enum StyleChange {
     Flag(&'static str, bool),
     /// `fg` or `bg`: a color, or `None` for none.
     Color(&'static str, Option<String>),
+    /// Line breaks in long text: `Some(width)` (0: the usual maximum), or off.
+    Wrap(Option<u16>),
     /// All of the text style off.
     Plain,
 }
@@ -136,6 +138,7 @@ impl App {
         let targets = self.format_targets();
         let families: Vec<&str> = match &change {
             StyleChange::Flag(f, _) | StyleChange::Color(f, _) => vec![f],
+            StyleChange::Wrap(_) => vec!["wrap"],
             StyleChange::Plain => STYLE_FAMILIES.to_vec(),
         };
         let rows = self.dims().0;
@@ -174,6 +177,9 @@ impl App {
                             None => None,
                         }
                     }
+                    (StyleChange::Wrap(Some(0)), _) => Some("wrap".to_string()),
+                    (StyleChange::Wrap(Some(n)), _) => Some(format!("wrap {n}")),
+                    (StyleChange::Wrap(None), _) => base.wrap.is_some().then(|| "nowrap".to_string()),
                     (StyleChange::Plain, "bold") => base.bold.then(|| "nobold".to_string()),
                     (StyleChange::Plain, "italic") => base.italic.then(|| "noitalic".to_string()),
                     (StyleChange::Plain, "underline") => base.underline.then(|| "nounderline".to_string()),
@@ -203,6 +209,9 @@ impl App {
             StyleChange::Flag(f, false) => format!("no{f}"),
             StyleChange::Color(f, Some(c)) => format!("{f} {c}"),
             StyleChange::Color(f, None) => format!("{f} none"),
+            StyleChange::Wrap(Some(0)) => "wrap".into(),
+            StyleChange::Wrap(Some(n)) => format!("wrap {n}"),
+            StyleChange::Wrap(None) => "nowrap".into(),
             StyleChange::Plain => "plain".into(),
         };
         self.info(format!("{what}: {} – rule in the format layer", targets.join(", ")));

@@ -2925,3 +2925,27 @@ fn long_input_wraps_in_the_formula_bar() {
     let end = rows.iter().take(8).map(|r| r.matches('1').count()).sum::<usize>();
     assert!(end >= 90, "{end}\n{rows:#?}");
 }
+
+#[test]
+fn wrap_command_writes_and_removes_the_rule() {
+    let mut a = app();
+    cmd(&mut a, ":wrap 12");
+    assert!(hardcalc::write(&a.doc).contains("wrap 12"), "{}", hardcalc::write(&a.doc));
+    cmd(&mut a, ":wrap");
+    let out = hardcalc::write(&a.doc);
+    assert!(out.contains("wrap") && !out.contains("wrap 12"), "{out}");
+    cmd(&mut a, ":wrap off");
+    assert!(!hardcalc::write(&a.doc).contains("wrap"), "{}", hardcalc::write(&a.doc));
+    cmd(&mut a, ":wrap x");
+}
+
+#[test]
+fn raster_layout_tables_wrap_too() {
+    let src = "## T :: matrix\n\n| N | Note |\n|---|------|\n| 1 | the quick brown fox jumps over the lazy dog |\n| 2 | short |\n\n```layer format\nNote: wrap 12\n```\n\n```layout L\npage: A4 portrait\nfont: 9\ngrid: 12\n1-12 / 1-12 table T\n```\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    let layout = a.layout(&hardcalc::print::PageSetup { scope: hardcalc::print::Scope::Layout(0), ..Default::default() });
+    let text: Vec<String> = layout.pages[0].iter().map(|l| l.plain()).collect();
+    let at = |t: &str| text.iter().position(|l| l.contains(t)).unwrap_or_else(|| panic!("{t}: {text:#?}"));
+    assert_eq!(at("short") - at("the quick"), 4, "{text:#?}");
+    assert!(text.iter().any(|l| l.contains("lazy dog")));
+}

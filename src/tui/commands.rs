@@ -71,6 +71,7 @@ pub const COMMANDS: &[Command] = &[
     c("underline", "", "underline on / off for the selection"),
     choice("fg", "<color|#rrggbb|none>", "text color of the selection", crate::tui::app::formatting::COLORS),
     choice("bg", "<color|#rrggbb|none>", "fill color of the selection", crate::tui::app::formatting::COLORS),
+    c("wrap", "[width|off]", "break long text of the selection into lines (width in characters, default 40)"),
     c("plain", "", "remove bold, italic, underline and colors from the selection"),
     c("slice", "<Name>", "stack a slice on the table: own values, e.g. a month"),
     c("scenario", "<Name>", "stack a scenario on the table: only changes, the rest shows through"),

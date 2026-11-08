@@ -256,11 +256,15 @@ pub const STYLE_FAMILIES: [&str; 5] = ["bold", "italic", "underline", "fg", "bg"
 /// `["fg red", "bold", "align right"]` (words with an argument stay together).
 pub fn style_parts(body: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut words = body.split_whitespace();
+    let mut words = body.split_whitespace().peekable();
     while let Some(w) = words.next() {
         match w {
             "align" | "fg" | "bg" => match words.next() {
                 Some(arg) => out.push(format!("{w} {arg}")),
+                None => out.push(w.to_string()),
+            },
+            "wrap" => match words.next_if(|n| n.parse::<u16>().is_ok()) {
+                Some(n) => out.push(format!("wrap {n}")),
                 None => out.push(w.to_string()),
             },
             _ => out.push(w.to_string()),
@@ -272,7 +276,7 @@ pub fn style_parts(body: &str) -> Vec<String> {
 /// The family of a rule part: `nobold` → `bold`, `fg red` → `fg`, `align left` → `align`.
 pub fn part_family(part: &str) -> &str {
     let first = part.split_whitespace().next().unwrap_or("");
-    first.strip_prefix("no").filter(|f| STYLE_FAMILIES.contains(f)).unwrap_or(first)
+    first.strip_prefix("no").filter(|f| STYLE_FAMILIES.contains(f) || *f == "wrap").unwrap_or(first)
 }
 
 impl CellStyle {
@@ -614,6 +618,9 @@ Status: in(open, zu)
         assert_eq!(st.bg, Some(Color::Rgb(0, 255, 0)));
         assert_eq!(st.off, Off::default(), "a merged style switches nothing off");
         assert_eq!(style_parts("fg red bold  align right nobold"), ["fg red", "bold", "align right", "nobold"]);
+        assert_eq!(style_parts("wrap 20 bold wrap"), ["wrap 20", "bold", "wrap"]);
+        assert_eq!(part_family("nowrap"), "wrap");
+        assert_eq!(part_family("wrap 20"), "wrap");
         assert_eq!(part_family("nobold"), "bold");
         assert_eq!(part_family("fg none"), "fg");
         assert_eq!(part_family("normal"), "normal");

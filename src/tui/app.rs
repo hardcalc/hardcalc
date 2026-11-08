@@ -4954,6 +4954,14 @@ impl App {
                     Some(c) => self.error(format!("unknown color '{c}' – {} or #rrggbb", formatting::COLORS.join(", "))),
                 }
             }
+            "wrap" => match args.first().map(|a| a.to_lowercase()) {
+                None => self.apply_style(formatting::StyleChange::Wrap(Some(0))),
+                Some(a) if a == "off" || a == "none" => self.apply_style(formatting::StyleChange::Wrap(None)),
+                Some(a) => match a.parse::<u16>() {
+                    Ok(n) if n >= 1 => self.apply_style(formatting::StyleChange::Wrap(Some(n))),
+                    _ => self.error("usage: :wrap [width|off]"),
+                },
+            },
             "plain" => self.apply_style(formatting::StyleChange::Plain),
             "solo" => match args.first() {
                 Some(name) if self.layer_names.iter().any(|n| n == name) => self.set_solo(Some(name.to_string())),
