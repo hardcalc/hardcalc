@@ -28,3 +28,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.workflow_run.head_branch }}
         run: gh release upload "$TAG" libreoffice/dist/*.oxt libreoffice/dist/update.xml --clobber --repo ${{ github.repository }}
+      - name: Mention the extension in the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: python3 .github/scripts/release_notes_oxt.py "$TAG" ${{ github.repository }}
