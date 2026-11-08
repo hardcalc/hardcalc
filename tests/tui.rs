@@ -2967,3 +2967,15 @@ fn formula_bar_stays_one_line_while_navigating() {
     assert!(!row(2).contains("1+1+1"), "{}", row(2));
     assert!(row(1).trim_end().contains('…'), "{}", row(1));
 }
+
+#[test]
+fn compact_command_switches_the_saved_form() {
+    let mut a = app();
+    cmd(&mut a, ":compact on");
+    let out = hardcalc::write(&a.doc);
+    assert!(out.contains(":: matrix[*, 5] compact"), "{out}");
+    assert!(out.contains("| Rent | 1200.00 | paid |"), "{out}");
+    cmd(&mut a, ":compact");
+    assert!(!hardcalc::write(&a.doc).contains("compact"));
+    cmd(&mut a, ":compact maybe");
+}

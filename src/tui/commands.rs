@@ -79,6 +79,7 @@ pub const COMMANDS: &[Command] = &[
     choice("layers", "all|table", "layer switches for all tables / this table", &["all", "table"]),
     c("solo", "[layer]", "layer view (without a name: back)"),
     choice("shape", "[matrix|playground]", "turn a playground into a table (one connected area) or back", &["matrix", "playground"]),
+    choice("compact", "[on|off]", "save this table without padded columns (small diffs in Git)", &["on", "off"]),
     choice("fill", "[on|off]", "fill the table to the window edges", &["on", "off"]),
     choice("bands", "[on|off]", "shade alternate rows and columns", &["on", "off"]),
     choice("theme", "auto|light|dark", "colour scheme", &["auto", "light", "dark"]),

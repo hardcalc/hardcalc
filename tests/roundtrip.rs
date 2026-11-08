@@ -74,3 +74,28 @@ fn layer_with_explicit_target() {
 fn rejects_bad_shape() {
     assert!(parse("## X :: cube\n\n| a |\n|---|\n").is_err());
 }
+
+#[test]
+fn compact_tables_are_written_without_padding() {
+    let src = "## T :: matrix compact [Jan]\n\n| Item | Amount |\n|------|-------:|\n| Rent | 1200.00 |\n| A much longer item | 5 |\n";
+    let doc = hardcalc::parse(src).unwrap();
+    let out = hardcalc::write(&doc);
+    assert_eq!(out, "## T :: matrix compact [Jan]\n\n| Item | Amount |\n|---|--:|\n| Rent | 1200.00 |\n| A much longer item | 5 |\n");
+    // Reading it again changes nothing, and a longer value touches only its own line.
+    assert_eq!(hardcalc::write(&hardcalc::parse(&out).unwrap()), out);
+    let mut edited = hardcalc::parse(&out).unwrap();
+    if let hardcalc::model::Block::Table(t) = &mut edited.blocks[0] {
+        t.rows[0][0] = "A rent that got very long".into();
+    }
+    let changed = hardcalc::write(&edited);
+    let diff = out.lines().zip(changed.lines()).filter(|(a, b)| a != b).count();
+    assert_eq!(diff, 1, "{changed}");
+}
+
+#[test]
+fn padded_tables_stay_padded() {
+    let src = "## T :: matrix\n\n| Item | Amount |\n|---|---|\n| Rent | 1200.00 |\n";
+    let out = hardcalc::write(&hardcalc::parse(src).unwrap());
+    assert!(out.contains("| Item | Amount  |"), "{out}");
+    assert!(!out.contains("compact"));
+}

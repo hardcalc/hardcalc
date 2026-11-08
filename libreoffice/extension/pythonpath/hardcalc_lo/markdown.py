@@ -285,12 +285,16 @@ def write_table(table):
     rows = [[escape_cell(c) for c in r] for r in table.rows]
     ncols = len(header)
     aligns = (list(table.aligns) + [""] * ncols)[:ncols]
+    # `compact` in the heading: written without padding (small diffs in Git).
+    compact = "compact" in (table.shape or "").replace("[", " [").split()
     widths = []
     for i in range(ncols):
         w = max([width(header[i])] + [width(r[i]) for r in rows if i < len(r)])
-        widths.append(max(w, 3))
+        widths.append(1 if compact else max(w, 3))
 
     def pad(s, w, align):
+        if compact:
+            return s
         fill = max(w - width(s), 0)
         if align == "right":
             return " " * fill + s

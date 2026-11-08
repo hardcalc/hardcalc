@@ -81,13 +81,14 @@ pub fn parse(src: &str) -> Result<Document, ParseError> {
             }
             if j + 1 < lines.len() && is_table_row(lines[j]) && is_separator(lines[j + 1]) {
                 flush(&mut text, &mut doc);
-                let (shape, fill, layer_name) = parse_shape_and_layer(&shape).map_err(|m| ParseError { line: i + 1, message: m })?;
+                let (shape, fill, layer_name, compact) = parse_shape_and_layer(&shape).map_err(|m| ParseError { line: i + 1, message: m })?;
                 let (mut table, next) = parse_table(&lines, j);
                 table.heading_level = Some(level);
                 table.name = Some(name);
                 table.shape = shape;
                 table.layer_name = layer_name;
                 table.fill = fill;
+                table.compact = compact;
                 doc.blocks.push(Block::Table(table));
                 i = next;
                 continue;
@@ -239,16 +240,27 @@ fn table_heading(line: &str) -> Option<(usize, String, String)> {
 
 /// `matrix[*, 3] fill [January]`: the shape, `fill` / `nofill` and the name
 /// of data layer a.
-fn parse_shape_and_layer(s: &str) -> Result<(Shape, Option<bool>, Option<String>), String> {
+fn parse_shape_and_layer(s: &str) -> Result<(Shape, Option<bool>, Option<String>, bool), String> {
+    // `compact` sits between the fill flag and the layer name.
+    let split_compact = |s: &str| -> (String, bool) {
+        let s = s.trim();
+        match s.strip_suffix("compact") {
+            Some(rest) if rest.ends_with(char::is_whitespace) => (rest.trim().to_string(), true),
+            _ => (s.to_string(), false),
+        }
+    };
     if let Some((shape, rest)) = s.trim_end().rsplit_once(" [")
         && let Some(name) = rest.strip_suffix(']').map(str::trim)
         && valid_layer_name(name)
-        && let Ok((shape, fill)) = parse_shape_and_fill(shape)
     {
-        return Ok((shape, fill, Some(name.to_string())));
+        let (shape, compact) = split_compact(shape);
+        if let Ok((shape, fill)) = parse_shape_and_fill(&shape) {
+            return Ok((shape, fill, Some(name.to_string()), compact));
+        }
     }
-    let (shape, fill) = parse_shape_and_fill(s)?;
-    Ok((shape, fill, None))
+    let (rest, compact) = split_compact(s);
+    let (shape, fill) = parse_shape_and_fill(&rest)?;
+    Ok((shape, fill, None, compact))
 }
 
 /// `playground nofill`: the shape and the optional fill flag.
@@ -444,6 +456,6 @@ fn parse_table(lines: &[&str], start: usize) -> (Table, usize) {
         rows.push(cells);
         i += 1;
     }
-    let table = Table { line: SrcLine(start + 1), heading_level: None, name: None, shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None };
+    let table = Table { compact: false, line: SrcLine(start + 1), heading_level: None, name: None, shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None };
     (table, i)
 }

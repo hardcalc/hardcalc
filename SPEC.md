@@ -52,6 +52,10 @@ The shape may be followed by `fill` or `nofill` (`## Lenses :: matrix fill`,
 the table with empty cells up to the edge of the window. Without it,
 playgrounds without footer rows fill, other tables do not.
 
+`compact` after the fill flag (`## Lenses :: matrix compact`, with a layer
+`## Account :: matrix fill compact [January]`) selects the compact form of the
+table, see section 9.
+
 Tables without a heading are anonymous `matrix[*, *]`.
 
 ### Tensors in “long format”
@@ -529,6 +533,23 @@ are not overwritten, unless they are `transient`.
 hardcalc writes files in a fixed, deterministic form (aligned columns,
 normalised separator lines) so that diffs in Git stay readable.
 `hardcalc fmt` produces this form; it is idempotent.
+
+A table whose heading has `compact` is written without padding instead:
+
+```markdown
+## Expenses :: matrix compact
+
+| Item | Amount:Euro |
+|---|--:|
+| Rent | 1200.00 |
+| A much longer item | 5 |
+```
+
+Alignment is then only in the separator line (`:--` left, `--:` right,
+`:-:` centred). A longer value changes only its own line, so Git shows small
+diffs; the table is less tidy in a plain text editor. This applies to the
+table, its footer and its slices and scenarios. `:compact [on|off]` switches
+it for the table in the interface.
 
 ## 10. Calculation sheets
 

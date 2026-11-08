@@ -55,6 +55,9 @@ pub struct Table {
     /// `fill` / `nofill` after the shape: whether the view fills the window
     /// with empty cells; otherwise as the shape says (playgrounds fill).
     pub fill: Option<bool>,
+    /// Written without padding (`## Name :: matrix compact`): a changed value
+    /// changes only its own line in a diff.
+    pub compact: bool,
 }
 
 /// A slice or scenario: the table once more, for another month, a variant …

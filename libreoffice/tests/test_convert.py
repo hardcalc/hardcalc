@@ -119,6 +119,17 @@ class Markdown(unittest.TestCase):
         self.assertEqual(t.aligns, ["", "right"])
         self.assertEqual(t.rows, [["1", "x | y"]])
 
+    def test_compact_table_is_written_without_padding(self):
+        t = markdown.Table(2, "A", "matrix compact", ["Item", "Amount:Euro"], ["", "right"], [["Rent", "1200,00"], ["a longer item", "5"]])
+        self.assertEqual(markdown.write_table(t), "\n".join([
+            "## A :: matrix compact",
+            "",
+            "| Item | Amount:Euro |",
+            "|---|--:|",
+            "| Rent | 1200,00 |",
+            "| a longer item | 5 |",
+        ]))
+
     def test_canonical_table(self):
         t = markdown.Table(2, "A", "matrix", ["Item", "Amount:Euro"], ["", "right"], [["Rent", "1200,00"], ["x|y", "5"]])
         self.assertEqual(markdown.write_table(t), "\n".join([

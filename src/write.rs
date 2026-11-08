@@ -61,7 +61,7 @@ fn write_footer(t: &Table) -> String {
                 .collect()
         })
         .collect();
-    let lines = grid_lines(&header, &rows);
+    let lines = grid_lines(&header, &rows, t.compact);
     let info = match &t.name {
         Some(name) => format!("footer {name}"),
         None => "footer".into(),
@@ -78,16 +78,18 @@ fn write_layer(t: &Table, l: &DataLayer) -> String {
         .iter()
         .map(|r| (0..t.columns.len()).map(|c| escape_cell(r.get(c).map_or("", |s| s.as_str()))).collect())
         .collect();
-    fence(&format!("{} {}", l.kind.name(), l.name), &grid_lines(&header, &rows))
+    fence(&format!("{} {}", l.kind.name(), l.name), &grid_lines(&header, &rows, t.compact))
 }
 
-/// Header, separator and rows of a table inside a block, columns padded.
-fn grid_lines(header: &[String], rows: &[Vec<String>]) -> Vec<String> {
+/// Header, separator and rows of a table inside a block, columns padded
+/// (`compact`: not).
+fn grid_lines(header: &[String], rows: &[Vec<String>], compact: bool) -> Vec<String> {
     let widths: Vec<usize> = (0..header.len())
-        .map(|i| std::iter::once(&header[i]).chain(rows.iter().map(|r| &r[i])).map(|s| s.width()).max().unwrap_or(0).max(3))
+        .map(|i| if compact { 1 } else { std::iter::once(&header[i]).chain(rows.iter().map(|r| &r[i])).map(|s| s.width()).max().unwrap_or(0).max(3) })
         .collect();
     let line = |cells: &[String]| {
-        let parts: Vec<String> = cells.iter().zip(&widths).map(|(c, &w)| format!("{c}{}", " ".repeat(w - c.width()))).collect();
+        let parts: Vec<String> =
+            cells.iter().zip(&widths).map(|(c, &w)| if compact { c.clone() } else { format!("{c}{}", " ".repeat(w - c.width())) }).collect();
         format!("| {} |", parts.join(" | "))
     };
     let mut lines = vec![line(header)];
@@ -149,7 +151,7 @@ fn write_table_as_is(t: &Table) -> String {
                 .map(|s| s.width())
                 .max()
                 .unwrap_or(0);
-            w.max(3)
+            if t.compact { 1 } else { w.max(3) }
         })
         .collect();
 
@@ -161,10 +163,14 @@ fn write_table_as_is(t: &Table) -> String {
             Some(false) => " nofill",
             None => "",
         };
-        out.push_str(&format!("{} {} :: {}{fill}{layer}\n\n", "#".repeat(level), name, t.shape));
+        let compact = if t.compact { " compact" } else { "" };
+        out.push_str(&format!("{} {} :: {}{fill}{compact}{layer}\n\n", "#".repeat(level), name, t.shape));
     }
 
     let pad = |s: &str, w: usize, align: Align| {
+        if t.compact {
+            return s.to_string();
+        }
         let fill = w.saturating_sub(s.width());
         match align {
             Align::Right => format!("{}{}", " ".repeat(fill), s),

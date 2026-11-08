@@ -463,6 +463,7 @@ fn table_mut(doc: &mut Document, sheet: usize) -> Option<&mut Table> {
 
 fn new_table(name: &str) -> Table {
     Table {
+        compact: false,
         line: Default::default(),
         heading_level: Some(2),
         name: Some(name.to_string()),
@@ -5280,6 +5281,25 @@ impl App {
                 } else {
                     self.info(format!("column {name}: type {shown}"));
                 }
+            }
+            "compact" => {
+                if self.view.kind != ViewKind::Table || self.view.pivot.is_some() {
+                    return self.error(":compact works in tables");
+                }
+                let on = match args.first().copied() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    None => !self.table().compact,
+                    _ => return self.error("usage: :compact [on|off]"),
+                };
+                if self.table().compact != on {
+                    self.with_table(|t| t.compact = on);
+                }
+                self.info(if on {
+                    "compact: the table is saved without padding – a changed value changes only its line in a diff"
+                } else {
+                    "compact off: the table is saved with aligned columns"
+                });
             }
             "fill" => {
                 if self.view.kind != ViewKind::Table || self.view.pivot.is_some() {
