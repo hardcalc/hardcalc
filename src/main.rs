@@ -7,6 +7,9 @@ usage: hardcalc                   new document (a playground) in the terminal UI
        hardcalc <command> <file>
        hardcalc desktop install    start menu entry and .hcmd file association
        hardcalc desktop uninstall  remove them again
+       hardcalc libreoffice install    add the extension to LibreOffice Calc (needs LibreOffice)
+       hardcalc libreoffice uninstall  remove it again
+       hardcalc libreoffice export [file.oxt]  write the extension file
        hardcalc --version
        hardcalc --keymap-markdown   the key / mouse matrix (docs/keys.md)
 
@@ -73,6 +76,27 @@ fn main() -> ExitCode {
             };
         }
         [cmd, path, ..] if cmd == "check" || cmd == "eval" => (cmd.as_str(), path),
+        [cmd, action, rest @ ..]
+            if cmd == "libreoffice" && matches!(action.as_str(), "install" | "uninstall" | "export") && rest.len() <= usize::from(action == "export") =>
+        {
+            let result = match action.as_str() {
+                "install" => hardcalc::libreoffice::install(),
+                "uninstall" => hardcalc::libreoffice::uninstall(),
+                _ => hardcalc::libreoffice::export(rest.first().map(String::as_str)),
+            };
+            return match result {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         [cmd, path] => (cmd.as_str(), path),
         [cmd, path, _] if cmd == "pdf" || cmd == "import" || cmd == "export" || cmd == "calc" || cmd == "report" => (cmd.as_str(), path),
         _ => {

@@ -469,6 +469,18 @@ charts, macros and pivot tables (import).
 **Directly in LibreOffice Calc:** the extension in [libreoffice/](libreoffice/)
 opens `.hcmd` files in Calc and saves them, without hardcalc being installed.
 Text, types, layers, charts and layouts are kept unchanged when saving.
+Download `hardcalc-libreoffice-<version>.oxt` from the
+[latest release](https://github.com/hardcalc/hardcalc/releases/latest) and
+open it in LibreOffice (*Tools → Extensions*), or let hardcalc do it:
+
+```bash
+hardcalc libreoffice install       # finds LibreOffice (unopkg) and adds the extension
+hardcalc libreoffice uninstall
+hardcalc libreoffice export        # only writes hardcalc-libreoffice-<version>.oxt
+```
+
+The extension is built into hardcalc. LibreOffice from the Mac App Store
+cannot install extensions with Python parts; use the build from libreoffice.org.
 
 ### Decimal point or comma
 

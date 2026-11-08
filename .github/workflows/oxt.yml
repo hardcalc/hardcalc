@@ -1,0 +1,30 @@
+# Attaches the LibreOffice extension to every GitHub release:
+# hardcalc-libreoffice-<version>.oxt and update.xml (LibreOffice then reports
+# new versions itself). Runs after the Release workflow (dist) has created the
+# release; a "release published" trigger would not fire for releases made
+# with the workflow token.
+name: LibreOffice extension
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  oxt:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Build the extension
+        run: python3 libreoffice/build.py --update-url https://github.com/${{ github.repository }}/releases/latest/download/update.xml
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: gh release upload "$TAG" libreoffice/dist/*.oxt libreoffice/dist/update.xml --clobber --repo ${{ github.repository }}

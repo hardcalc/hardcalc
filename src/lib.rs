@@ -6,6 +6,7 @@ pub mod chart;
 pub mod config;
 pub mod delimited;
 pub mod desktop;
+pub mod libreoffice;
 pub mod engine;
 pub mod export;
 pub mod fill;
