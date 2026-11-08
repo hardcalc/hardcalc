@@ -43,7 +43,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // The data layers of that window's table get a line of their own.
     let stacked = app.with_window(data_left, |app| app.view.kind == ViewKind::Table && app.view.pivot.is_none() && app.layer_count() > 0);
     let screen = f.area();
-    let bar_height = app.with_window(data_left, |app| bar_text(app, screen.width).0.len().clamp(1, (screen.height as usize / 4).clamp(1, 8)) as u16);
+    // The bar grows only while text is entered; navigating keeps it one line.
+    let bar_height = app.with_window(data_left, |app| {
+        if matches!(app.mode, Mode::Edit { .. }) {
+            bar_text(app, screen.width).0.len().clamp(1, (screen.height as usize / 4).clamp(1, 8)) as u16
+        } else {
+            1
+        }
+    });
     let [top, bar, body, stack, layers, status, fkeys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(bar_height),

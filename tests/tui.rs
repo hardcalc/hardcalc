@@ -2952,3 +2952,17 @@ fn raster_layout_tables_wrap_too() {
     assert_eq!(at("short") - at("the quick"), 4, "{text:#?}");
     assert!(text.iter().any(|l| l.contains("lazy dog")));
 }
+
+#[test]
+fn formula_bar_stays_one_line_while_navigating() {
+    let mut a = app();
+    key(&mut a, KeyCode::Enter);
+    typ(&mut a, &format!("={}", vec!["1"; 90].join("+")));
+    key(&mut a, KeyCode::Enter);
+    key(&mut a, KeyCode::Up);
+    let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    term.draw(|f| ui::draw(f, &mut a)).unwrap();
+    let buf = term.backend().buffer();
+    let row = |y: u16| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    assert!(!row(2).contains("1+1+1"), "{}", row(2));
+}
