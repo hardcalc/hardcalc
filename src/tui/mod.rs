@@ -9,6 +9,7 @@ pub mod commands;
 pub mod graphics;
 pub mod help;
 pub mod keymap;
+pub mod output;
 pub mod theme;
 pub mod ui;
 
@@ -18,7 +19,19 @@ use ratatui::crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
-use std::io::{stdout, Write};
+use std::io::{stdout, Stdout, Write};
+use std::time::{Duration, Instant};
+
+/// The terminal, drawn in synchronized frames.
+type Term = ratatui::Terminal<ratatui::backend::CrosstermBackend<output::Output<Stdout>>>;
+
+/// Shortest time between animation frames (60 per second).
+const FRAME: Duration = Duration::from_millis(16);
+/// Longest time between animation frames (12 per second).
+const SLOWEST_FRAME: Duration = Duration::from_millis(80);
+/// Bytes per second animations send at most: big frames (large windows)
+/// come less often, so the terminal keeps up and keys are not delayed.
+const BYTES_PER_SECOND: f64 = 1_500_000.0;
 use std::path::Path;
 
 /// Asks the terminal whether its background is light (`None`: no answer).
@@ -41,7 +54,12 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     // automatic light/dark switch of the terminal is followed.
     app.detected_light = detect_light();
     let can_query = app.detected_light.is_some();
-    let mut terminal = ratatui::init();
+    // Raw mode, alternate screen and the panic hook; then a terminal that
+    // draws in synchronized frames.
+    drop(ratatui::init());
+    let out = output::Output::new(stdout());
+    let frame_bytes = out.counter();
+    let mut terminal: Term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(out))?;
     execute!(stdout(), EnableMouseCapture, EnableBracketedPaste)?;
 
     // Inputs that only some terminals deliver: Menu key (kitty protocol), Shift+F10.
@@ -60,16 +78,19 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     let mut images = ImageState::default();
 
     let result = (|| loop {
+        frame_bytes.take();
         terminal.draw(|f| ui::draw(f, &mut app))?;
+        let drawn = Instant::now();
+        // The next animation frame after a pause that fits the budget.
+        let pause = Duration::from_secs_f64(frame_bytes.take() as f64 / BYTES_PER_SECOND).clamp(FRAME, SLOWEST_FRAME);
         if app.quit {
             return Ok(());
         }
         if images.update(&mut app, &mut terminal)? {
             continue; // an error message needs a redraw
         }
-        // While an animation runs, the next frame follows after ~16 ms.
         let animating = app.anim.active();
-        let wait = if animating { std::time::Duration::from_millis(16) } else { std::time::Duration::from_secs(3) };
+        let wait = if animating { pause.saturating_sub(drawn.elapsed()) } else { Duration::from_secs(3) };
         if !event::poll(wait)? {
             if !animating && can_query && app.theme == theme::ThemeSetting::Auto {
                 let light = detect_light();
@@ -95,7 +116,7 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
                 Event::Paste(text) => app.on_paste(&text),
                 _ => {}
             }
-            if app.quit || !event::poll(std::time::Duration::ZERO)? {
+            if app.quit || !event::poll(Duration::ZERO)? {
                 break;
             }
         }
@@ -121,7 +142,7 @@ struct ImageState {
 impl ImageState {
     /// Shows, replaces or removes the preview image after a frame was drawn.
     /// Returns true when the frame must be redrawn.
-    fn update(&mut self, app: &mut App, terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<bool> {
+    fn update(&mut self, app: &mut App, terminal: &mut Term) -> std::io::Result<bool> {
         use std::hash::{Hash, Hasher};
         let (Some(protocol), Some(slot), Some(pdf)) = (app.graphics, app.image_slot, app.preview_page_pdf()) else {
             if self.shown.take().is_some() {

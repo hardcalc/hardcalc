@@ -526,7 +526,8 @@ lighter, or a bit darker in the light scheme, crossings a bit more).
 Menus and dialogs slide in from above, scrolling glides character by
 character to the new position, and switching tables turns the window like
 a cube. `HARDCALC_ANIMATIONS=0` switches the animations off. A debug build
-is too slow for smooth animations; use `cargo run --release`.
+is too slow for smooth animations; use `cargo run --release`. In large
+windows animations draw fewer frames per second, so the terminal keeps up.
 
 ### Notes on macOS Terminal.app
 
