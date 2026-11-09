@@ -100,9 +100,15 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
             continue; // an error message needs a redraw
         }
         let animating = app.anim.active();
-        let wait = if animating { pause.saturating_sub(drawn.elapsed()) } else { Duration::from_secs(3) };
+        let wait = if animating {
+            pause.saturating_sub(drawn.elapsed())
+        } else if app.anim.flowing() {
+            pause.max(anim::FLOW_FRAME).saturating_sub(drawn.elapsed())
+        } else {
+            Duration::from_secs(3)
+        };
         if !event::poll(wait)? {
-            if !animating && can_query && app.theme == theme::ThemeSetting::Auto {
+            if !animating && !app.anim.flowing() && can_query && app.theme == theme::ThemeSetting::Auto {
                 let light = detect_light();
                 if light.is_some() && light != app.detected_light {
                     app.detected_light = light;

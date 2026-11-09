@@ -30,6 +30,7 @@ pub use file_dialog::{is_document as file_dialog_is_document, FileDialog, Purpos
 mod functions_view;
 mod point;
 mod shape;
+mod sources;
 pub use functions_view::{FnRow, FN_COLS};
 pub use calc_view::{CalcRow, FormulaStyle, PreviewKind, CALC_COLS};
 pub use context_menu::{ContextMenu, CONTEXT_MENU};
@@ -449,7 +450,7 @@ pub struct App {
     pub image_slot: Option<Rect>,
     /// The terminal shows 24-bit colour (else the 256-colour palette is used).
     pub truecolor: bool,
-    /// Soft animations (sliding menus and dialogs, gliding scrolls, cube turns).
+    /// Soft animations (sliding menus and dialogs, cube turns, flowing formula sources).
     pub anim: super::anim::Anim,
     /// Last block-graphics preview: key and scaled page image.
     thumbnail: Option<(u64, super::graphics::RgbImage)>,

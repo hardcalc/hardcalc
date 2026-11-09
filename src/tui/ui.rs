@@ -992,76 +992,6 @@ fn cell_style(st: &CellStyle) -> Style {
     s
 }
 
-/// Where a rendered grid put things: gutter width, x offset of every column
-/// from the table's left edge, line heights of the drawn rows, edit caret.
-struct GridOut {
-    gutter: usize,
-    starts: Vec<usize>,
-    heights: Vec<usize>,
-    caret: Option<(u16, u16)>,
-}
-
-/// Draws the grid; while a scroll animation runs, the grid is drawn once
-/// more from the nearer of both positions into a larger buffer, and the
-/// part at the current position is copied in (header line and gutter stay).
-fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
-    let out = render_grid(f.buffer_mut(), app, area, focused);
-    if let Some(pos) = out.caret {
-        f.set_cursor_position(pos);
-    }
-    if out.starts.is_empty() {
-        return;
-    }
-    let ident = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (tab_order(app.view.kind), app.view.sheet, app.view.pivot.is_some(), app.view.layer).hash(&mut h);
-        h.finish()
-    };
-    let target_x = out.starts[app.view.scroll.1.min(out.starts.len() - 1)];
-    let target = (app.view.scroll.0, target_x);
-    let Some((row, x)) = app.anim.scroll(app.left_focused, ident, target, area) else { return };
-    let (cur_r, cur_x) = (row.max(0.0), x.max(0.0).round() as usize);
-    // Start column and row of the larger drawing.
-    let lo_x = cur_x.min(target.1);
-    let s_col = out.starts.iter().rposition(|&x| x <= lo_x).unwrap_or(0);
-    let dx = cur_x - out.starts[s_col];
-    let extra_w = cur_x.max(target.1) - out.starts[s_col];
-    let s_row = (cur_r.floor() as usize).min(target.0);
-    let extra_rows = (cur_r.ceil() as usize).max(target.0) - s_row + 1;
-    let big = Rect::new(0, 0, (area.width as usize + extra_w).min(4000) as u16, (area.height as usize + extra_rows * out.heights.iter().copied().max().unwrap_or(1)).min(2000) as u16);
-    let saved = (app.view.scroll, app.view.follow, app.view.page_rows, app.hits.len());
-    app.view.scroll = (s_row, s_col);
-    app.view.follow = false;
-    let mut tmp = ratatui::buffer::Buffer::empty(big);
-    let wide = render_grid(&mut tmp, app, big, focused);
-    app.view.scroll = saved.0;
-    app.view.follow = saved.1;
-    app.view.page_rows = saved.2;
-    app.hits.truncate(saved.3);
-    if wide.gutter != out.gutter {
-        return; // row numbers of another width: no smooth way
-    }
-    // Lines above the current position in the larger drawing.
-    let k = (cur_r.floor() as usize).saturating_sub(s_row);
-    let frac = cur_r - cur_r.floor();
-    let dy = wide.heights.iter().take(k).sum::<usize>() + (frac * wide.heights.get(k).copied().unwrap_or(1) as f32).round() as usize;
-    let gutter = out.gutter as u16;
-    let buf = f.buffer_mut();
-    for y in 0..area.height {
-        for x in 0..area.width {
-            let sx = if x < gutter { x as usize } else { x as usize + dx };
-            let sy = if y < HEADER_LINES { y as usize } else { y as usize + dy };
-            let cell = if sx < big.width as usize && sy < big.height as usize {
-                tmp[(sx as u16, sy as u16)].clone()
-            } else {
-                ratatui::buffer::Cell::default()
-            };
-            buf[(area.x + x, area.y + y)] = cell;
-        }
-    }
-}
-
 /// Order of a view's tab in the tab line, so a table switch knows its direction.
 fn tab_order(kind: ViewKind) -> u32 {
     match kind {
@@ -1077,7 +1007,14 @@ fn tab_order(kind: ViewKind) -> u32 {
     }
 }
 
-fn render_grid(buf: &mut ratatui::buffer::Buffer, app: &mut App, area: Rect, focused: bool) -> GridOut {
+/// Colours of the sources of an edited formula, in the order they appear.
+const SOURCE_COLORS: [Color; 5] = [Color::LightBlue, Color::LightMagenta, Color::LightGreen, Color::LightYellow, Color::LightRed];
+
+fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
+    let hits_start = app.hits.len();
+    // The cells the formula being edited refers to.
+    let sources = if focused { app.formula_sources() } else { Vec::new() };
+    let source_at = |r: usize, c: usize| sources.iter().position(|&((r0, c0), (r1, c1))| (r0..=r1).contains(&r) && (c0..=c1).contains(&c));
     let (rows, cols) = app.view_dims();
     let vis_rows = area.height.saturating_sub(HEADER_LINES) as usize;
     app.view.page_rows = vis_rows.max(1);
@@ -1098,7 +1035,7 @@ fn render_grid(buf: &mut ratatui::buffer::Buffer, app: &mut App, area: Rect, foc
     let min_col = if app.fills() { FILL_MIN_COL } else { MIN_COL };
     // Rows with wrapped cells are several lines high, so fewer rows fit; the
     // scroll position moves on until the cursor row is shown completely.
-    let (row_range, cache, visible, heights, gutter, starts) = loop {
+    let (row_range, cache, visible, heights, gutter) = loop {
         let row_range = app.view.scroll.0..rows.min(app.view.scroll.0 + vis_rows);
         let gutter = {
             let headers = row_range.clone().map(|r| app.row_header(r).width()).max().unwrap_or(1);
@@ -1184,13 +1121,7 @@ fn render_grid(buf: &mut ratatui::buffer::Buffer, app: &mut App, area: Rect, foc
             continue;
         }
         let row_range = row_range.start..row_range.start + shown;
-        let mut starts = Vec::with_capacity(cols);
-        let mut x = 0;
-        for &(_, w) in &all {
-            starts.push(x);
-            x += w + 1;
-        }
-        break (row_range, cache, visible, heights, gutter, starts);
+        break (row_range, cache, visible, heights, gutter);
     };
 
     let ((r0, c0), (r1, c1)) = app.selection();
@@ -1223,6 +1154,7 @@ fn render_grid(buf: &mut ratatui::buffer::Buffer, app: &mut App, area: Rect, foc
     // Filling tables are banded to the edges.
     let with_placeholders = app.view.pivot.is_none() && app.view.kind == ViewKind::Table && !app.fills();
     let placeholder = |r: usize, c: usize| with_placeholders && (r >= data_rows || c >= data_cols);
+    let buf = f.buffer_mut();
 
     // Corner and column headers.
     buf.set_stringn(area.x, area.y + 1, fit(&app.corner(), gutter - 1, Align::Left), gutter - 1, header_style.italic());
@@ -1309,6 +1241,9 @@ fn render_grid(buf: &mut ratatui::buffer::Buffer, app: &mut App, area: Rect, foc
             if selected {
                 style = style.bg(Color::Blue).fg(Color::White);
             }
+            if let Some(k) = source_at(r, c) {
+                style = style.bg(SOURCE_COLORS[k % SOURCE_COLORS.len()]).fg(Color::Black);
+            }
             if let Some(((p0, q0), (p1, q1))) = pointed
                 && (p0..=p1).contains(&r)
                 && (q0..=q1).contains(&c)
@@ -1360,7 +1295,33 @@ fn render_grid(buf: &mut ratatui::buffer::Buffer, app: &mut App, area: Rect, foc
             }
         }
     }
-    GridOut { gutter, starts, heights, caret: edit_cursor }
+    // Data flows from the sources to the formula cell.
+    if !sources.is_empty() && app.anim.enabled {
+        let cells: Vec<((usize, usize), Rect)> = app.hits[hits_start..]
+            .iter()
+            .filter_map(|(rect, hit)| match hit {
+                Hit::Cell(r, c) => Some(((*r, *c), *rect)),
+                _ => None,
+            })
+            .collect();
+        if let Some(&(_, target)) = cells.iter().find(|(cell, _)| *cell == app.view.cursor) {
+            let flows: Vec<(Rect, Color)> = sources
+                .iter()
+                .enumerate()
+                .filter_map(|(k, &((r0, c0), (r1, c1)))| {
+                    // The visible part of the source.
+                    let shown = cells.iter().filter(|((r, c), _)| (r0..=r1).contains(r) && (c0..=c1).contains(c)).map(|(_, rect)| *rect);
+                    let rect = shown.reduce(|a, b| a.union(b))?;
+                    (!rect.intersects(target)).then_some((rect, SOURCE_COLORS[k % SOURCE_COLORS.len()]))
+                })
+                .collect();
+            let grid = Rect { y: area.y + HEADER_LINES, height: area.height.saturating_sub(HEADER_LINES), ..area };
+            app.anim.flow(f.buffer_mut(), grid, target, &flows);
+        }
+    }
+    if let Some(pos) = edit_cursor {
+        f.set_cursor_position(pos);
+    }
 }
 
 /// Column width in characters of a `wrap` rule (0: the usual maximum).

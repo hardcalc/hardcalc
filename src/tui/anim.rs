@@ -3,9 +3,8 @@
 //! Drawing stays as it is: every frame shows the final state, and the
 //! animations here rearrange the cells of that frame while they run.
 //! - Menus and dialogs slide in from above.
-//! - Scrolling the grid glides character by character (sideways) and line
-//!   by line (up and down) to the new position.
 //! - Switching tables turns the window like a cube (pseudo-3D).
+//! - While a formula is edited, dots flow from its sources to its cell.
 //! - Opening and closing look like an old tube screen switching on and
 //!   off: a line of light opens into the picture, and collapses back
 //!   into a line and a dot.
@@ -25,15 +24,15 @@ use std::time::{Duration, Instant};
 const POPUP: Duration = Duration::from_millis(170);
 /// How long the cube turn between tables takes.
 const CUBE: Duration = Duration::from_millis(450);
-/// Scrolling: base time, extra per character / row of the way, and the
-/// longest glide, in milliseconds.
-const SCROLL_BASE: f32 = 100.0;
-const SCROLL_PER_CHAR: f32 = 6.0;
-const SCROLL_PER_ROW: f32 = 9.0;
-const SCROLL_MAX: f32 = 280.0;
 /// Switching on (start) and off (quit).
 const OPEN: Duration = Duration::from_millis(520);
 const CLOSE: Duration = Duration::from_millis(420);
+/// Flowing dots: distance between them (in cell widths) and speed (cell
+/// widths per second); rows count twice, as cells are about twice as high.
+const FLOW_SPACING: f32 = 6.0;
+const FLOW_SPEED: f32 = 12.0;
+/// Time between frames while only dots flow (30 per second).
+pub const FLOW_FRAME: Duration = Duration::from_millis(33);
 /// Animated frames that take longer than this (median of the last
 /// `SAMPLES`, drawing and output) switch the animations off.
 const SLOW_FRAME: Duration = Duration::from_millis(35);
@@ -49,11 +48,14 @@ pub struct Anim {
     now: Option<Instant>,
     /// Set while drawing when an animation still runs: the next frame is due soon.
     active: bool,
+    /// Set while drawing when dots flow (runs as long as a formula is edited).
+    flowing: bool,
+    /// Time origin of the flowing dots.
+    flow_epoch: Option<Instant>,
     /// Popup name → (identity, shown since).
     popups: HashMap<&'static str, (u64, Instant)>,
     /// Per window (true: left / only window).
     windows: HashMap<bool, WindowState>,
-    scrolls: HashMap<bool, ScrollState>,
     /// When the first frame was drawn (switching on).
     opened: Option<Instant>,
     /// When quitting started (switching off), and whether its last frame was drawn.
@@ -80,15 +82,6 @@ struct Turn {
     forward: bool,
 }
 
-/// Displayed and target scroll position of a grid, in rows and characters.
-struct ScrollState {
-    ident: u64,
-    from: (f32, f32),
-    to: (f32, f32),
-    start: Instant,
-    dur: Duration,
-}
-
 /// How far 0..1 an animation of `dur` started at `start` is at `now`.
 fn fraction(now: Instant, start: Instant, dur: Duration) -> f32 {
     if dur.is_zero() {
@@ -111,6 +104,7 @@ impl Anim {
         let now = Instant::now();
         self.now = Some(now);
         self.active = false;
+        self.flowing = false;
         if self.enabled && self.opened.is_none() {
             self.opened = Some(now);
         }
@@ -178,9 +172,72 @@ impl Anim {
         }
     }
 
-    /// Whether an animation still runs, so the next frame should come soon.
+    /// Whether an animation with an end still runs (not counting the
+    /// flowing dots), so the next frame should come soon.
     pub fn active(&self) -> bool {
         self.active
+    }
+
+    /// Whether dots flow: frames should keep coming, at a calmer pace.
+    pub fn flowing(&self) -> bool {
+        self.flowing
+    }
+
+    /// Dots flowing from each source (screen rectangle, colour) to the
+    /// `target` cell, along a straight line from edge to edge, over `buf`
+    /// within `area`.
+    pub fn flow(&mut self, buf: &mut Buffer, area: Rect, target: Rect, sources: &[(Rect, Color)]) {
+        if !self.enabled || sources.is_empty() || self.closing.is_some() {
+            return;
+        }
+        let now = self.now();
+        let epoch = *self.flow_epoch.get_or_insert(now);
+        self.flowing = true;
+        let travelled = now.saturating_duration_since(epoch).as_secs_f32() * FLOW_SPEED;
+        let center = |r: Rect| (r.x as f32 + r.width as f32 / 2.0, r.y as f32 + r.height as f32 / 2.0);
+        let inside = |r: Rect, (x, y): (f32, f32)| x >= r.x as f32 && x < r.right() as f32 && y >= r.y as f32 && y < r.bottom() as f32;
+        let (tx, ty) = center(target);
+        for &(source, color) in sources {
+            let (sx, sy) = center(source);
+            let len = (tx - sx).hypot((ty - sy) * 2.0);
+            if len < 1.0 {
+                continue;
+            }
+            let at = |s: f32| (sx + (tx - sx) * s, sy + (ty - sy) * s);
+            // Only between the edges of source and target.
+            let step = 0.25 / len;
+            let mut s0 = 0.0;
+            while s0 < 1.0 && inside(source, at(s0)) {
+                s0 += step;
+            }
+            let mut s1 = 1.0;
+            while s1 > s0 && inside(target, at(s1)) {
+                s1 -= step;
+            }
+            let span = (s1 - s0) * len;
+            if span < 1.0 {
+                continue;
+            }
+            let head = Style::new().fg(color).add_modifier(Modifier::BOLD);
+            let mut d = travelled % FLOW_SPACING;
+            while d < span {
+                for (back, symbol, style) in [(0.0, '●', head), (1.0, '·', Style::new().fg(color))] {
+                    let e = d - back;
+                    if e < 0.0 {
+                        continue;
+                    }
+                    let (x, y) = at(s0 + e / len);
+                    let (x, y) = (x.floor(), y.floor());
+                    if x < area.x as f32 || y < area.y as f32 || x >= area.right() as f32 || y >= area.bottom() as f32 {
+                        continue;
+                    }
+                    // Smaller at both ends: the dots come out of the source and sink into the cell.
+                    let symbol = if e < 1.0 || span - e < 1.0 { '·' } else { symbol };
+                    buf[(x as u16, y as u16)].set_char(symbol).set_style(style);
+                }
+                d += FLOW_SPACING;
+            }
+        }
     }
 
     fn now(&self) -> Instant {
@@ -245,53 +302,6 @@ impl Anim {
                 buf[(x, y)] = cell;
             }
         }
-    }
-
-    /// The scroll position a grid shows: `None` when it is at `target` (rows,
-    /// characters from the left of the table), else the position on the way
-    /// there. A new `ident` (other table) jumps without animation.
-    pub fn scroll(&mut self, side: bool, ident: u64, target: (usize, usize), screen: Rect) -> Option<(f32, f32)> {
-        let to = (target.0 as f32, target.1 as f32);
-        let now = self.now();
-        if !self.enabled {
-            self.scrolls.remove(&side);
-            return None;
-        }
-        let state = self.scrolls.entry(side).or_insert(ScrollState { ident, from: to, to, start: now, dur: Duration::ZERO });
-        if state.ident != ident {
-            *state = ScrollState { ident, from: to, to, start: now, dur: Duration::ZERO };
-        }
-        if state.to != to {
-            // From where it is now, at most a screen away.
-            let (start, dur, from, old_to) = (state.start, state.dur, state.from, state.to);
-            let t = fraction(now, start, dur);
-            let e = ease_out(t);
-            let cur = (from.0 + (old_to.0 - from.0) * e, from.1 + (old_to.1 - from.1) * e);
-            let max_rows = screen.height.max(1) as f32;
-            let max_chars = screen.width.max(1) as f32 * 1.5;
-            let cur = (cur.0.clamp(to.0 - max_rows, to.0 + max_rows).max(0.0), cur.1.clamp(to.1 - max_chars, to.1 + max_chars).max(0.0));
-            let (dr, dc) = ((to.0 - cur.0).abs(), (to.1 - cur.1).abs());
-            // Longer for longer ways; half as long when one is caught
-            // mid-way (keys held down), so the screen keeps up with the
-            // cursor. A single line cannot move more smoothly than at once.
-            let mut ms = (SCROLL_BASE + SCROLL_PER_CHAR * dc).max(if dr > 1.0 { SCROLL_BASE + SCROLL_PER_ROW * dr } else { 0.0 }).min(SCROLL_MAX);
-            if t < 1.0 {
-                ms *= 0.5;
-            }
-            if dc < 0.5 && dr <= 1.0 {
-                ms = 0.0;
-            }
-            let state = self.scrolls.get_mut(&side).unwrap();
-            *state = ScrollState { ident, from: cur, to, start: now, dur: Duration::from_millis(ms as u64) };
-        }
-        let state = &self.scrolls[&side];
-        let (start, dur, from) = (state.start, state.dur, state.from);
-        let t = self.progress(start, dur);
-        if t >= 1.0 {
-            return None;
-        }
-        let e = ease_out(t);
-        Some((from.0 + (to.0 - from.0) * e, from.1 + (to.1 - from.1) * e))
     }
 
     /// After a window was drawn into `area` of `buf`: when it now shows
@@ -530,6 +540,25 @@ mod tests {
     }
 
     #[test]
+    fn dots_flow_between_source_and_target() {
+        let area = Rect::new(0, 0, 40, 10);
+        let mut anim = Anim { enabled: true, ..Anim::default() };
+        let dots = |anim: &mut Anim| {
+            anim.begin_frame();
+            let mut buf = Buffer::empty(area);
+            anim.flow(&mut buf, area, Rect::new(30, 8, 6, 1), &[(Rect::new(2, 1, 6, 2), Color::Blue)]);
+            (0..10).flat_map(|y| (0..40).map(move |x| (x, y))).filter(|&p| buf[p].symbol() != " ").collect::<Vec<_>>()
+        };
+        let first = dots(&mut anim);
+        assert!(!first.is_empty() && anim.flowing() && !anim.active());
+        // None inside the source or the target.
+        assert!(first.iter().all(|&(x, y)| !(2..8).contains(&x) || !(1..3).contains(&y)));
+        assert!(first.iter().all(|&(x, y)| !((30..36).contains(&x) && y == 8)));
+        std::thread::sleep(Duration::from_millis(120));
+        assert_ne!(dots(&mut anim), first, "they move");
+    }
+
+    #[test]
     fn disabled_does_nothing() {
         let mut anim = Anim::default();
         anim.begin_frame();
@@ -540,7 +569,6 @@ mod tests {
         let before = buf.clone();
         anim.popup("m", Some(1), &mut buf, &base, 0);
         assert_eq!(buf, before);
-        assert!(anim.scroll(true, 0, (5, 5), area).is_none());
         assert!(!anim.active());
     }
 }

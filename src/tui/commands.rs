@@ -82,7 +82,7 @@ pub const COMMANDS: &[Command] = &[
     choice("compact", "[on|off]", "compact is the default (small diffs in Git); off: aligned, padded columns", &["on", "off"]),
     choice("fill", "[on|off]", "fill the table to the window edges", &["on", "off"]),
     choice("bands", "[on|off]", "shade alternate rows and columns", &["on", "off"]),
-    choice("animations", "[on|off]", "sliding menus, gliding scrolls, turning tables (also :anim)", &["on", "off"]),
+    choice("animations", "[on|off]", "sliding menus, turning tables, flowing formula sources (also :anim)", &["on", "off"]),
     choice("theme", "auto|light|dark", "colour scheme", &["auto", "light", "dark"]),
     c("keys", "", "show the keys hardcalc receives"),
     c("keytest", "", "test Menu key, Shift+F10 and right-click, so the help shows what works"),

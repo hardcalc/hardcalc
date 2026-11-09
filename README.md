@@ -525,9 +525,12 @@ lighter, or a bit darker in the light scheme, crossings a bit more).
 
 hardcalc switches on and off like an old tube screen: a line of light
 opens into the picture, and on quitting collapses back into a line and a
-dot. Menus and dialogs slide in from above, scrolling glides character by
-character to the new position, and switching tables turns the window like
-a cube. `:animations off` (short `:anim`) switches them off, `:animations on`
+dot. Menus and dialogs slide in from above, and switching tables turns the
+window like a cube.
+
+While a formula is edited, the cells and ranges it refers to are
+highlighted, each in its own colour, and dots flow from them to the
+formula cell. `:animations off` (short `:anim`) switches them off, `:animations on`
 back on; `HARDCALC_ANIMATIONS=0` starts without them.
 
 In large windows animations draw fewer frames per second, so the terminal
@@ -594,7 +597,7 @@ For power users; the help (F1) lists them all.
 | `:import file`, `:export file` | import and export |
 | `:theme auto\|light\|dark`, `:keys` | color scheme, key diagnostics |
 | `:bands [on\|off]` | set off rows and columns in gray (default: on) |
-| `:animations [on\|off]`, `:anim` | sliding menus, gliding scrolls, turning tables (default: on) |
+| `:animations [on\|off]`, `:anim` | sliding menus, turning tables, flowing formula sources (default: on) |
 | `:undo`, `:redo`, `:help` | undo, redo, help |
 
 ## hardconf – editing configuration files

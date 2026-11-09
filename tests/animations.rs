@@ -85,11 +85,51 @@ fn menu_slides_in_from_above() {
 }
 
 #[test]
-fn scrolling_sideways_glides_by_characters() {
-    let right = k(KeyCode::Right, KeyModifiers::NONE);
-    let all = check_at(32, &[right; 4]);
-    let distinct: std::collections::HashSet<&String> = all.iter().collect();
-    assert!(distinct.len() > 3, "several positions on the way: {}", distinct.len());
+fn cursor_moves_and_scrolling_draw_at_once() {
+    let mut a = app(true);
+    let mut t = Terminal::new(TestBackend::new(32, 20)).unwrap();
+    frames(&mut a, &mut t); // switching on
+    // Moving right scrolls this narrow screen.
+    for code in [KeyCode::Down, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::PageDown] {
+        a.on_key(k(code, KeyModifiers::NONE));
+        t.draw(|f| ui::draw(f, &mut a)).unwrap();
+        assert!(!a.anim.active(), "{code:?} animates");
+    }
+}
+
+#[test]
+fn formula_sources_are_highlighted_and_data_flows() {
+    use ratatui::style::Color;
+    for animated in [true, false] {
+        let mut a = app(animated);
+        let mut t = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        frames(&mut a, &mut t);
+        // A free cell below the table: =sum(B1:B3) + D1
+        for _ in 0..5 {
+            a.on_key(k(KeyCode::Down, KeyModifiers::NONE));
+        }
+        for _ in 0..4 {
+            a.on_key(k(KeyCode::Right, KeyModifiers::NONE));
+        }
+        for ch in "=sum(B1:B3) + D1".chars() {
+            a.on_key(k(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        t.draw(|f| ui::draw(f, &mut a)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let count = |bg: Color| (0..20).flat_map(|y| (0..80).map(move |x| (x, y))).filter(|&p| buf[p].bg == bg).count();
+        assert!(count(Color::LightBlue) >= 3, "B1:B3 highlighted");
+        assert!(count(Color::LightMagenta) >= 1, "D1 highlighted");
+        // Dots flow only with animations; they keep running while editing.
+        assert_eq!(a.anim.flowing(), animated);
+        let dots = (0..20).flat_map(|y| (0..80).map(move |x| (x, y))).filter(|&p| buf[p].symbol() == "●").count();
+        assert_eq!(dots > 0, animated, "dots: {dots}");
+        // After Esc nothing is highlighted and nothing flows.
+        a.on_key(k(KeyCode::Esc, KeyModifiers::NONE));
+        t.draw(|f| ui::draw(f, &mut a)).unwrap();
+        assert!(!a.anim.flowing());
+        let buf = t.backend().buffer();
+        assert!((0..20).flat_map(|y| (0..80).map(move |x| (x, y))).all(|p| buf[p].bg != Color::LightMagenta));
+    }
 }
 
 #[test]
