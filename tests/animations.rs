@@ -210,3 +210,18 @@ fn data_from_out_of_sight_comes_in_at_the_edge() {
     assert!(screen.contains('▸'), "an arrow points to it:\n{screen}");
     assert!(a.anim.flowing());
 }
+
+#[test]
+fn switching_menus_does_not_slide_again() {
+    let mut a = app(true);
+    let mut t = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    frames(&mut a, &mut t);
+    a.on_key(k(KeyCode::F(9), KeyModifiers::NONE));
+    let (first, _) = frames(&mut a, &mut t);
+    assert!(first.len() > 1, "opening slides");
+    // The first frame already shows part of the menu.
+    assert!(first[0].contains('└') || first[0].contains('│'), "{}", first[0]);
+    a.on_key(k(KeyCode::Right, KeyModifiers::NONE));
+    t.draw(|f| ui::draw(f, &mut a)).unwrap();
+    assert!(!a.anim.active(), "the next menu is there at once");
+}

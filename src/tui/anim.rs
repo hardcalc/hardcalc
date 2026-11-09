@@ -226,8 +226,10 @@ impl Anim {
 
     /// Lets the popup `name` slide in from above: `base` is the frame before it
     /// was drawn, `buf` the frame with it; `key` identifies what it shows
-    /// (`None`: not shown), a new identity slides in again. Only rows from
-    /// `clip_top` on take part (the popup comes out from behind that line).
+    /// (`None`: not shown). Only a popup that appears slides; when it shows
+    /// something else (the next menu, a submenu) a running slide goes on and
+    /// a finished one does not start again. Only rows from `clip_top` on
+    /// take part (the popup comes out from behind that line).
     pub fn popup(&mut self, name: &'static str, key: Option<u64>, buf: &mut Buffer, base: &Buffer, clip_top: u16) {
         let Some(key) = key.filter(|_| self.enabled) else {
             self.popups.remove(name);
@@ -235,12 +237,10 @@ impl Anim {
         };
         let now = self.now();
         let start = match self.popups.get(name) {
-            Some(&(k, start)) if k == key => start,
-            _ => {
-                self.popups.insert(name, (key, now));
-                now
-            }
+            Some(&(_, start)) => start,
+            None => now,
         };
+        self.popups.insert(name, (key, start));
         let t = self.progress(start, POPUP);
         if t >= 1.0 {
             return;
@@ -263,7 +263,8 @@ impl Anim {
         }
         let clip = clip_top.max(area.y);
         // At the start the popup's bottom edge is at the clip line.
-        let travel = (y1 - clip) as f32;
+        // It starts 40 % out, so the first frame already shows it.
+        let travel = (y1 - clip) as f32 * 0.6;
         let dy = ((1.0 - ease_out(t)) * travel).round() as u16;
         let popup: Vec<Vec<Cell>> = (y0..y1).map(|y| (x0..x1).map(|x| buf[(x, y)].clone()).collect()).collect();
         for y in clip..y1 {
