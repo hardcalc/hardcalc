@@ -1,11 +1,8 @@
-//! Soft animations, applied to the drawn frame afterwards.
+//! The cube turn between tables, applied to the drawn frame afterwards.
 //!
-//! Drawing stays as it is: every frame shows the final state, and the
-//! animations here rearrange the cells of that frame while they run.
-//! - Popups (menus, dialogs) slide in from above.
-//! - Scrolling the grid glides character by character (sideways) and line
-//!   by line (up and down) to the new position.
-//! - Switching tables turns the window like a cube (pseudo-3D).
+//! Drawing stays as it is: every frame shows the final state, and while the
+//! window turns, its cells are rearranged into a pseudo-3D cube with the
+//! old table on one face and the new one on the next.
 //!
 //! Disabled unless `enabled` is set (the interactive UI sets it, tests do
 //! not), and with `HARDCALC_ANIMATIONS=0`.
@@ -16,14 +13,12 @@ use ratatui::style::Modifier;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-/// How long popups take to slide in.
-const POPUP: Duration = Duration::from_millis(100);
 /// How long the cube turn between tables takes.
 const CUBE: Duration = Duration::from_millis(260);
 /// Camera distance of the cube, in half widths of the window.
 const CAMERA: f32 = 3.2;
 
-/// Running animations and what they start from.
+/// Running cube turns and what they start from.
 #[derive(Default)]
 pub struct Anim {
     pub enabled: bool,
@@ -31,11 +26,8 @@ pub struct Anim {
     now: Option<Instant>,
     /// Set while drawing when an animation still runs: the next frame is due soon.
     active: bool,
-    /// Popup name → (identity, shown since).
-    popups: HashMap<&'static str, (u64, Instant)>,
     /// Per window (true: left / only window).
     windows: HashMap<bool, WindowState>,
-    scrolls: HashMap<bool, ScrollState>,
 }
 
 /// What a window showed last, and a running cube turn.
@@ -53,25 +45,12 @@ struct Turn {
     forward: bool,
 }
 
-/// Displayed and target scroll position of a grid, in rows and characters.
-struct ScrollState {
-    ident: u64,
-    from: (f32, f32),
-    to: (f32, f32),
-    start: Instant,
-    dur: Duration,
-}
-
 /// How far 0..1 an animation of `dur` started at `start` is at `now`.
 fn fraction(now: Instant, start: Instant, dur: Duration) -> f32 {
     if dur.is_zero() {
         return 1.0;
     }
     (now.saturating_duration_since(start).as_secs_f32() / dur.as_secs_f32()).min(1.0)
-}
-
-pub fn ease_out(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
 }
 
 pub fn ease_in_out(t: f32) -> f32 {
@@ -101,104 +80,6 @@ impl Anim {
             self.active = true;
         }
         t
-    }
-
-    /// Lets the popup `name` slide in from above: `base` is the frame before it
-    /// was drawn, `buf` the frame with it; `key` identifies what it shows
-    /// (`None`: not shown), a new identity slides in again. Only rows from
-    /// `clip_top` on take part (the popup comes out from behind that line).
-    pub fn popup(&mut self, name: &'static str, key: Option<u64>, buf: &mut Buffer, base: &Buffer, clip_top: u16) {
-        let Some(key) = key.filter(|_| self.enabled) else {
-            self.popups.remove(name);
-            return;
-        };
-        let now = self.now();
-        let start = match self.popups.get(name) {
-            Some(&(k, start)) if k == key => start,
-            _ => {
-                self.popups.insert(name, (key, now));
-                now
-            }
-        };
-        let t = self.progress(start, POPUP);
-        if t >= 1.0 {
-            return;
-        }
-        // The popup: the cells that differ from the frame before it.
-        let area = buf.area;
-        let (mut x0, mut x1, mut y0, mut y1) = (u16::MAX, 0, u16::MAX, 0);
-        for y in clip_top.max(area.y)..area.bottom() {
-            for x in area.x..area.right() {
-                if buf[(x, y)] != base[(x, y)] {
-                    x0 = x0.min(x);
-                    x1 = x1.max(x + 1);
-                    y0 = y0.min(y);
-                    y1 = y1.max(y + 1);
-                }
-            }
-        }
-        if x0 >= x1 {
-            return;
-        }
-        let clip = clip_top.max(area.y);
-        // At the start the popup's bottom edge is at the clip line.
-        let travel = (y1 - clip) as f32;
-        let dy = ((1.0 - ease_out(t)) * travel).round() as u16;
-        let popup: Vec<Vec<Cell>> = (y0..y1).map(|y| (x0..x1).map(|x| buf[(x, y)].clone()).collect()).collect();
-        for y in clip..y1 {
-            for x in x0..x1 {
-                let src = y + dy;
-                let cell = if src >= y0 && src < y1 { popup[(src - y0) as usize][(x - x0) as usize].clone() } else { base[(x, y)].clone() };
-                buf[(x, y)] = cell;
-            }
-        }
-    }
-
-    /// The scroll position a grid shows: `None` when it is at `target` (rows,
-    /// characters from the left of the table), else the position on the way
-    /// there. A new `ident` (other table) jumps without animation.
-    pub fn scroll(&mut self, side: bool, ident: u64, target: (usize, usize), screen: Rect) -> Option<(f32, f32)> {
-        let to = (target.0 as f32, target.1 as f32);
-        let now = self.now();
-        if !self.enabled {
-            self.scrolls.remove(&side);
-            return None;
-        }
-        let state = self.scrolls.entry(side).or_insert(ScrollState { ident, from: to, to, start: now, dur: Duration::ZERO });
-        if state.ident != ident {
-            *state = ScrollState { ident, from: to, to, start: now, dur: Duration::ZERO };
-        }
-        if state.to != to {
-            // From where it is now, at most a screen away.
-            let (start, dur, from, old_to) = (state.start, state.dur, state.from, state.to);
-            let t = fraction(now, start, dur);
-            let e = ease_out(t);
-            let cur = (from.0 + (old_to.0 - from.0) * e, from.1 + (old_to.1 - from.1) * e);
-            let max_rows = screen.height.max(1) as f32;
-            let max_chars = screen.width.max(1) as f32 * 1.5;
-            let cur = (cur.0.clamp(to.0 - max_rows, to.0 + max_rows).max(0.0), cur.1.clamp(to.1 - max_chars, to.1 + max_chars).max(0.0));
-            let (dr, dc) = ((to.0 - cur.0).abs(), (to.1 - cur.1).abs());
-            // Short glides; quicker still when one is caught mid-way (keys
-            // held down), so the screen keeps up with the cursor. A single
-            // line cannot move more smoothly than at once.
-            let mut ms = (50.0 + 4.0 * dc).max(if dr > 1.0 { 60.0 + 6.0 * dr } else { 0.0 }).min(150.0);
-            if t < 1.0 {
-                ms *= 0.5;
-            }
-            if dc < 0.5 && dr <= 1.0 {
-                ms = 0.0;
-            }
-            let state = self.scrolls.get_mut(&side).unwrap();
-            *state = ScrollState { ident, from: cur, to, start: now, dur: Duration::from_millis(ms as u64) };
-        }
-        let state = &self.scrolls[&side];
-        let (start, dur, from) = (state.start, state.dur, state.from);
-        let t = self.progress(start, dur);
-        if t >= 1.0 {
-            return None;
-        }
-        let e = ease_out(t);
-        Some((from.0 + (to.0 - from.0) * e, from.1 + (to.1 - from.1) * e))
     }
 
     /// After a window was drawn into `area` of `buf`: when it now shows
@@ -301,10 +182,8 @@ mod tests {
 
     #[test]
     fn easing_ends() {
-        for f in [ease_out, ease_in_out] {
-            assert!(f(0.0).abs() < 1e-6);
-            assert!((f(1.0) - 1.0).abs() < 1e-6);
-        }
+        assert!(ease_in_out(0.0).abs() < 1e-6);
+        assert!((ease_in_out(1.0) - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -328,13 +207,12 @@ mod tests {
         let mut anim = Anim::default();
         anim.begin_frame();
         let area = Rect::new(0, 0, 10, 4);
-        let base = Buffer::empty(area);
         let mut buf = Buffer::empty(area);
-        buf.set_string(2, 1, "menu", ratatui::style::Style::new());
+        buf.set_string(2, 1, "one", ratatui::style::Style::new());
+        anim.window(true, (0, 0), &mut buf, area);
         let before = buf.clone();
-        anim.popup("m", Some(1), &mut buf, &base, 0);
+        anim.window(true, (0, 1), &mut buf, area);
         assert_eq!(buf, before);
-        assert!(anim.scroll(true, 0, (5, 5), area).is_none());
         assert!(!anim.active());
     }
 }

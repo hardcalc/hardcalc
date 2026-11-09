@@ -1,5 +1,5 @@
-//! Soft animations: popups slide in, scrolling glides, tables turn like a
-//! cube; every animation ends on exactly the frame drawn without it.
+//! Switching tables turns the window like a cube; the turn ends on exactly
+//! the frame drawn without it, and nothing else animates.
 
 use hardcalc::tui::app::App;
 use hardcalc::tui::ui;
@@ -75,25 +75,20 @@ fn k(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
 }
 
 #[test]
-fn menu_slides_in_from_above() {
-    let all = check(&[k(KeyCode::F(9), KeyModifiers::NONE)]);
-    // The menu's lower border comes down line by line.
-    let bottom = |s: &String| s.lines().collect::<Vec<_>>().iter().rposition(|l| l.contains('└')).unwrap_or(0);
-    let rows: Vec<usize> = all.iter().map(bottom).collect();
-    assert!(rows.windows(2).all(|w| w[0] <= w[1]), "{rows:?}");
-    assert!(rows[0] < *rows.last().unwrap(), "{rows:?}");
-}
-
-#[test]
-fn scrolling_sideways_glides_by_characters() {
-    let right = k(KeyCode::Right, KeyModifiers::NONE);
-    let all = check_at(32, &[right; 4]);
-    let distinct: std::collections::HashSet<&String> = all.iter().collect();
-    assert!(distinct.len() > 3, "several positions on the way: {}", distinct.len());
-}
-
-#[test]
 fn switching_tables_turns_a_cube() {
     let all = check(&[k(KeyCode::PageDown, KeyModifiers::CONTROL)]);
     assert!(all.len() > 5);
+}
+
+#[test]
+fn menus_and_cursor_moves_draw_at_once() {
+    let mut a = app(true);
+    let mut t = Terminal::new(TestBackend::new(32, 20)).unwrap();
+    t.draw(|f| ui::draw(f, &mut a)).unwrap();
+    // Moving right scrolls this narrow screen; F9 opens the menu.
+    for code in [KeyCode::Down, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::PageDown, KeyCode::F(9)] {
+        a.on_key(k(code, KeyModifiers::NONE));
+        t.draw(|f| ui::draw(f, &mut a)).unwrap();
+        assert!(!a.anim.active(), "{code:?} animates");
+    }
 }
