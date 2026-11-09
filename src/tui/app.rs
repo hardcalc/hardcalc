@@ -449,6 +449,8 @@ pub struct App {
     pub image_slot: Option<Rect>,
     /// The terminal shows 24-bit colour (else the 256-colour palette is used).
     pub truecolor: bool,
+    /// Soft animations (slide-in popups, smooth scrolling, cube turns).
+    pub anim: super::anim::Anim,
     /// Last block-graphics preview: key and scaled page image.
     thumbnail: Option<(u64, super::graphics::RgbImage)>,
 }
@@ -823,6 +825,7 @@ impl App {
             image_mode: false,
             image_slot: None,
             truecolor: false,
+            anim: Default::default(),
             thumbnail: None,
         };
         app.rebuild();

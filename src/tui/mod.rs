@@ -1,5 +1,6 @@
 //! Interactive terminal UI.
 
+pub mod anim;
 pub mod app;
 pub mod chart_view;
 pub mod config;
@@ -55,6 +56,7 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     }
     app.graphics = graphics::detect(|k| std::env::var(k).ok());
     app.truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
+    app.anim.enabled = std::env::var("HARDCALC_ANIMATIONS").map_or(true, |v| v != "0" && v != "off");
     let mut images = ImageState::default();
 
     let result = (|| loop {
@@ -65,8 +67,11 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
         if images.update(&mut app, &mut terminal)? {
             continue; // an error message needs a redraw
         }
-        if !event::poll(std::time::Duration::from_secs(3))? {
-            if can_query && app.theme == theme::ThemeSetting::Auto {
+        // While an animation runs, the next frame follows after ~16 ms.
+        let animating = app.anim.active();
+        let wait = if animating { std::time::Duration::from_millis(16) } else { std::time::Duration::from_secs(3) };
+        if !event::poll(wait)? {
+            if !animating && can_query && app.theme == theme::ThemeSetting::Auto {
                 let light = detect_light();
                 if light.is_some() && light != app.detected_light {
                     app.detected_light = light;

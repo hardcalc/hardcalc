@@ -521,6 +521,12 @@ Rows and columns are set off subtly in gray (odd rows and columns a bit
 lighter, or a bit darker in the light scheme, crossings a bit more).
 `:bands` turns this off and on again.
 
+### Animations
+
+Menus and dialogs slide in from above, scrolling glides character by
+character to the new position, and switching tables turns the window like
+a cube. `HARDCALC_ANIMATIONS=0` switches all animations off.
+
 ### Notes on macOS Terminal.app
 
 Out of the box, Terminal.app does not pass some key combinations on to
