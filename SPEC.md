@@ -252,6 +252,7 @@ is always `.`, arguments are separated by `,` or `;`.
 | `B2`                          | cell (column B, 2nd data row; the header row does not count) |
 | `B`, `Amount`                 | whole column as a vector (a name wins over a letter)   |
 | `B2:D5`                       | range as a vector (row by row)                         |
+| `B:B`, `B:D`                  | whole columns as a vector (row by row, like `B2:D5`)   |
 | `Speed`                       | the row with this name in the 1st column → its last value |
 | `B2:4`, `B2:D`                | short form: after the `:` only what changes (`B2:B4`, `B2:D2`) |
 | `Expenses!Amount`, `Expenses!B2`, `Expenses!B2:B4`, `Expenses!B` | column, cell, range of another table (`"My sheet"!B2` for names with spaces) |

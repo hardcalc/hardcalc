@@ -158,6 +158,19 @@ def number_format(doc, code):
     return key
 
 
+def grid_lines(rng):
+    """A thin solid grid inside and around a cell range (hardcalc stores no borders)."""
+    line = uno.createUnoStruct("com.sun.star.table.BorderLine2")
+    line.Color = 0
+    line.LineStyle = 0  # SOLID
+    line.LineWidth = line.OuterLineWidth = 26  # 1/100 mm, about 0.75 pt
+    border = uno.createUnoStruct("com.sun.star.table.TableBorder2")
+    for side in ("Top", "Bottom", "Left", "Right", "Horizontal", "Vertical"):
+        setattr(border, side + "Line", line)
+        setattr(border, "Is" + side + "LineValid", True)
+    rng.TableBorder2 = border
+
+
 def fill_sheet(doc, index, sheet, plan):
     ncols = len(plan.header)
     if ncols == 0:
@@ -190,6 +203,10 @@ def fill_sheet(doc, index, sheet, plan):
             rng = sheet.getCellRangeByPosition(c, start + 1, c, r)
             rng.setFormulaArray(tuple((plan.cells[k][c][1],) for k in range(start, r)))
 
+    try:
+        grid_lines(sheet.getCellRangeByPosition(0, 0, ncols - 1, nrows - 1))
+    except Exception:
+        log("hardcalc: grid not set\n" + traceback.format_exc())
     header = sheet.getCellRangeByPosition(0, 0, ncols - 1, 0)
     header.CharWeight = 150.0  # bold
     if nrows > 1:

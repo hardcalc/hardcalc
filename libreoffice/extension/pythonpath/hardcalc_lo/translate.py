@@ -253,6 +253,13 @@ class _ToCalc(object):
     def range(self, t, a, b):
         ref = parse_ref(a)
         end = parse_partial(b)
+        if ref is not None and ref[2] is None and end is not None and end[0] is not None and end[2] is None:
+            # Whole columns: B:C
+            rows = self.book.tables[t].rows
+            if rows == 0:
+                raise FormulaError("empty table")
+            lo, hi = sorted((ref[0], end[0]))
+            return "%s$%s$2:$%s$%d" % (self.prefix(t), col_letters(lo), col_letters(hi), rows + 1)
         if ref is None or ref[2] is None or end is None:
             raise FormulaError("bad range or one across data layers")
         col, col_abs, r, row_abs = ref

@@ -195,6 +195,17 @@ impl Translator<'_> {
                 _ => return Err("unsupported @ reference".into()),
             },
             Expr::Range(a, b) => {
+                // Whole columns (B:C).
+                if let (Some(x), Some((Some(y), None, None))) = (crate::engine::RefParts::parse(a), crate::engine::parse_partial(b))
+                    && x.row.is_none()
+                {
+                    let rows = self.wb.sheets[self.sheet].cells.len();
+                    if rows == 0 {
+                        return Err("empty table".into());
+                    }
+                    let (l, r) = (col_letters(x.col.min(y.0)), col_letters(x.col.max(y.0)));
+                    return Ok(format!("${l}$2:${r}${}", rows + 1));
+                }
                 // Also the short forms within the table (B2:4, B2:D); not across layers.
                 let (Some(a), Some((col, row, None))) = (Self::a1(a), crate::engine::parse_partial(b)) else {
                     return Err("bad range or one across data layers".into());

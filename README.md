@@ -41,8 +41,21 @@ Prebuilt binaries for macOS, Linux and Windows are attached to each
 PowerShell installers and a Homebrew formula:
 
 ```bash
+# macOS / Linux, Homebrew
 brew install hardcalc/tap/hardcalc
+
+# macOS / Linux, installer script
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/hardcalc/hardcalc/releases/latest/download/hardcalc-installer.sh | sh
 ```
+
+```powershell
+# Windows, PowerShell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/hardcalc/hardcalc/releases/latest/download/hardcalc-installer.ps1 | iex"
+```
+
+On Windows you can also unpack `hardcalc-x86_64-pc-windows-msvc.zip` (or the
+`aarch64` one) from the release and put `hardcalc.exe` in a folder on your
+`PATH`.
 
 From source (needs Rust, <https://rustup.rs>):
 

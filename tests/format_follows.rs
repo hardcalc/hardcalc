@@ -120,3 +120,15 @@ fn sorting_takes_the_rules_along() {
     assert_eq!(rules(&a), "A4: bg red");
     assert_eq!(colored(&a), ".../.../.../#..");
 }
+
+#[test]
+fn whole_column_ranges_calculate_and_follow() {
+    let src = "## T :: matrix\n\n| Name | V | W | S |\n|---|---|---|---|\n| a | 3 | 1 | =sum(B:C) |\n| b | 1 | 2 | =sum(C:C) |\n\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    let (wb, _) = hardcalc::Workbook::from_document(&a.doc);
+    assert_eq!(wb.sheets[0].raw[0][3], "=sum(B:C)");
+    cmd(&mut a, ":A1");
+    cmd(&mut a, ":addcol X");
+    let out = hardcalc::write(&a.doc);
+    assert!(out.contains("=sum(C:D)") && out.contains("=sum(D:D)"), "{out}");
+}

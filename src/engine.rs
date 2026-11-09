@@ -848,7 +848,22 @@ impl Evaluator<'_> {
         let (Some(start), Some((col, row, layer))) = (RefParts::parse(a), parse_partial(b)) else {
             return Value::err(format!("bad range {a}:{b}"));
         };
-        let Some((r1, _)) = start.row else { return Value::err(format!("bad range {a}:{b}")) };
+        let Some((r1, _)) = start.row else {
+            // Whole columns: `B:B`, `B:C`.
+            if row.is_some() || layer.is_some() {
+                return Value::err(format!("bad range {a}:{b}"));
+            }
+            let c2 = col.map_or(start.col, |c| c.0);
+            let z = start.layer.map_or(self.layer, |z| z.0);
+            let rows = self.sheets[sheet].cells.len();
+            let mut items = Vec::new();
+            for r in 0..rows {
+                for c in start.col.min(c2)..=start.col.max(c2) {
+                    items.push(self.cell((sheet, r, in_layer(c, z))));
+                }
+            }
+            return Value::Vector(items);
+        };
         let (c1, c2) = (start.col, col.map_or(start.col, |c| c.0));
         let r2 = row.map_or(r1, |r| r.0);
         // A layer at the end only applies to the start too (B2:4c = B2c:B4c).

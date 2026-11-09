@@ -117,7 +117,7 @@ pub const MENU_ITEMS: &[MenuItem] = &[
     m(0, "Export…", "export ", ":export"),
     m(0, "Save compressed (zstd)", "compress zstd", ":compress"),
     m(0, "Save as bundle…", "bundle ", ":bundle"),
-    m(0, "Print preview", "print", ""),
+    m(0, "Print preview", "print", ":print"),
     m(0, "Write PDF", "pdf", ":pdf"),
     m(0, "Calculation report", "report", ":report"),
     m(0, "Quit", "q", "F10"),

@@ -137,8 +137,12 @@
     <div>
       <h1>A spreadsheet for the terminal, saved as Markdown.</h1>
       <p class="lead">Tables with types and units, formulas, layers, charts and traceable calculations – in plain text files you can read anywhere and diff in Git.</p>
-      <div class="install"><span class="c"># macOS / Linux</span>
+      <div class="install"><span class="c"># macOS / Linux (Homebrew)</span>
 brew install hardcalc/tap/hardcalc
+<span class="c"># macOS / Linux (installer script)</span>
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/hardcalc/hardcalc/releases/latest/download/hardcalc-installer.sh | sh
+<span class="c"># Windows (PowerShell)</span>
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/hardcalc/hardcalc/releases/latest/download/hardcalc-installer.ps1 | iex"
 <span class="c"># or from source</span>
 cargo install --git https://github.com/hardcalc/hardcalc</div>
       <div class="buttons">
@@ -231,7 +235,7 @@ M_Ed = q_d·L^2/8 = 9.90·5.0^2/8 = 30.9 kN·m
     <div class="two">
       <div>
         <h3>Works with what you have</h3>
-        <p>Import and export xlsx, xls, ods and CSV. A LibreOffice extension opens <code>.hcmd</code> files directly in Calc and saves them back without touching anything Calc does not know.</p>
+        <p>Import and export xlsx, xls, ods and CSV. A LibreOffice extension opens <code>.hcmd</code> files directly in Calc and saves them back without touching anything Calc does not know. Install it with <code>hardcalc libreoffice install</code>, or download the <code>.oxt</code> file from the <a href="https://github.com/hardcalc/hardcalc/releases">release</a>.</p>
       </div>
       <div>
         <h3>hardconf – TOML with a built-in schema</h3>

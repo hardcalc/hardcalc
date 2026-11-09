@@ -11,10 +11,10 @@ This page lists open points and ideas. Suggestions are welcome as
 ## Spreadsheet
 
 - **Decimal arithmetic** for amounts of money (today `f64` with rounding).
-- **Stable references when inserting and deleting**: A1 references follow
-  when moving and sorting, not yet when inserting or deleting rows and
-  columns. In the long run, layouts, comments and text should refer by key
-  (`Expenses[Rent, Amount]`) instead of A1.
+- **References by key**: A1 references and format rules follow when moving,
+  sorting, inserting and deleting rows and columns. In the long run, layouts,
+  comments and text should refer by key (`Expenses[Rent, Amount]`) instead
+  of A1.
 - **Renaming with consequences** for types and functions (tables and columns
   already work).
 - Layers **`links`** (URLs, files, other tables) and **`scenario`** (what if).
@@ -64,8 +64,9 @@ This page lists open points and ideas. Suggestions are welcome as
   installed by the Homebrew formula: a formula must not write into the
   LibreOffice user profile, and uninstalling or upgrading would leave a
   stale extension behind.
-- **Update check**: done in CI (`.github/workflows/oxt.yml` attaches `.oxt` and
-  `update.xml` to every release); to be seen with the first release after it.
+- **Conditional rules in Calc**: layer rules with `row[col=value]` are not
+  shown in Calc (plain cell, range, row and column rules are). They could
+  become Calc conditional formatting.
 - **Complete `description.xml`**: an icon, the license, and
   `LibreOffice-minimal-version` instead of `OpenOffice.org-minimal-version`.
 

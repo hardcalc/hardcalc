@@ -174,6 +174,8 @@ class ToCalc(unittest.TestCase):
         """XLOOKUP exists in Calc 24.8 and later only; older versions must work too."""
         book = Book([TableInfo("T", "T", ["Key", "Val"], 3, ["a", "b", "c"])])
         self.assertEqual(to_calc('=xlookup("b", Key, Val)', book, 0, 0), '=INDEX($B$2:$B$4;MATCH("b";$A$2:$A$4;0))')
+        self.assertEqual(to_calc('=sum(B:B)', book, 0, 0), '=SUM($B$2:$B$4)')
+        self.assertEqual(to_calc('=sum(C:B)', book, 0, 0), '=SUM($B$2:$C$4)')
         self.assertEqual(to_calc('=xlookup("z", Key, Val, 0)', book, 0, 0), '=IFNA(INDEX($B$2:$B$4;MATCH("z";$A$2:$A$4;0));0)')
 
     def test_untranslatable_formula_stays_text(self):

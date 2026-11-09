@@ -1034,12 +1034,15 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         let visible = layout(app, &mut column, app.view.scroll.1);
 
         // Height of each row in lines; the rows that fit on the screen.
+        // Every column counts, also those scrolled out of view, so that a row
+        // keeps its height while scrolling sideways.
+        let all: Vec<(usize, usize)> = (0..cols).map(|c| (c, column(app, c))).collect();
         let mut heights = Vec::new();
         let mut used = 0;
         for i in 0..row_range.len() {
-            let h = visible
+            let h = all
                 .iter()
-                .map(|&(c, _, w, _)| {
+                .map(|&(c, w)| {
                     let v = &cache[&c].1[i];
                     if v.style.wrap.is_some() { crate::text::wrap_plain(&v.text, w).len() } else { 1 }
                 })

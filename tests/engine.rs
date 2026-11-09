@@ -230,3 +230,12 @@ mod block1_functions {
         assert_eq!(text("sumifs(Amount, Grp, \"x\")"), "15");
     }
 }
+
+#[test]
+fn whole_column_ranges_sum_columns() {
+    let mut wb = book("## T :: matrix\n\n| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n");
+    assert_eq!(wb.eval_formula("sum(B:B)", 0), Value::num(7.0));
+    assert_eq!(wb.eval_formula("sum(B:C)", 0), Value::num(16.0));
+    assert_eq!(wb.eval_formula("sum(C:A)", 0), Value::num(21.0));
+    assert!(wb.eval_formula("sum(B:2)", 0).is_error());
+}

@@ -111,7 +111,8 @@ if they have hardcalc content (a heading
 ## Limits
 
 - Font, font size, borders and conditional formatting from Calc are not
-  transferred (see *Formatting*).
+  transferred (see *Formatting*). Opening a file draws a thin solid grid around
+  every table; hardcalc stores no borders, so the grid is not saved.
 - Layer rules with cell references (`B1: …` in `comments`) do not move
   along when rows are inserted or moved in Calc.
 - Units in formulas (`30{d}`) are lost in Calc; the number stays.

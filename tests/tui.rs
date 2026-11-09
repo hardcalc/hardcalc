@@ -2982,3 +2982,26 @@ fn compact_is_the_default_and_aligned_can_be_chosen() {
     assert!(!hardcalc::write(&a.doc).contains("aligned"));
     cmd(&mut a, ":compact maybe");
 }
+
+#[test]
+fn wrapped_row_keeps_its_height_when_the_cell_is_scrolled_away() {
+    let mut src = String::from("## T :: matrix\n\n| N | Note | A | B | C | D | E | F |\n|---|---|---|---|---|---|---|---|\n");
+    let wide = "x".repeat(18);
+    src.push_str(&format!("| 1 | the quick brown fox jumps over the lazy dog | {wide} | {wide} | {wide} | {wide} | {wide} | {wide} |\n"));
+    src.push_str(&format!("| 2 | short | {wide} | {wide} | {wide} | {wide} | {wide} | {wide} |\n"));
+    src.push_str("\n```layer format\nNote: wrap 16\n```\n");
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(&src).unwrap());
+    let gap = |screen: &str| {
+        let lines: Vec<&str> = screen.lines().collect();
+        let at = |n: &str| lines.iter().position(|l| l.starts_with(n)).unwrap();
+        at(" 2 ") - at(" 1 ")
+    };
+    let before = render(&mut a);
+    assert_eq!(gap(&before), 3, "{before}");
+    for _ in 0..7 {
+        key(&mut a, KeyCode::Right);
+    }
+    let after = render(&mut a);
+    assert!(!after.contains("fox jumps"), "cell should be scrolled away\n{after}");
+    assert_eq!(gap(&after), 3, "{after}");
+}
