@@ -21,15 +21,15 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 /// How long popups take to slide in.
-const POPUP: Duration = Duration::from_millis(170);
+const POPUP: Duration = Duration::from_millis(110);
 /// How long the cube turn between tables takes.
-const CUBE: Duration = Duration::from_millis(450);
+const CUBE: Duration = Duration::from_millis(280);
 /// Switching on (start) and off (quit).
 const OPEN: Duration = Duration::from_millis(520);
 const CLOSE: Duration = Duration::from_millis(420);
 /// Flowing dots: distance between them (in cell widths) and speed (cell
 /// widths per second); rows count twice, as cells are about twice as high.
-const FLOW_SPACING: f32 = 6.0;
+const FLOW_SPACING: f32 = 8.0;
 const FLOW_SPEED: f32 = 12.0;
 /// Time between frames while only dots flow (30 per second).
 pub const FLOW_FRAME: Duration = Duration::from_millis(33);
@@ -184,8 +184,8 @@ impl Anim {
     }
 
     /// Dots flowing from each source (screen rectangle, colour) to the
-    /// `target` cell, along a straight line from edge to edge, over `buf`
-    /// within `area`.
+    /// `target` cell, on a right-angled way from edge to edge (`route`),
+    /// over `buf` within `area`.
     pub fn flow(&mut self, buf: &mut Buffer, area: Rect, target: Rect, sources: &[(Rect, Color)]) {
         if !self.enabled || sources.is_empty() || self.closing.is_some() {
             return;
@@ -194,48 +194,12 @@ impl Anim {
         let epoch = *self.flow_epoch.get_or_insert(now);
         self.flowing = true;
         let travelled = now.saturating_duration_since(epoch).as_secs_f32() * FLOW_SPEED;
-        let center = |r: Rect| (r.x as f32 + r.width as f32 / 2.0, r.y as f32 + r.height as f32 / 2.0);
-        let inside = |r: Rect, (x, y): (f32, f32)| x >= r.x as f32 && x < r.right() as f32 && y >= r.y as f32 && y < r.bottom() as f32;
-        let (tx, ty) = center(target);
         for &(source, color) in sources {
-            let (sx, sy) = center(source);
-            let len = (tx - sx).hypot((ty - sy) * 2.0);
-            if len < 1.0 {
-                continue;
-            }
-            let at = |s: f32| (sx + (tx - sx) * s, sy + (ty - sy) * s);
-            // Only between the edges of source and target.
-            let step = 0.25 / len;
-            let mut s0 = 0.0;
-            while s0 < 1.0 && inside(source, at(s0)) {
-                s0 += step;
-            }
-            let mut s1 = 1.0;
-            while s1 > s0 && inside(target, at(s1)) {
-                s1 -= step;
-            }
-            let span = (s1 - s0) * len;
-            if span < 1.0 {
-                continue;
-            }
-            let head = Style::new().fg(color).add_modifier(Modifier::BOLD);
-            let mut d = travelled % FLOW_SPACING;
-            while d < span {
-                for (back, symbol, style) in [(0.0, '●', head), (1.0, '·', Style::new().fg(color))] {
-                    let e = d - back;
-                    if e < 0.0 {
-                        continue;
-                    }
-                    let (x, y) = at(s0 + e / len);
-                    let (x, y) = (x.floor(), y.floor());
-                    if x < area.x as f32 || y < area.y as f32 || x >= area.right() as f32 || y >= area.bottom() as f32 {
-                        continue;
-                    }
-                    // Smaller at both ends: the dots come out of the source and sink into the cell.
-                    let symbol = if e < 1.0 || span - e < 1.0 { '·' } else { symbol };
-                    buf[(x as u16, y as u16)].set_char(symbol).set_style(style);
+            for ((x, y), at, step) in route(source, target) {
+                // A dot is on the cell it reaches in this step.
+                if (at - travelled).rem_euclid(FLOW_SPACING) < step && area.contains((x, y).into()) {
+                    buf[(x, y)].set_char('•').set_style(Style::new().fg(color));
                 }
-                d += FLOW_SPACING;
             }
         }
     }
@@ -345,6 +309,52 @@ impl Anim {
         let new = &state.last;
         if turn.1 { cube(buf, area, old, new, p) } else { cube(buf, area, new, old, 1.0 - p) }
     }
+}
+
+/// The cells of a right-angled way from the edge of `source` to the edge of
+/// `target`, each with its distance from the start and the length of the
+/// step to it (rows count twice). Straight when both share columns or
+/// rows, else sideways along the source's middle row, then up or down.
+fn route(source: Rect, target: Rect) -> Vec<((u16, u16), f32, f32)> {
+    let mut cells = Vec::new();
+    let mut at = 0.0;
+    let mut go = |cells: &mut Vec<_>, cell: (u16, u16), step: f32| {
+        at += step;
+        cells.push((cell, at, step));
+    };
+    // Cells strictly between `a` and `b` (a < b), in the order walked.
+    let forward = |a: u16, b: u16| -> Vec<u16> { (a..b).collect() };
+    let back = |a: u16, b: u16| -> Vec<u16> { (a..b).rev().collect() };
+    let (cols0, cols1) = (source.x.max(target.x), source.right().min(target.right()));
+    let (rows0, rows1) = (source.y.max(target.y), source.bottom().min(target.bottom()));
+    if cols0 < cols1 {
+        // Above or below each other.
+        let x = (cols0 + cols1 - 1) / 2;
+        let ys = if target.y >= source.bottom() { forward(source.bottom(), target.y) } else { back(target.bottom(), source.y) };
+        for y in ys {
+            go(&mut cells, (x, y), 2.0);
+        }
+    } else if rows0 < rows1 {
+        // Side by side.
+        let y = (rows0 + rows1 - 1) / 2;
+        let xs = if target.x >= source.right() { forward(source.right(), target.x) } else { back(target.right(), source.x) };
+        for x in xs {
+            go(&mut cells, (x, y), 1.0);
+        }
+    } else {
+        // Sideways to the target's column, then up or down to it.
+        let y = source.y + source.height / 2;
+        let x = target.x + target.width / 2;
+        let xs = if x >= source.right() { forward(source.right(), x + 1) } else { back(x, source.x) };
+        for cx in xs {
+            go(&mut cells, (cx, y), 1.0);
+        }
+        let ys = if target.y > y { forward(y + 1, target.y) } else { back(target.bottom(), y) };
+        for cy in ys {
+            go(&mut cells, (x, cy), 2.0);
+        }
+    }
+    cells
 }
 
 /// Switching on at `t` (0..1): a line of light grows from the middle, then
@@ -537,6 +547,27 @@ mod tests {
             assert!(!manual.record(Duration::from_millis(80)));
         }
         assert!(manual.enabled);
+    }
+
+    #[test]
+    fn routes_are_right_angled_and_outside_both_ends() {
+        let check = |source: Rect, target: Rect| {
+            let cells: Vec<(u16, u16)> = route(source, target).into_iter().map(|(c, ..)| c).collect();
+            for w in cells.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                assert_eq!(a.0.abs_diff(b.0) + a.1.abs_diff(b.1), 1, "steps of one cell, no diagonals: {cells:?}");
+            }
+            assert!(cells.iter().all(|&c| !source.contains(c.into()) && !target.contains(c.into())), "{cells:?}");
+            cells
+        };
+        // Below, beside, apart (an L), and touching (no way at all).
+        assert_eq!(check(Rect::new(2, 1, 6, 1), Rect::new(2, 5, 6, 1)).len(), 3);
+        assert_eq!(check(Rect::new(2, 1, 6, 1), Rect::new(12, 1, 6, 1)).len(), 4);
+        let l = check(Rect::new(2, 1, 6, 2), Rect::new(30, 8, 6, 1));
+        assert!(l.first().unwrap().1 == l[1].1 && l.last().unwrap().0 == l[l.len() - 2].0, "sideways, then down");
+        assert!(check(Rect::new(2, 1, 6, 1), Rect::new(2, 2, 6, 1)).is_empty());
+        // Up and to the left.
+        check(Rect::new(30, 8, 6, 1), Rect::new(2, 1, 6, 2));
     }
 
     #[test]

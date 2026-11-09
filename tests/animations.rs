@@ -121,7 +121,7 @@ fn formula_sources_are_highlighted_and_data_flows() {
         assert!(count(Color::LightMagenta) >= 1, "D1 highlighted");
         // Dots flow only with animations; they keep running while editing.
         assert_eq!(a.anim.flowing(), animated);
-        let dots = (0..20).flat_map(|y| (0..80).map(move |x| (x, y))).filter(|&p| buf[p].symbol() == "●").count();
+        let dots = (0..20).flat_map(|y| (0..80).map(move |x| (x, y))).filter(|&p| buf[p].symbol() == "•").count();
         assert_eq!(dots > 0, animated, "dots: {dots}");
         // After Esc nothing is highlighted and nothing flows.
         a.on_key(k(KeyCode::Esc, KeyModifiers::NONE));
