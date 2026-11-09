@@ -130,6 +130,7 @@ pub const PAGES: &[Page] = &[
             ("", "← on its label renames it, F8 deletes it; formulas: Table.Label.Column"),
             (":table  :playground  :layout", "new table · free sheet · raster layout"),
             (":theme auto|light|dark  :bands", "colour scheme · banded rows and columns"),
+            (":animations [on|off]  :anim", "sliding menus, gliding scrolls, turning tables"),
         ],
     ),
     (

@@ -5022,6 +5022,14 @@ impl App {
                 };
                 self.info(if self.bands { "banded rows and columns on" } else { "banded rows and columns off" });
             }
+            "animations" | "anim" => {
+                self.anim.enabled = match args.first().copied() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => !self.anim.enabled,
+                };
+                self.info(if self.anim.enabled { "animations on" } else { "animations off" });
+            }
             "keys" => {
                 self.show_keys = !self.show_keys;
                 if !self.show_keys {

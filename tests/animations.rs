@@ -97,3 +97,30 @@ fn switching_tables_turns_a_cube() {
     let all = check(&[k(KeyCode::PageDown, KeyModifiers::CONTROL)]);
     assert!(all.len() > 5);
 }
+
+#[test]
+fn animations_command_switches_them_off_and_on() {
+    let mut a = app(true);
+    let mut t = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    let run = |a: &mut App, cmd: &str| {
+        a.on_key(k(KeyCode::Char(':'), KeyModifiers::NONE));
+        for ch in cmd.chars() {
+            a.on_key(k(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        a.on_key(k(KeyCode::Enter, KeyModifiers::NONE));
+    };
+    run(&mut a, "animations off");
+    assert!(!a.anim.enabled);
+    t.draw(|f| ui::draw(f, &mut a)).unwrap();
+    a.on_key(k(KeyCode::F(9), KeyModifiers::NONE));
+    t.draw(|f| ui::draw(f, &mut a)).unwrap();
+    assert!(!a.anim.active(), "the menu opens at once");
+    a.on_key(k(KeyCode::Esc, KeyModifiers::NONE));
+    // Without an argument it toggles; the short form works too.
+    run(&mut a, "anim");
+    assert!(a.anim.enabled);
+    run(&mut a, "animations");
+    assert!(!a.anim.enabled);
+    run(&mut a, "animations on");
+    assert!(a.anim.enabled);
+}

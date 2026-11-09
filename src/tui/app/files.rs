@@ -69,6 +69,7 @@ impl App {
         next.graphics = self.graphics;
         next.truecolor = self.truecolor;
         next.bands = self.bands;
+        next.anim.enabled = self.anim.enabled;
         next.show_keys = self.show_keys;
         *self = next;
     }

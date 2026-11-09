@@ -525,7 +525,8 @@ lighter, or a bit darker in the light scheme, crossings a bit more).
 
 Menus and dialogs slide in from above, scrolling glides character by
 character to the new position, and switching tables turns the window like
-a cube. `HARDCALC_ANIMATIONS=0` switches the animations off. A debug build
+a cube. `:animations off` (short `:anim`) switches them off, `:animations on`
+back on; `HARDCALC_ANIMATIONS=0` starts without them. A debug build
 is too slow for smooth animations; use `cargo run --release`. In large
 windows animations draw fewer frames per second, so the terminal keeps up.
 
@@ -587,6 +588,7 @@ For power users; the help (F1) lists them all.
 | `:import file`, `:export file` | import and export |
 | `:theme auto\|light\|dark`, `:keys` | color scheme, key diagnostics |
 | `:bands [on\|off]` | set off rows and columns in gray (default: on) |
+| `:animations [on\|off]`, `:anim` | sliding menus, gliding scrolls, turning tables (default: on) |
 | `:undo`, `:redo`, `:help` | undo, redo, help |
 
 ## hardconf – editing configuration files
