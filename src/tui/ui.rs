@@ -637,11 +637,13 @@ fn draw_window_tabs(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let bg = if focused { Color::Blue } else { Color::DarkGray };
     f.buffer_mut().set_style(area, Style::new().bg(bg));
     let mut items = Vec::new();
+    let sources = if focused { app.formula_sources() } else { Default::default() };
     for (label, hit, active) in app.window_tabs(app.left_focused) {
-        let style = match (active, focused) {
-            (true, true) => Style::new().bold().fg(Color::Black).bg(Color::White),
-            (true, false) => Style::new().bold().fg(Color::Black).bg(Color::Gray),
-            (false, _) => Style::new().fg(Color::White).bg(bg),
+        let style = match (active, focused, hit) {
+            (_, _, Hit::Tab(i)) if sources.table(i).is_some() => source_tab_style(sources.table(i).unwrap_or(0)),
+            (true, true, _) => Style::new().bold().fg(Color::Black).bg(Color::White),
+            (true, false, _) => Style::new().bold().fg(Color::Black).bg(Color::Gray),
+            (false, ..) => Style::new().fg(Color::White).bg(bg),
         };
         items.push((format!(" {label} "), style, Some(hit)));
     }
@@ -785,10 +787,16 @@ fn chips(f: &mut Frame, area: Rect, items: Vec<(String, Style, Option<Hit>)>, hi
 fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     f.buffer_mut().set_style(area, Style::new().bg(Color::DarkGray));
     let mut items = vec![(" ≡ hardcalc ".to_string(), Style::new().bold().fg(Color::Black).bg(Color::Cyan), Some(Hit::Logo))];
+    // Tables the edited formula takes data from, in their source colour.
+    let sources = app.formula_sources();
     for (i, s) in app.wb.sheets.iter().enumerate() {
         let name = s.name.clone().unwrap_or_else(|| format!("#{}", i + 1));
         let active = i == app.view.sheet && app.view.kind == ViewKind::Table;
-        items.push((format!(" {name} "), tab_style(active), Some(Hit::Tab(i))));
+        let style = match sources.table(i) {
+            Some(k) => source_tab_style(k),
+            None => tab_style(active),
+        };
+        items.push((format!(" {name} "), style, Some(Hit::Tab(i))));
         items.push(("│".into(), Style::new().fg(Color::Gray).bg(Color::DarkGray), None));
     }
     items.push((" ⚙ types ".into(), tab_style(app.types_view()).italic(), Some(Hit::TypesTab)));
@@ -814,6 +822,11 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let end = chips(f, area, items, &mut app.hits);
     draw_file_name(f, app, Rect { x: end, width: area.right().saturating_sub(end), ..area });
+}
+
+/// The tab of a table the edited formula takes data from.
+fn source_tab_style(k: usize) -> Style {
+    Style::new().bold().fg(Color::Black).bg(SOURCE_COLORS[k % SOURCE_COLORS.len()])
 }
 
 fn tab_style(active: bool) -> Style {
@@ -1011,10 +1024,8 @@ fn tab_order(kind: ViewKind) -> u32 {
 const SOURCE_COLORS: [Color; 5] = [Color::LightBlue, Color::LightMagenta, Color::LightGreen, Color::LightYellow, Color::LightRed];
 
 fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
-    let hits_start = app.hits.len();
     // The cells the formula being edited refers to.
-    let sources = if focused { app.formula_sources() } else { Vec::new() };
-    let source_at = |r: usize, c: usize| sources.iter().position(|&((r0, c0), (r1, c1))| (r0..=r1).contains(&r) && (c0..=c1).contains(&c));
+    let sources = if focused { app.formula_sources() } else { Default::default() };
     let (rows, cols) = app.view_dims();
     let vis_rows = area.height.saturating_sub(HEADER_LINES) as usize;
     app.view.page_rows = vis_rows.max(1);
@@ -1241,7 +1252,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             if selected {
                 style = style.bg(Color::Blue).fg(Color::White);
             }
-            if let Some(k) = source_at(r, c) {
+            if let Some(k) = sources.at(r, c) {
                 style = style.bg(SOURCE_COLORS[k % SOURCE_COLORS.len()]).fg(Color::Black);
             }
             if let Some(((p0, q0), (p1, q1))) = pointed
@@ -1295,27 +1306,76 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             }
         }
     }
-    // Data flows from the sources to the formula cell.
-    if !sources.is_empty() && app.anim.enabled {
-        let cells: Vec<((usize, usize), Rect)> = app.hits[hits_start..]
-            .iter()
-            .filter_map(|(rect, hit)| match hit {
-                Hit::Cell(r, c) => Some(((*r, *c), *rect)),
+    // Data flows from the sources to the formula cell; from sources out of
+    // sight it comes in at the edge on their side.
+    if !sources.cells.is_empty() && app.anim.enabled && !visible.is_empty() {
+        let grid = Rect {
+            x: area.x + gutter as u16,
+            y: area.y + HEADER_LINES,
+            width: area.width.saturating_sub(gutter as u16),
+            height: area.height.saturating_sub(HEADER_LINES),
+        };
+        // Screen columns / lines of cells `a..=b` on one axis: the shown part,
+        // or one line just outside the edge they lie beyond.
+        enum Span {
+            Shown(u16, u16),
+            Before,
+            After,
+        }
+        let col_span = |c0: usize, c1: usize| {
+            let shown: Vec<(u16, u16)> =
+                visible.iter().filter(|&&(c, ..)| (c0..=c1).contains(&c)).map(|&(_, x, w, _)| (grid.x + x as u16, grid.x + (x + w) as u16)).collect();
+            match (shown.first(), shown.last()) {
+                (Some(a), Some(b)) => Span::Shown(a.0, b.1),
+                _ if c1 < visible[0].0 => Span::Before,
+                _ => Span::After,
+            }
+        };
+        let mut lines = Vec::new(); // (row, first line, height)
+        let mut y = grid.y;
+        for (i, r) in row_range.clone().enumerate() {
+            lines.push((r, y, heights[i] as u16));
+            y += heights[i] as u16;
+        }
+        let row_span = |r0: usize, r1: usize| {
+            let shown: Vec<(u16, u16)> = lines.iter().filter(|&&(r, ..)| (r0..=r1).contains(&r)).map(|&(_, y, h)| (y, y + h)).collect();
+            match (shown.first(), shown.last()) {
+                (Some(a), Some(b)) => Span::Shown(a.0, b.1),
+                _ if r1 < row_range.start => Span::Before,
+                _ => Span::After,
+            }
+        };
+        let rect = |(r0, c0): (usize, usize), (r1, c1): (usize, usize)| {
+            let (x, w, x_side) = match col_span(c0, c1) {
+                Span::Shown(a, b) => (a, b - a, 0),
+                Span::Before => (grid.x.saturating_sub(1), 1, -1),
+                Span::After => (grid.right(), 1, 1),
+            };
+            let (y, h, y_side) = match row_span(r0, r1) {
+                Span::Shown(a, b) => (a, b - a, 0),
+                Span::Before => (grid.y.saturating_sub(1), 1, -1),
+                Span::After => (grid.bottom(), 1, 1),
+            };
+            // Out of sight: an arrow at the edge points to it.
+            let arrow = match (y_side, x_side) {
+                (-1, _) => Some('▴'),
+                (1, _) => Some('▾'),
+                (_, -1) => Some('◂'),
+                (_, 1) => Some('▸'),
                 _ => None,
-            })
-            .collect();
-        if let Some(&(_, target)) = cells.iter().find(|(cell, _)| *cell == app.view.cursor) {
-            let flows: Vec<(Rect, Color)> = sources
+            };
+            (Rect::new(x, y, w, h), arrow)
+        };
+        let cursor = app.view.cursor;
+        if let (target, None) = rect(cursor, cursor) {
+            let flows: Vec<(Rect, Color, Option<char>)> = sources
+                .cells
                 .iter()
-                .enumerate()
-                .filter_map(|(k, &((r0, c0), (r1, c1)))| {
-                    // The visible part of the source.
-                    let shown = cells.iter().filter(|((r, c), _)| (r0..=r1).contains(r) && (c0..=c1).contains(c)).map(|(_, rect)| *rect);
-                    let rect = shown.reduce(|a, b| a.union(b))?;
-                    (!rect.intersects(target)).then_some((rect, SOURCE_COLORS[k % SOURCE_COLORS.len()]))
+                .filter_map(|&((a, b), k)| {
+                    let (r, arrow) = rect(a, b);
+                    (!r.intersects(target)).then_some((r, SOURCE_COLORS[k % SOURCE_COLORS.len()], arrow))
                 })
                 .collect();
-            let grid = Rect { y: area.y + HEADER_LINES, height: area.height.saturating_sub(HEADER_LINES), ..area };
             app.anim.flow(f.buffer_mut(), grid, target, &flows);
         }
     }

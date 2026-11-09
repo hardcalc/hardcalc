@@ -530,7 +530,10 @@ window like a cube.
 
 While a formula is edited, the cells and ranges it refers to are
 highlighted, each in its own colour, and dots flow from them to the
-formula cell. `:animations off` (short `:anim`) switches them off, `:animations on`
+formula cell – from sources out of sight they come in at the edge on
+their side, where an arrow points to them. Tabs of other tables the
+formula takes data from (`Sales!B2`, `Sales[North, Value]`) take the
+colour too. `:animations off` (short `:anim`) switches them off, `:animations on`
 back on; `HARDCALC_ANIMATIONS=0` starts without them.
 
 In large windows animations draw fewer frames per second, so the terminal

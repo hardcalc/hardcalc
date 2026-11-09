@@ -164,3 +164,49 @@ fn animations_command_switches_them_off_and_on() {
     run(&mut a, "animations on");
     assert!(a.anim.enabled);
 }
+
+/// Types `text` into a free cell below the table (row `down`, column `right`).
+fn edit_below(a: &mut App, down: usize, right: usize, text: &str) {
+    for _ in 0..down {
+        a.on_key(k(KeyCode::Down, KeyModifiers::NONE));
+    }
+    for _ in 0..right {
+        a.on_key(k(KeyCode::Right, KeyModifiers::NONE));
+    }
+    for ch in text.chars() {
+        a.on_key(k(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+}
+
+#[test]
+fn tabs_of_other_source_tables_are_coloured() {
+    use ratatui::style::Color;
+    for animated in [true, false] {
+        let mut a = app(animated);
+        let mut t = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        frames(&mut a, &mut t);
+        edit_below(&mut a, 5, 4, "=B1 + Sales!D2");
+        t.draw(|f| ui::draw(f, &mut a)).unwrap();
+        let buf = t.backend().buffer();
+        let line: String = (0..100).map(|x| buf[(x, 0)].symbol()).collect();
+        let x = line.find(" Sales ").expect("Sales tab") as u16 + 1;
+        // B1 is the first source (blue), Sales the second (magenta).
+        assert_eq!(buf[(x, 0)].bg, Color::LightMagenta, "{line}");
+        let other = line.find(" Metrics ").unwrap() as u16 + 1;
+        assert_ne!(buf[(other, 0)].bg, Color::LightMagenta);
+    }
+}
+
+#[test]
+fn data_from_out_of_sight_comes_in_at_the_edge() {
+    let mut a = app(true);
+    // Narrow: column E is out of sight on the right.
+    let mut t = Terminal::new(TestBackend::new(32, 20)).unwrap();
+    frames(&mut a, &mut t);
+    edit_below(&mut a, 5, 0, "=E1");
+    t.draw(|f| ui::draw(f, &mut a)).unwrap();
+    let screen = screen(&t);
+    assert!(!screen.contains("Gross"), "E is out of sight:\n{screen}");
+    assert!(screen.contains('▸'), "an arrow points to it:\n{screen}");
+    assert!(a.anim.flowing());
+}

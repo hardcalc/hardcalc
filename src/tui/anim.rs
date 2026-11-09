@@ -183,10 +183,11 @@ impl Anim {
         self.flowing
     }
 
-    /// Dots flowing from each source (screen rectangle, colour) to the
-    /// `target` cell, on a right-angled way from edge to edge (`route`),
-    /// over `buf` within `area`.
-    pub fn flow(&mut self, buf: &mut Buffer, area: Rect, target: Rect, sources: &[(Rect, Color)]) {
+    /// Dots flowing from each source (screen rectangle, colour, arrow for a
+    /// source out of sight) to the `target` cell, on a right-angled way from
+    /// edge to edge (`route`), over `buf` within `area`. The arrow stands on
+    /// the first cell of the way within `area`.
+    pub fn flow(&mut self, buf: &mut Buffer, area: Rect, target: Rect, sources: &[(Rect, Color, Option<char>)]) {
         if !self.enabled || sources.is_empty() || self.closing.is_some() {
             return;
         }
@@ -194,12 +195,18 @@ impl Anim {
         let epoch = *self.flow_epoch.get_or_insert(now);
         self.flowing = true;
         let travelled = now.saturating_duration_since(epoch).as_secs_f32() * FLOW_SPEED;
-        for &(source, color) in sources {
-            for ((x, y), at, step) in route(source, target) {
+        for &(source, color, arrow) in sources {
+            let way = route(source, target);
+            for &((x, y), at, step) in &way {
                 // A dot is on the cell it reaches in this step.
                 if (at - travelled).rem_euclid(FLOW_SPACING) < step && area.contains((x, y).into()) {
                     buf[(x, y)].set_char('•').set_style(Style::new().fg(color));
                 }
+            }
+            if let Some(arrow) = arrow
+                && let Some(&((x, y), ..)) = way.iter().find(|((x, y), ..)| area.contains((*x, *y).into()))
+            {
+                buf[(x, y)].set_char(arrow).set_style(Style::new().fg(color).add_modifier(Modifier::BOLD));
             }
         }
     }
@@ -577,7 +584,7 @@ mod tests {
         let dots = |anim: &mut Anim| {
             anim.begin_frame();
             let mut buf = Buffer::empty(area);
-            anim.flow(&mut buf, area, Rect::new(30, 8, 6, 1), &[(Rect::new(2, 1, 6, 2), Color::Blue)]);
+            anim.flow(&mut buf, area, Rect::new(30, 8, 6, 1), &[(Rect::new(2, 1, 6, 2), Color::Blue, None)]);
             (0..10).flat_map(|y| (0..40).map(move |x| (x, y))).filter(|&p| buf[p].symbol() != " ").collect::<Vec<_>>()
         };
         let first = dots(&mut anim);
