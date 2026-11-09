@@ -5023,11 +5023,12 @@ impl App {
                 self.info(if self.bands { "banded rows and columns on" } else { "banded rows and columns off" });
             }
             "animations" | "anim" => {
-                self.anim.enabled = match args.first().copied() {
+                let on = match args.first().copied() {
                     Some("on") => true,
                     Some("off") => false,
                     _ => !self.anim.enabled,
                 };
+                self.anim.set_by_hand(on);
                 self.info(if self.anim.enabled { "animations on" } else { "animations off" });
             }
             "keys" => {

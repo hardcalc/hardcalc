@@ -523,12 +523,18 @@ lighter, or a bit darker in the light scheme, crossings a bit more).
 
 ### Animations
 
-Menus and dialogs slide in from above, scrolling glides character by
+hardcalc switches on and off like an old tube screen: a line of light
+opens into the picture, and on quitting collapses back into a line and a
+dot. Menus and dialogs slide in from above, scrolling glides character by
 character to the new position, and switching tables turns the window like
 a cube. `:animations off` (short `:anim`) switches them off, `:animations on`
-back on; `HARDCALC_ANIMATIONS=0` starts without them. A debug build
-is too slow for smooth animations; use `cargo run --release`. In large
-windows animations draw fewer frames per second, so the terminal keeps up.
+back on; `HARDCALC_ANIMATIONS=0` starts without them.
+
+In large windows animations draw fewer frames per second, so the terminal
+keeps up. When frames still take too long (a slow machine or terminal), the
+animations switch themselves off and the status line says so; switched on
+again with `:anim on`, they stay on. A debug build is too slow for smooth
+animations; use `cargo run --release`.
 
 ### Notes on macOS Terminal.app
 

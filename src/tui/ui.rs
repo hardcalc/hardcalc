@@ -35,6 +35,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if app.show_help {
             draw_help(f, app);
         }
+        app.anim.finish(f.buffer_mut());
         super::theme::apply(f.buffer_mut(), app.light(), app.theme != super::theme::ThemeSetting::Auto);
         return;
     }
@@ -125,6 +126,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             draw_help(f, app);
         }
     });
+    app.anim.finish(f.buffer_mut());
     super::theme::apply(f.buffer_mut(), app.light(), app.theme != super::theme::ThemeSetting::Auto);
 }
 

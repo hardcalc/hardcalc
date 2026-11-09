@@ -79,11 +79,21 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
 
     let result = (|| loop {
         frame_bytes.take();
+        let animated = app.anim.active();
+        let start = Instant::now();
         terminal.draw(|f| ui::draw(f, &mut app))?;
         let drawn = Instant::now();
+        if animated && app.anim.record(drawn - start) {
+            app.message = Some(app::Message { text: "animations off: frames take too long here (:anim on)".into(), error: false });
+        }
         // The next animation frame after a pause that fits the budget.
         let pause = Duration::from_secs_f64(frame_bytes.take() as f64 / BYTES_PER_SECOND).clamp(FRAME, SLOWEST_FRAME);
         if app.quit {
+            // Switching off, keys are no longer read.
+            if app.anim.close() {
+                std::thread::sleep(pause.saturating_sub(drawn.elapsed()));
+                continue;
+            }
             return Ok(());
         }
         if images.update(&mut app, &mut terminal)? {
