@@ -1,8 +1,9 @@
-//! The cube turn between tables, applied to the drawn frame afterwards.
+//! Soft animations, applied to the drawn frame afterwards.
 //!
-//! Drawing stays as it is: every frame shows the final state, and while the
-//! window turns, its cells are rearranged into a pseudo-3D cube with the
-//! old table on one face and the new one on the next.
+//! Drawing stays as it is: every frame shows the final state, and the
+//! animations here rearrange the cells of that frame while they run.
+//! - Menus and dialogs slide in from above.
+//! - Switching tables turns the window like a cube (pseudo-3D).
 //!
 //! Disabled unless `enabled` is set (the interactive UI sets it, tests do
 //! not), and with `HARDCALC_ANIMATIONS=0`.
@@ -13,12 +14,14 @@ use ratatui::style::Modifier;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+/// How long popups take to slide in.
+const POPUP: Duration = Duration::from_millis(100);
 /// How long the cube turn between tables takes.
 const CUBE: Duration = Duration::from_millis(260);
 /// Camera distance of the cube, in half widths of the window.
 const CAMERA: f32 = 3.2;
 
-/// Running cube turns and what they start from.
+/// Running animations and what they start from.
 #[derive(Default)]
 pub struct Anim {
     pub enabled: bool,
@@ -26,6 +29,8 @@ pub struct Anim {
     now: Option<Instant>,
     /// Set while drawing when an animation still runs: the next frame is due soon.
     active: bool,
+    /// Popup name → (identity, shown since).
+    popups: HashMap<&'static str, (u64, Instant)>,
     /// Per window (true: left / only window).
     windows: HashMap<bool, WindowState>,
 }
@@ -51,6 +56,10 @@ fn fraction(now: Instant, start: Instant, dur: Duration) -> f32 {
         return 1.0;
     }
     (now.saturating_duration_since(start).as_secs_f32() / dur.as_secs_f32()).min(1.0)
+}
+
+pub fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
 }
 
 pub fn ease_in_out(t: f32) -> f32 {
@@ -80,6 +89,57 @@ impl Anim {
             self.active = true;
         }
         t
+    }
+
+    /// Lets the popup `name` slide in from above: `base` is the frame before it
+    /// was drawn, `buf` the frame with it; `key` identifies what it shows
+    /// (`None`: not shown), a new identity slides in again. Only rows from
+    /// `clip_top` on take part (the popup comes out from behind that line).
+    pub fn popup(&mut self, name: &'static str, key: Option<u64>, buf: &mut Buffer, base: &Buffer, clip_top: u16) {
+        let Some(key) = key.filter(|_| self.enabled) else {
+            self.popups.remove(name);
+            return;
+        };
+        let now = self.now();
+        let start = match self.popups.get(name) {
+            Some(&(k, start)) if k == key => start,
+            _ => {
+                self.popups.insert(name, (key, now));
+                now
+            }
+        };
+        let t = self.progress(start, POPUP);
+        if t >= 1.0 {
+            return;
+        }
+        // The popup: the cells that differ from the frame before it.
+        let area = buf.area;
+        let (mut x0, mut x1, mut y0, mut y1) = (u16::MAX, 0, u16::MAX, 0);
+        for y in clip_top.max(area.y)..area.bottom() {
+            for x in area.x..area.right() {
+                if buf[(x, y)] != base[(x, y)] {
+                    x0 = x0.min(x);
+                    x1 = x1.max(x + 1);
+                    y0 = y0.min(y);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        if x0 >= x1 {
+            return;
+        }
+        let clip = clip_top.max(area.y);
+        // At the start the popup's bottom edge is at the clip line.
+        let travel = (y1 - clip) as f32;
+        let dy = ((1.0 - ease_out(t)) * travel).round() as u16;
+        let popup: Vec<Vec<Cell>> = (y0..y1).map(|y| (x0..x1).map(|x| buf[(x, y)].clone()).collect()).collect();
+        for y in clip..y1 {
+            for x in x0..x1 {
+                let src = y + dy;
+                let cell = if src >= y0 && src < y1 { popup[(src - y0) as usize][(x - x0) as usize].clone() } else { base[(x, y)].clone() };
+                buf[(x, y)] = cell;
+            }
+        }
     }
 
     /// After a window was drawn into `area` of `buf`: when it now shows
@@ -182,8 +242,10 @@ mod tests {
 
     #[test]
     fn easing_ends() {
-        assert!(ease_in_out(0.0).abs() < 1e-6);
-        assert!((ease_in_out(1.0) - 1.0).abs() < 1e-6);
+        for f in [ease_out, ease_in_out] {
+            assert!(f(0.0).abs() < 1e-6);
+            assert!((f(1.0) - 1.0).abs() < 1e-6);
+        }
     }
 
     #[test]
@@ -212,6 +274,8 @@ mod tests {
         anim.window(true, (0, 0), &mut buf, area);
         let before = buf.clone();
         anim.window(true, (0, 1), &mut buf, area);
+        assert_eq!(buf, before);
+        anim.popup("m", Some(1), &mut buf, &Buffer::empty(area), 0);
         assert_eq!(buf, before);
         assert!(!anim.active());
     }

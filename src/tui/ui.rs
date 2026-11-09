@@ -108,16 +108,42 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_layers(f, app, layers);
     app.with_window(data_left, |app| draw_status(f, app, status, helper));
     draw_fkeys(f, app, fkeys);
-    draw_paper_menu(f, app);
+    let paper = app.paper_menu.map(|_| 0);
+    slide(f, app, "paper", paper, 0, draw_paper_menu);
     draw_suggestions(f, app, status);
-    draw_menu(f, app, top);
-    draw_context_menu(f, app);
-    draw_file_dialog(f, app);
-    draw_confirm(f, app);
-    if app.show_help {
-        draw_help(f, app);
-    }
+    let menu = app.menu.map(|(open, _)| open as u64);
+    slide(f, app, "menu", menu, top.y + 1, |f, app| draw_menu(f, app, top));
+    let context = app.context.map(|m| hash_of((m.pos, m.group)));
+    slide(f, app, "context", context, 0, draw_context_menu);
+    let dialog = app.file_dialog.as_ref().map(|_| 0);
+    slide(f, app, "files", dialog, 0, draw_file_dialog);
+    let confirm = app.confirm.as_ref().map(|_| 0);
+    slide(f, app, "confirm", confirm, 0, draw_confirm);
+    let help = app.show_help.then_some(0);
+    slide(f, app, "help", help, 0, |f, app| {
+        if app.show_help {
+            draw_help(f, app);
+        }
+    });
     super::theme::apply(f.buffer_mut(), app.light(), app.theme != super::theme::ThemeSetting::Auto);
+}
+
+/// Draws a popup with `draw` and lets it slide in from above (from behind
+/// line `clip_top`); `key` identifies what it shows (`None`: not shown).
+fn slide(f: &mut Frame, app: &mut App, name: &'static str, key: Option<u64>, clip_top: u16, draw: impl FnOnce(&mut Frame, &mut App)) {
+    let base = if key.is_some() && app.anim.enabled { Some(f.buffer_mut().clone()) } else { None };
+    draw(f, app);
+    match base {
+        Some(base) => app.anim.popup(name, key, f.buffer_mut(), &base, clip_top),
+        None => app.anim.popup(name, None, f.buffer_mut(), &ratatui::buffer::Buffer::empty(Rect::ZERO), clip_top),
+    }
+}
+
+fn hash_of(v: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
 }
 
 /// Turns the window like a cube when it switched to another table or view.

@@ -449,7 +449,7 @@ pub struct App {
     pub image_slot: Option<Rect>,
     /// The terminal shows 24-bit colour (else the 256-colour palette is used).
     pub truecolor: bool,
-    /// The cube turn between tables.
+    /// Soft animations (sliding menus and dialogs, cube turns between tables).
     pub anim: super::anim::Anim,
     /// Last block-graphics preview: key and scaled page image.
     thumbnail: Option<(u64, super::graphics::RgbImage)>,

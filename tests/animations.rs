@@ -1,5 +1,6 @@
-//! Switching tables turns the window like a cube; the turn ends on exactly
-//! the frame drawn without it, and nothing else animates.
+//! Menus and dialogs slide in, switching tables turns the window like a
+//! cube; each animation ends on exactly the frame drawn without it.
+//! Moving the cursor and scrolling draw at once.
 
 use hardcalc::tui::app::App;
 use hardcalc::tui::ui;
@@ -75,18 +76,28 @@ fn k(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
 }
 
 #[test]
+fn menu_slides_in_from_above() {
+    let all = check(&[k(KeyCode::F(9), KeyModifiers::NONE)]);
+    // The menu's lower border comes down line by line.
+    let bottom = |s: &String| s.lines().collect::<Vec<_>>().iter().rposition(|l| l.contains('└')).unwrap_or(0);
+    let rows: Vec<usize> = all.iter().map(bottom).collect();
+    assert!(rows.windows(2).all(|w| w[0] <= w[1]), "{rows:?}");
+    assert!(rows[0] < *rows.last().unwrap(), "{rows:?}");
+}
+
+#[test]
 fn switching_tables_turns_a_cube() {
     let all = check(&[k(KeyCode::PageDown, KeyModifiers::CONTROL)]);
     assert!(all.len() > 5);
 }
 
 #[test]
-fn menus_and_cursor_moves_draw_at_once() {
+fn cursor_moves_and_scrolling_draw_at_once() {
     let mut a = app(true);
     let mut t = Terminal::new(TestBackend::new(32, 20)).unwrap();
     t.draw(|f| ui::draw(f, &mut a)).unwrap();
-    // Moving right scrolls this narrow screen; F9 opens the menu.
-    for code in [KeyCode::Down, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::PageDown, KeyCode::F(9)] {
+    // Moving right scrolls this narrow screen.
+    for code in [KeyCode::Down, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::PageDown] {
         a.on_key(k(code, KeyModifiers::NONE));
         t.draw(|f| ui::draw(f, &mut a)).unwrap();
         assert!(!a.anim.active(), "{code:?} animates");
