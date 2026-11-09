@@ -523,9 +523,10 @@ lighter, or a bit darker in the light scheme, crossings a bit more).
 
 ### Animations
 
-Menus and dialogs slide in from above, and switching tables turns the
-window like a cube; moving the cursor and scrolling are drawn at once.
-`HARDCALC_ANIMATIONS=0` switches the animations off.
+Menus and dialogs slide in from above, scrolling glides character by
+character to the new position, and switching tables turns the window like
+a cube. `HARDCALC_ANIMATIONS=0` switches the animations off. A debug build
+is too slow for smooth animations; use `cargo run --release`.
 
 ### Notes on macOS Terminal.app
 

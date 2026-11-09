@@ -3,6 +3,8 @@
 //! Drawing stays as it is: every frame shows the final state, and the
 //! animations here rearrange the cells of that frame while they run.
 //! - Menus and dialogs slide in from above.
+//! - Scrolling the grid glides character by character (sideways) and line
+//!   by line (up and down) to the new position.
 //! - Switching tables turns the window like a cube (pseudo-3D).
 //!
 //! Disabled unless `enabled` is set (the interactive UI sets it, tests do
@@ -15,9 +17,15 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// How long popups take to slide in.
-const POPUP: Duration = Duration::from_millis(100);
+const POPUP: Duration = Duration::from_millis(240);
 /// How long the cube turn between tables takes.
-const CUBE: Duration = Duration::from_millis(260);
+const CUBE: Duration = Duration::from_millis(650);
+/// Scrolling: base time, extra per character / row of the way, and the
+/// longest glide, in milliseconds.
+const SCROLL_BASE: f32 = 140.0;
+const SCROLL_PER_CHAR: f32 = 8.0;
+const SCROLL_PER_ROW: f32 = 12.0;
+const SCROLL_MAX: f32 = 400.0;
 /// Camera distance of the cube, in half widths of the window.
 const CAMERA: f32 = 3.2;
 
@@ -33,6 +41,7 @@ pub struct Anim {
     popups: HashMap<&'static str, (u64, Instant)>,
     /// Per window (true: left / only window).
     windows: HashMap<bool, WindowState>,
+    scrolls: HashMap<bool, ScrollState>,
 }
 
 /// What a window showed last, and a running cube turn.
@@ -48,6 +57,15 @@ struct Turn {
     start: Instant,
     /// The new table lies right of the old one: the cube turns left.
     forward: bool,
+}
+
+/// Displayed and target scroll position of a grid, in rows and characters.
+struct ScrollState {
+    ident: u64,
+    from: (f32, f32),
+    to: (f32, f32),
+    start: Instant,
+    dur: Duration,
 }
 
 /// How far 0..1 an animation of `dur` started at `start` is at `now`.
@@ -140,6 +158,53 @@ impl Anim {
                 buf[(x, y)] = cell;
             }
         }
+    }
+
+    /// The scroll position a grid shows: `None` when it is at `target` (rows,
+    /// characters from the left of the table), else the position on the way
+    /// there. A new `ident` (other table) jumps without animation.
+    pub fn scroll(&mut self, side: bool, ident: u64, target: (usize, usize), screen: Rect) -> Option<(f32, f32)> {
+        let to = (target.0 as f32, target.1 as f32);
+        let now = self.now();
+        if !self.enabled {
+            self.scrolls.remove(&side);
+            return None;
+        }
+        let state = self.scrolls.entry(side).or_insert(ScrollState { ident, from: to, to, start: now, dur: Duration::ZERO });
+        if state.ident != ident {
+            *state = ScrollState { ident, from: to, to, start: now, dur: Duration::ZERO };
+        }
+        if state.to != to {
+            // From where it is now, at most a screen away.
+            let (start, dur, from, old_to) = (state.start, state.dur, state.from, state.to);
+            let t = fraction(now, start, dur);
+            let e = ease_out(t);
+            let cur = (from.0 + (old_to.0 - from.0) * e, from.1 + (old_to.1 - from.1) * e);
+            let max_rows = screen.height.max(1) as f32;
+            let max_chars = screen.width.max(1) as f32 * 1.5;
+            let cur = (cur.0.clamp(to.0 - max_rows, to.0 + max_rows).max(0.0), cur.1.clamp(to.1 - max_chars, to.1 + max_chars).max(0.0));
+            let (dr, dc) = ((to.0 - cur.0).abs(), (to.1 - cur.1).abs());
+            // Longer for longer ways; half as long when one is caught
+            // mid-way (keys held down), so the screen keeps up with the
+            // cursor. A single line cannot move more smoothly than at once.
+            let mut ms = (SCROLL_BASE + SCROLL_PER_CHAR * dc).max(if dr > 1.0 { SCROLL_BASE + SCROLL_PER_ROW * dr } else { 0.0 }).min(SCROLL_MAX);
+            if t < 1.0 {
+                ms *= 0.5;
+            }
+            if dc < 0.5 && dr <= 1.0 {
+                ms = 0.0;
+            }
+            let state = self.scrolls.get_mut(&side).unwrap();
+            *state = ScrollState { ident, from: cur, to, start: now, dur: Duration::from_millis(ms as u64) };
+        }
+        let state = &self.scrolls[&side];
+        let (start, dur, from) = (state.start, state.dur, state.from);
+        let t = self.progress(start, dur);
+        if t >= 1.0 {
+            return None;
+        }
+        let e = ease_out(t);
+        Some((from.0 + (to.0 - from.0) * e, from.1 + (to.1 - from.1) * e))
     }
 
     /// After a window was drawn into `area` of `buf`: when it now shows
@@ -269,14 +334,13 @@ mod tests {
         let mut anim = Anim::default();
         anim.begin_frame();
         let area = Rect::new(0, 0, 10, 4);
+        let base = Buffer::empty(area);
         let mut buf = Buffer::empty(area);
-        buf.set_string(2, 1, "one", ratatui::style::Style::new());
-        anim.window(true, (0, 0), &mut buf, area);
+        buf.set_string(2, 1, "menu", ratatui::style::Style::new());
         let before = buf.clone();
-        anim.window(true, (0, 1), &mut buf, area);
+        anim.popup("m", Some(1), &mut buf, &base, 0);
         assert_eq!(buf, before);
-        anim.popup("m", Some(1), &mut buf, &Buffer::empty(area), 0);
-        assert_eq!(buf, before);
+        assert!(anim.scroll(true, 0, (5, 5), area).is_none());
         assert!(!anim.active());
     }
 }
