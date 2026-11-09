@@ -1027,7 +1027,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let extra_w = cur_x.max(target.1) - out.starts[s_col];
     let s_row = (cur_r.floor() as usize).min(target.0);
     let extra_rows = (cur_r.ceil() as usize).max(target.0) - s_row + 1;
-    let big = Rect::new(0, 0, (area.width as usize + extra_w).min(4000) as u16, (area.height as usize + extra_rows * 4).min(2000) as u16);
+    let big = Rect::new(0, 0, (area.width as usize + extra_w).min(4000) as u16, (area.height as usize + extra_rows * out.heights.iter().copied().max().unwrap_or(1)).min(2000) as u16);
     let saved = (app.view.scroll, app.view.follow, app.view.page_rows, app.hits.len());
     app.view.scroll = (s_row, s_col);
     app.view.follow = false;

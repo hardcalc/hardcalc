@@ -80,12 +80,24 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
             }
             continue;
         }
-        match event::read()? {
-            // Windows also reports key releases.
-            Event::Key(k) if k.kind == KeyEventKind::Press => app.on_key(k),
-            Event::Mouse(m) => app.on_mouse(m),
-            Event::Paste(text) => app.on_paste(&text),
-            _ => {}
+        // Keys that are already waiting (key repeat, fast typing) are all
+        // handled before the next frame, so the screen does not lag behind.
+        // A mouse event ends the batch: the next one needs the new frame's
+        // click regions.
+        for _ in 0..64 {
+            match event::read()? {
+                // Windows also reports key releases.
+                Event::Key(k) if k.kind == KeyEventKind::Press => app.on_key(k),
+                Event::Mouse(m) => {
+                    app.on_mouse(m);
+                    break;
+                }
+                Event::Paste(text) => app.on_paste(&text),
+                _ => {}
+            }
+            if app.quit || !event::poll(std::time::Duration::ZERO)? {
+                break;
+            }
         }
     })();
 

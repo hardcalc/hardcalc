@@ -17,9 +17,9 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// How long popups take to slide in.
-const POPUP: Duration = Duration::from_millis(170);
+const POPUP: Duration = Duration::from_millis(100);
 /// How long the cube turn between tables takes.
-const CUBE: Duration = Duration::from_millis(420);
+const CUBE: Duration = Duration::from_millis(260);
 /// Camera distance of the cube, in half widths of the window.
 const CAMERA: f32 = 3.2;
 
@@ -62,6 +62,14 @@ struct ScrollState {
     dur: Duration,
 }
 
+/// How far 0..1 an animation of `dur` started at `start` is at `now`.
+fn fraction(now: Instant, start: Instant, dur: Duration) -> f32 {
+    if dur.is_zero() {
+        return 1.0;
+    }
+    (now.saturating_duration_since(start).as_secs_f32() / dur.as_secs_f32()).min(1.0)
+}
+
 pub fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
@@ -88,7 +96,7 @@ impl Anim {
 
     /// Progress 0..1 of an animation started at `start`; marks the frame active while < 1.
     fn progress(&mut self, start: Instant, dur: Duration) -> f32 {
-        let t = (self.now().saturating_duration_since(start).as_secs_f32() / dur.as_secs_f32().max(1e-3)).min(1.0);
+        let t = fraction(self.now(), start, dur);
         if t < 1.0 {
             self.active = true;
         }
@@ -163,14 +171,23 @@ impl Anim {
         if state.to != to {
             // From where it is now, at most a screen away.
             let (start, dur, from, old_to) = (state.start, state.dur, state.from, state.to);
-            let t = self.progress(start, dur);
+            let t = fraction(now, start, dur);
             let e = ease_out(t);
             let cur = (from.0 + (old_to.0 - from.0) * e, from.1 + (old_to.1 - from.1) * e);
             let max_rows = screen.height.max(1) as f32;
             let max_chars = screen.width.max(1) as f32 * 1.5;
             let cur = (cur.0.clamp(to.0 - max_rows, to.0 + max_rows).max(0.0), cur.1.clamp(to.1 - max_chars, to.1 + max_chars).max(0.0));
             let (dr, dc) = ((to.0 - cur.0).abs(), (to.1 - cur.1).abs());
-            let ms = (90.0 + 9.0 * dc).max(100.0 + 22.0 * dr).min(280.0);
+            // Short glides; quicker still when one is caught mid-way (keys
+            // held down), so the screen keeps up with the cursor. A single
+            // line cannot move more smoothly than at once.
+            let mut ms = (50.0 + 4.0 * dc).max(if dr > 1.0 { 60.0 + 6.0 * dr } else { 0.0 }).min(150.0);
+            if t < 1.0 {
+                ms *= 0.5;
+            }
+            if dc < 0.5 && dr <= 1.0 {
+                ms = 0.0;
+            }
             let state = self.scrolls.get_mut(&side).unwrap();
             *state = ScrollState { ident, from: cur, to, start: now, dur: Duration::from_millis(ms as u64) };
         }
