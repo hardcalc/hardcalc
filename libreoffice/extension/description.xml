@@ -3,7 +3,7 @@
              xmlns:d="http://openoffice.org/extensions/description/2006"
              xmlns:xlink="http://www.w3.org/1999/xlink">
   <identifier value="org.hardcalc.libreoffice"/>
-  <version value="0.1.4"/>
+  <version value="0.1.5"/>
   <platform value="all"/>
   <dependencies>
     <OpenOffice.org-minimal-version value="4.1" d:name="LibreOffice 7.0"/>
