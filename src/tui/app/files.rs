@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pending {
     /// The file dialog for opening.
-    Dialog,
+    /// The file dialog for opening; `true`: on the list of recent files.
+    Dialog(bool),
     Open(String),
     New,
 }
@@ -86,7 +87,7 @@ impl App {
 
     pub(super) fn run_pending(&mut self, action: Pending) {
         match action {
-            Pending::Dialog => self.show_file_dialog(Purpose::Open),
+            Pending::Dialog(recent) => self.show_file_dialog(Purpose::Open, recent),
             Pending::Open(name) => self.open_file(&name, true),
             Pending::New => self.replace_with(App::untitled()),
         }
@@ -131,6 +132,9 @@ impl App {
         match App::open(&path) {
             Ok(next) => {
                 let existed = path.exists();
+                if existed {
+                    crate::recent::add(&path);
+                }
                 let message = next.message.clone();
                 self.replace_with(next);
                 match message {

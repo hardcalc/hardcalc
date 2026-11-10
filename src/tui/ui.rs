@@ -1647,7 +1647,9 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
 /// ratio (cells are about twice as high as wide).
 fn page_slot(app: &App, area: Rect) -> Option<Rect> {
     let p = app.preview.as_ref()?;
-    let aspect = p.layout.width / p.layout.height;
+    let (across, down) = p.grid();
+    let (sw, sh) = if p.zoom > 0 { crate::print::sheet_size(&p.layout, across, down) } else { (p.layout.width, p.layout.height) };
+    let aspect = sw / sh;
     let mut rows = area.height.saturating_sub(2).max(1);
     let mut cols = (rows as f32 * 2.0 * aspect).round() as u16;
     if cols > area.width.saturating_sub(2) {
@@ -1706,8 +1708,13 @@ fn draw_preview_status(f: &mut Frame, app: &mut App, area: Rect) {
             let s = &app.print_setup;
             (
                 format!(
-                    "page {}/{} · {} · {:.0} pt{} · {} · PgUp/PgDn pages{} · Esc closes",
-                    p.page + 1,
+                    "page {}/{} · {} · {:.0} pt{} · {} · PgUp/PgDn pages · +/- zoom{} · Esc closes",
+                    if p.zoom > 0 {
+                        let (a, d) = p.grid();
+                        format!("{}–{}", p.page + 1, (p.page + a * d).min(p.layout.pages.len()))
+                    } else {
+                        (p.page + 1).to_string()
+                    },
                     p.layout.pages.len(),
                     paper_label(app),
                     p.layout.font_size,

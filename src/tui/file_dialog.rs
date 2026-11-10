@@ -25,7 +25,13 @@ pub struct Entry {
     pub modified: Option<SystemTime>,
     /// Short label from the program, e.g. the format of the file.
     pub tag: Option<&'static str>,
+    /// The whole path, for entries that do not live in the shown folder
+    /// (the list of recent files).
+    pub path: Option<PathBuf>,
 }
+
+/// The "folder" that stands for the list of recent files.
+const RECENT: &str = "\u{0}recent";
 
 /// A place in the sidebar, as in the Finder: a favourite folder or a location
 /// (disk, volume, cloud storage).
@@ -84,6 +90,10 @@ pub struct FileDialog {
     probed: Option<u64>,
     /// The sidebar covers the list (narrow window, set while drawing).
     side_only: bool,
+    /// Recently opened files, newest first; empty: no such list.
+    recent: Vec<PathBuf>,
+    /// The folder shown before the list of recent files.
+    before_recent: PathBuf,
 }
 
 impl FileDialog {
@@ -104,11 +114,55 @@ impl FileDialog {
             place: 0,
             probed: Some(0),
             side_only: false,
+            recent: Vec::new(),
+            before_recent: PathBuf::new(),
         };
         probe::start(std::time::Duration::from_millis(150));
         d.take_places();
         d.read();
         d
+    }
+
+    /// Offers the list of recently opened files: a place "Recent" in the
+    /// sidebar and Ctrl+R. `show` opens the dialog on that list.
+    pub fn with_recent(mut self, recent: Vec<PathBuf>, show: bool) -> FileDialog {
+        self.recent = recent;
+        self.add_recent_place();
+        if show {
+            self.show_recent();
+        }
+        self
+    }
+
+    fn add_recent_place(&mut self) {
+        if !self.recent.is_empty() && !self.places.iter().any(|p| p.path.as_os_str() == RECENT) {
+            self.places.insert(0, Place { name: "Recent".into(), path: PathBuf::from(RECENT), location: false });
+        }
+    }
+
+    fn in_recent(&self) -> bool {
+        self.dir.as_os_str() == RECENT
+    }
+
+    /// Ctrl+R: the list of recent files, and back to the folder.
+    fn toggle_recent(&mut self) {
+        if self.in_recent() {
+            self.dir = std::mem::take(&mut self.before_recent);
+            self.filter.clear();
+            self.read();
+        } else if !self.recent.is_empty() {
+            self.show_recent();
+        }
+    }
+
+    fn show_recent(&mut self) {
+        if !self.in_recent() {
+            self.before_recent = self.dir.clone();
+        }
+        self.dir = PathBuf::from(RECENT);
+        self.filter.clear();
+        self.in_places = false;
+        self.read();
     }
 
     /// Takes over the places once the probe in the background has found them.
@@ -118,6 +172,7 @@ impl FileDialog {
             // The selected place stays selected if it is still there.
             let selected = self.places.get(self.place).map(|p| p.path.clone());
             self.places = places;
+            self.add_recent_place();
             self.probed = Some(n);
             self.place = selected.and_then(|s| self.places.iter().position(|p| p.path == s)).unwrap_or(0);
             if self.places.is_empty() {
@@ -149,6 +204,21 @@ impl FileDialog {
     }
 
     fn read(&mut self) {
+        if self.in_recent() {
+            self.entries = self
+                .recent
+                .iter()
+                .filter_map(|p| {
+                    let meta = std::fs::metadata(p).ok()?;
+                    let name = p.file_name()?.to_string_lossy().into_owned();
+                    let tag = self.tag.and_then(|t| t(p));
+                    Some(Entry { name, dir: false, size: meta.len(), modified: meta.modified().ok(), tag, path: Some(p.clone()) })
+                })
+                .collect();
+            self.selected = 0;
+            self.scroll = 0;
+            return;
+        }
         let mut entries: Vec<Entry> = std::fs::read_dir(&self.dir)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
@@ -160,14 +230,14 @@ impl FileDialog {
                         let readable = !dir && (self.accept)(&name);
                         let tag = self.tag.filter(|_| readable).and_then(|t| t(&e.path()));
                         (!name.starts_with('.') && (dir || self.all_files || readable))
-                            .then(|| Entry { name, dir, size: meta.len(), modified: meta.modified().ok(), tag })
+                            .then(|| Entry { name, dir, size: meta.len(), modified: meta.modified().ok(), tag, path: None })
                     })
                     .collect()
             })
             .unwrap_or_default();
         entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
         if self.dir.parent().is_some() {
-            entries.insert(0, Entry { name: "..".into(), dir: true, size: 0, modified: None, tag: None });
+            entries.insert(0, Entry { name: "..".into(), dir: true, size: 0, modified: None, tag: None, path: None });
         }
         self.entries = entries;
         self.selected = 0;
@@ -262,6 +332,9 @@ impl FileDialog {
     }
 
     fn up(&mut self) {
+        if self.in_recent() {
+            return;
+        }
         if self.dir.parent().is_some() {
             self.enter_dir("..");
         }
@@ -274,7 +347,7 @@ impl FileDialog {
             self.enter_dir(&entry.name);
             return Action::None;
         }
-        Action::Chosen(self.dir.join(&entry.name))
+        Action::Chosen(entry.path.unwrap_or_else(|| self.dir.join(&entry.name)))
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Action {
@@ -312,6 +385,7 @@ impl FileDialog {
                 self.all_files = !self.all_files;
                 self.read();
             }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => self.toggle_recent(),
             KeyCode::Char('~') if self.filter.is_empty() => self.go_home(),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.filter.push(c);
@@ -374,7 +448,7 @@ impl FileDialog {
         }
         let buf = f.buffer_mut();
         // Folder, shortened from the left.
-        let dir = self.dir.display().to_string();
+        let dir = if self.in_recent() { "Recent files".to_string() } else { self.dir.display().to_string() };
         let skip = dir.width().saturating_sub(full_w.saturating_sub(1));
         buf.set_stringn(inner.x, inner.y, format!(" {}", skip_width(&dir, skip)), full_w, Style::new().bold().fg(Color::Cyan));
         let rows = inner.height as usize - 3;
@@ -442,6 +516,7 @@ impl FileDialog {
         let search = if self.filter.is_empty() { String::new() } else { format!(" search: {}▏", self.filter) };
         buf.set_stringn(inner.x, inner.bottom() - 2, &search, full_w, Style::new().fg(Color::Yellow));
         let all = if self.all_files { format!("Ctrl+A: {filter_label} only") } else { "Ctrl+A: all files".to_string() };
+        let all = if self.recent.is_empty() { all } else { format!("Ctrl+R: recent · {all}") };
         let keys = if self.in_places {
             " ↑↓ Enter: go there · Tab / Esc: back to the list".to_string()
         } else if self.places.is_empty() {

@@ -1900,6 +1900,7 @@ fn menu_bar_runs_commands() {
     key(&mut a, KeyCode::Down);
     key(&mut a, KeyCode::Down);
     key(&mut a, KeyCode::Down);
+    key(&mut a, KeyCode::Down);
     key(&mut a, KeyCode::Enter);
     assert!(matches!(&a.mode, Mode::Command { buf } if buf == "w "), "Save as…");
 }

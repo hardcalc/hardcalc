@@ -412,6 +412,7 @@ bar:
 | F7 / F8 | smaller / larger font                                     |
 | F9      | scope: current table · whole document · layouts           |
 | i       | image preview on/off                                      |
+| + / −   | zoom: several pages side by side (2, 4, 6, 12, 24), 0 back to one page |
 | F10/Esc | close                                                     |
 
 The scope **whole document** prints the file as a flow layout: headings,
@@ -583,7 +584,7 @@ For power users; the help (F1) lists them all.
 | `:sort [column] [desc]` | sort (without arguments: the current column, again: descending) |
 | `:addrow`, `:delrow`, `:addcol Name[:Type]`, `:delcol` | rows / columns |
 | `:footer [Name]` | add a footer row below the table (a summary per column) |
-| menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, Ctrl+A all files; a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter |
+| menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, Ctrl+A all files; a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter; the sidebar starts with **Recent** (the last 20 files opened or saved), also Ctrl+R in the dialog, menu *File → Recent files…* or `:recent` |
 | `:e file`, `:e! file` | open another file (xlsx/ods/csv are imported); with unsaved changes it asks, `!` discards them without asking |
 | `:append file` | append the tables, layers, charts, layouts, types, functions and text of another file; table names already in use get a number |
 | `:new`, `:new!` | new document with a playground |
@@ -597,6 +598,7 @@ For power users; the help (F1) lists them all.
 | `:slice Name`, `:scenario Name`, `:z [b\|Name]`, `:z rename Name`, `:z delete` | add, switch, rename and delete slices and scenarios |
 | `:functions` | tab with the functions |
 | `:print`, `:pdf [file]` | print preview / PDF |
+| `:recent` | the recently opened files |
 | `:import file`, `:export file` | import and export |
 | `:theme auto\|light\|dark`, `:keys` | color scheme, key diagnostics |
 | `:bands [on\|off]` | set off rows and columns in gray (default: on) |

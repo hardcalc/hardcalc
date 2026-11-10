@@ -94,6 +94,19 @@ pub struct Preview {
     pub page: usize,
     /// (x, y) scroll offset within the page, in cells.
     pub scroll: (usize, usize),
+    /// Index into [`PREVIEW_ZOOMS`]: how many pages are shown side by side.
+    pub zoom: usize,
+}
+
+/// Zoom steps of the print preview: pages across × down. The first is the
+/// single page, the others an overview that shows several pages at once.
+pub const PREVIEW_ZOOMS: [(usize, usize); 6] = [(1, 1), (2, 1), (2, 2), (3, 2), (4, 3), (6, 4)];
+
+impl Preview {
+    /// Pages across × down at the current zoom.
+    pub fn grid(&self) -> (usize, usize) {
+        PREVIEW_ZOOMS[self.zoom.min(PREVIEW_ZOOMS.len() - 1)]
+    }
 }
 
 /// Columns of the type overview.
@@ -424,6 +437,8 @@ pub struct App {
     /// Keep the cursor where a commit placed it instead of moving on.
     skip_move: bool,
     pub preview: Option<Preview>,
+    /// Zoom of the print preview, kept between previews.
+    pub preview_zoom: usize,
     /// Page setup, kept between previews.
     pub print_setup: PageSetup,
     pub layout_drag: Option<LayoutDrag>,
@@ -526,12 +541,18 @@ fn open_external(path: &Path) -> std::io::Result<()> {
     cmd.arg(path).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ())
 }
 
+/// The light band shade of row `r` (`None` for the unshaded rows).
+fn tui_band(r: usize) -> Option<ratatui::style::Color> {
+    super::theme::band(r % 2 == 1, false, true, true)
+}
+
 /// Sends a PDF to the default printer via CUPS `lp`.
 fn print_file(path: &Path) -> Result<String, String> {
     if cfg!(windows) {
         return Err("printing directly is not supported on Windows yet – use F3 Open and print from the viewer".into());
     }
-    let out = std::process::Command::new("lp").arg(path).output().map_err(|e| format!("cannot run lp: {e}"))?;
+    // Colour is asked for explicitly: a printer driver may default to grey.
+    let out = std::process::Command::new("lp").args(["-o", "print-color-mode=color"]).arg(path).output().map_err(|e| format!("cannot run lp: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -820,6 +841,7 @@ impl App {
             quit_armed: false,
             skip_move: false,
             preview: None,
+            preview_zoom: 0,
             print_setup: PageSetup::default(),
             layout_drag: None,
             layout_grab: false,
@@ -2235,8 +2257,16 @@ impl App {
                 (0..cols)
                     .map(|c| {
                         let v = self.table_cell_view_in((s, r, c), z);
-                        let color = if v.error { Some((190, 0, 0)) } else { v.style.fg.as_ref().and_then(print::print_color) };
-                        let bg = v.style.bg.as_ref().and_then(print::print_bg);
+                        let mut color = if v.error { Some((190, 0, 0)) } else { v.style.fg.as_ref().and_then(print::print_color) };
+                        let mut bg = v.style.bg.as_ref().and_then(print::print_bg);
+                        // As on screen: banded rows, and a rule violation in red.
+                        if bg.is_none() && self.bands && let Some(ratatui::style::Color::Rgb(r, g, b)) = tui_band(r) {
+                            bg = Some((r, g, b));
+                        }
+                        if v.violation {
+                            bg = Some((250, 205, 205));
+                            color = Some((150, 0, 0));
+                        }
                         let style = SpanStyle { bold: v.style.bold, italic: v.style.italic, color, shade: false, bg, wrap: v.style.wrap };
                         PrintCell { text: v.text, align: v.align, style }
                     })
@@ -2363,7 +2393,8 @@ impl App {
     pub fn open_preview(&mut self) {
         let setup = self.print_setup.clone();
         let layout = self.layout(&setup);
-        self.preview = Some(Preview { layout, page: 0, scroll: (0, 0) });
+        let zoom = self.preview_zoom;
+        self.preview = Some(Preview { layout, page: 0, scroll: (0, 0), zoom });
         self.message = None;
     }
 
@@ -2550,12 +2581,28 @@ impl App {
     /// The current preview page as a one-page PDF (input for the image preview).
     pub fn preview_page_pdf(&self) -> Option<Vec<u8>> {
         let p = self.preview.as_ref()?;
+        if p.zoom > 0 {
+            let (across, down) = p.grid();
+            return Some(print::to_pdf_sheet(&p.layout, p.page, across, down, &self.doc_title()));
+        }
         let page = Layout {
             pages: vec![p.layout.pages[p.page].clone()],
             graphics: vec![p.layout.graphics[p.page].clone()],
             ..p.layout.clone()
         };
         Some(print::to_pdf(&page, &self.doc_title()))
+    }
+
+    /// `-` / `+` in the print preview: zooms out (`by` > 0) to show more pages
+    /// side by side, or in; the overview is drawn as an image, since the text
+    /// grid cannot shrink.
+    pub fn zoom_preview(&mut self, by: isize) {
+        let Some(p) = &mut self.preview else { return };
+        p.zoom = (p.zoom as isize + by).clamp(0, PREVIEW_ZOOMS.len() as isize - 1) as usize;
+        self.preview_zoom = p.zoom;
+        if p.zoom > 0 {
+            self.image_mode = true;
+        }
     }
 
     fn key_preview(&mut self, key: KeyEvent) {
@@ -2565,16 +2612,20 @@ impl App {
         }
         let Some(p) = &mut self.preview else { return };
         let pages = p.layout.pages.len();
+        let group = if p.zoom > 0 { p.grid().0 * p.grid().1 } else { 1 };
         match key.code {
+            KeyCode::Char('+' | '=') => return self.zoom_preview(-1),
+            KeyCode::Char('-' | '_') => return self.zoom_preview(1),
+            KeyCode::Char('0') => return self.zoom_preview(isize::MIN / 2),
             KeyCode::Esc => self.preview = None,
             KeyCode::F(n) => self.preview_fkey(n),
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit_key(),
             KeyCode::PageDown | KeyCode::Char(' ') => {
-                p.page = (p.page + 1).min(pages - 1);
+                p.page = (p.page + group).min(pages - 1);
                 p.scroll.1 = 0;
             }
             KeyCode::PageUp => {
-                p.page = p.page.saturating_sub(1);
+                p.page = p.page.saturating_sub(group);
                 p.scroll.1 = 0;
             }
             KeyCode::Home => p.page = 0,
@@ -3669,6 +3720,7 @@ impl App {
                 Ok(()) => {
                     self.bundle = Some(bundle);
                     self.dirty = false;
+                    crate::recent::add(&self.path);
                     self.info(format!("written {}", self.path.display()));
                     if let Some(action) = self.after_save.take() {
                         self.run_pending(action);
@@ -3683,6 +3735,7 @@ impl App {
         match crate::storage::write_text(&self.path, &text, self.compression) {
             Ok(bytes) => {
                 self.dirty = false;
+                crate::recent::add(&self.path);
                 let how = match self.compression {
                     crate::storage::Compression::None => String::new(),
                     c => format!(", {}", c.name()),
@@ -5020,6 +5073,7 @@ impl App {
             "e" | "edit" | "open" | "e!" | "edit!" | "open!" if args.is_empty() => self.open_file_dialog(Purpose::Open),
             "e" | "edit" | "open" | "e!" | "edit!" | "open!" => self.open_file(&args.join(" "), cmd.ends_with('!')),
             "new" | "new!" => self.new_file(cmd == "new!"),
+            "recent" => self.open_recent_dialog(),
             "append" if args.is_empty() => self.open_file_dialog(Purpose::Append),
             "append" => self.append_file(&args.join(" ")),
             "bands" => {

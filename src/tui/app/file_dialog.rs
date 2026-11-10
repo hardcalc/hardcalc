@@ -19,19 +19,28 @@ impl App {
     /// The file dialog; for opening, unsaved changes are settled first.
     pub fn open_file_dialog(&mut self, purpose: Purpose) {
         match purpose {
-            Purpose::Open => self.after_unsaved(super::files::Pending::Dialog, false),
-            Purpose::Append => self.show_file_dialog(purpose),
+            Purpose::Open => self.after_unsaved(super::files::Pending::Dialog(false), false),
+            Purpose::Append => self.show_file_dialog(purpose, false),
         }
     }
 
+    /// `:recent`: the open dialog, showing the recently opened files.
+    pub fn open_recent_dialog(&mut self) {
+        self.after_unsaved(super::files::Pending::Dialog(true), false);
+    }
+
     /// Shows the file dialog in the folder of the current file.
-    pub(super) fn show_file_dialog(&mut self, purpose: Purpose) {
+    pub(super) fn show_file_dialog(&mut self, purpose: Purpose, recent: bool) {
         let dir = match self.path.parent() {
             Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
             _ => PathBuf::from("."),
         };
         let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
-        self.file_dialog = Some(FileDialog::new(purpose, dir, is_document));
+        let mut dialog = FileDialog::new(purpose, dir, is_document);
+        if purpose == Purpose::Open {
+            dialog = dialog.with_recent(crate::recent::load(), recent);
+        }
+        self.file_dialog = Some(dialog);
         self.message = None;
     }
 

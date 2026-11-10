@@ -28,6 +28,7 @@ pub const COMMANDS: &[Command] = &[
     c("new", "", "new document with a playground"),
     c("e", "[file]", "open a file (without a name: the file dialog)"),
     c("e!", "<file>", "open a file, discarding unsaved changes"),
+    c("recent", "", "the recently opened files"),
     c("append", "[file]", "add the tables, charts, layouts … of a file (xlsx/ods/csv: import)"),
     c("import", "<file>", "add the sheets of a spreadsheet as tables"),
     c("export", "<file>", "write as .xlsx, .ods, .csv or .tsv"),
@@ -112,6 +113,7 @@ const fn m(menu: usize, label: &'static str, run: &'static str, key: &'static st
 pub const MENU_ITEMS: &[MenuItem] = &[
     m(0, "New", "new", ":new"),
     m(0, "Open…", "e", "Ctrl+E"),
+    m(0, "Recent files…", "recent", ":recent"),
     m(0, "Append / import…", "append", ":append"),
     m(0, "Save", "w", "F2"),
     m(0, "Save as…", "w ", ":w file"),

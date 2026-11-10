@@ -1061,9 +1061,45 @@ fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
 
 /// Serializes the layout as a PDF document.
 pub fn to_pdf(layout: &Layout, title: &str) -> Vec<u8> {
+    let pages = (0..layout.pages.len()).map(|i| (layout.width, layout.height, page_content(layout, i))).collect();
+    assemble(pages, title)
+}
+
+/// Gap between the pages of an overview sheet, in points.
+const SHEET_GAP: f32 = 24.0;
+
+/// Size of the overview sheet for `across` × `down` pages.
+pub fn sheet_size(layout: &Layout, across: usize, down: usize) -> (f32, f32) {
+    (
+        SHEET_GAP + across as f32 * (layout.width + SHEET_GAP),
+        SHEET_GAP + down as f32 * (layout.height + SHEET_GAP),
+    )
+}
+
+/// One PDF page showing the pages from `first` on, `across` × `down` of them
+/// side by side on a dark ground – an overview, as the print preview zooms out.
+pub fn to_pdf_sheet(layout: &Layout, first: usize, across: usize, down: usize, title: &str) -> Vec<u8> {
+    let (w, h) = sheet_size(layout, across, down);
+    let mut out: Vec<u8> = format!("0.35 g 0 0 {w:.2} {h:.2} re f\n").into_bytes();
+    for k in 0..across * down {
+        let index = first + k;
+        if index >= layout.pages.len() {
+            break;
+        }
+        let x = SHEET_GAP + (k % across) as f32 * (layout.width + SHEET_GAP);
+        let y = h - (SHEET_GAP + (k / across + 1) as f32 * (layout.height + SHEET_GAP) - SHEET_GAP);
+        out.extend(format!("q 1 0 0 1 {x:.2} {y:.2} cm\n").bytes());
+        out.extend(page_content(layout, index));
+        out.extend(b"Q\n");
+    }
+    assemble(vec![(w, h, out)], title)
+}
+
+/// A PDF file from pages of (width, height, content stream).
+fn assemble(sheets: Vec<(f32, f32, Vec<u8>)>, title: &str) -> Vec<u8> {
     let mut objects: Vec<Vec<u8>> = Vec::new();
     // 1 catalog, 2 pages, 3–6 fonts, 7 info, then a page and its content per page.
-    let n = layout.pages.len();
+    let n = sheets.len();
     let page_ids: Vec<usize> = (0..n).map(|i| 8 + 2 * i).collect();
     objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
     let kids: Vec<String> = page_ids.iter().map(|id| format!("{id} 0 R")).collect();
@@ -1077,18 +1113,15 @@ pub fn to_pdf(layout: &Layout, title: &str) -> Vec<u8> {
     info.extend(pdf_string(title));
     info.extend(b" >>");
     objects.push(info);
-    for (i, &page_id) in page_ids.iter().enumerate() {
+    for (&page_id, (width, height, content)) in page_ids.iter().zip(sheets) {
         objects.push(
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] \
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.2} {height:.2}] \
                  /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents {} 0 R >>",
-                layout.width,
-                layout.height,
                 page_id + 1
             )
             .into_bytes(),
         );
-        let content = page_content(layout, i);
         let mut stream = format!("<< /Length {} >>\nstream\n", content.len()).into_bytes();
         stream.extend(content);
         stream.extend(b"\nendstream");
@@ -1174,6 +1207,18 @@ mod tests {
         let xref = text.rfind("startxref\n").unwrap();
         let start: usize = text[xref + 10..].lines().next().unwrap().parse().unwrap();
         assert!(pdf[start..].starts_with(b"xref"));
+    }
+
+    #[test]
+    fn overview_sheet_is_one_page_with_all_pages() {
+        let layout = paginate("T", &[PrintItem::Table(table(120, 3))], &PageSetup::default(), "f");
+        assert!(layout.pages.len() >= 3);
+        let pdf = to_pdf_sheet(&layout, 0, 3, 1, "t");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Count 1"));
+        assert_eq!(text.matches(" cm\n").count(), 3);
+        let (w, h) = sheet_size(&layout, 3, 1);
+        assert!(w > 3.0 * layout.width && h > layout.height);
     }
 
     #[test]

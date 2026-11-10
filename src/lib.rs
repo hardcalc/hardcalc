@@ -24,6 +24,7 @@ pub mod sheet;
 pub mod storage;
 pub mod print;
 pub mod quantity;
+pub mod recent;
 pub mod text;
 pub mod tui;
 pub mod types;

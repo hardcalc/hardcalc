@@ -44,7 +44,13 @@ pub(crate) fn detect_light() -> Option<bool> {
 /// Runs the UI on `path`, or on a new untitled document.
 pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     let mut app = match path {
-        Some(path) => App::open(path)?,
+        Some(path) => {
+            let app = App::open(path)?;
+            if path.exists() {
+                crate::recent::add(path);
+            }
+            app
+        }
         None => App::untitled(),
     };
     if let Some(t) = std::env::var("HARDCALC_THEME").ok().and_then(|v| theme::ThemeSetting::parse(&v)) {
