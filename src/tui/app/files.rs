@@ -36,7 +36,7 @@ pub fn new_document() -> Document {
     table.shape = Shape::Playground;
     table.columns.truncate(1);
     table.rows.clear();
-    Document { blocks: vec![Block::Table(table)] }
+    Document { blocks: vec![Block::Table(table)], version: Some(crate::model::FORMAT_VERSION) }
 }
 
 impl App {

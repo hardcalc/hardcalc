@@ -19,7 +19,11 @@ fn compressed_documents_stay_compressed() {
     app.save(None);
     let (text, c) = read_text(&path).unwrap();
     assert_eq!(c, Compression::Gzip);
-    assert_eq!(hardcalc::parse(&text).unwrap(), hardcalc::parse(BUDGET).unwrap());
+    // Saved by hardcalc: the same document, now with its format version.
+    let saved = hardcalc::parse(&text).unwrap();
+    assert_eq!(saved.blocks, hardcalc::parse(BUDGET).unwrap().blocks);
+    assert_eq!(saved.version, Some(hardcalc::model::FORMAT_VERSION));
+    assert!(text.starts_with("<!-- hardcalc 1 -->\n\n# Budget 2026"), "{text}");
     // :compress zstd saves as budget.hcmd.zst.
     app.command("compress zstd");
     let zst = d.join("budget.hcmd.zst");
@@ -28,7 +32,7 @@ fn compressed_documents_stay_compressed() {
     // :compress none: plain Markdown again.
     app.command("compress none");
     assert_eq!(app.path, d.join("budget.hcmd"));
-    assert!(std::fs::read_to_string(d.join("budget.hcmd")).unwrap().starts_with('#'));
+    assert!(std::fs::read_to_string(d.join("budget.hcmd")).unwrap().starts_with("<!-- hardcalc 1 -->"));
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -51,6 +55,8 @@ fn cli_reads_compressed_files() {
     write_text(&path, BUDGET, Compression::Zstd).unwrap();
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_hardcalc")).arg("fmt").arg(&path).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), hardcalc::write(&hardcalc::parse(BUDGET).unwrap()));
+    let mut canonical = hardcalc::parse(BUDGET).unwrap();
+    canonical.stamp();
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), hardcalc::write(&canonical));
     std::fs::remove_dir_all(&d).unwrap();
 }

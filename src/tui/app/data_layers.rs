@@ -5,7 +5,7 @@
 //! slice's or scenario's own cells; cleared cells take the table's again.
 
 use super::{table_mut, App, ViewKind};
-use crate::engine::{layer_letters, letters_to_layer};
+use crate::engine::layer_letters;
 use crate::model::{DataLayer, LayerKind, Table};
 
 /// Brings every data layer to the table's size, so that lines can be
@@ -232,8 +232,7 @@ impl App {
             let list: Vec<String> = (0..=self.layer_count()).map(|z| self.layer_title(z)).collect();
             return self.info(format!("z: {} – :z rename Name, :z delete", list.join(" · ")));
         };
-        // A name first: `plan` is a name, although it could be read as letters.
-        let z = self.wb.sheets[self.view.sheet].layer_index(arg).or_else(|| letters_to_layer(arg));
+        let z = self.wb.sheets[self.view.sheet].layer_named_or_lettered(arg);
         match z {
             Some(z) if z <= self.layer_count() => self.set_layer(z),
             _ => self.error(format!("no '{arg}' on the z axis – :z lists them")),

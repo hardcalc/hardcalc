@@ -91,6 +91,12 @@ impl Sheet {
         self.layers.iter().position(|l| l.name == name).map(|i| i + 1)
     }
 
+    /// Data layer `z` by its name or, if no level has that name, by its
+    /// letter (`February`, `b`).
+    pub fn layer_named_or_lettered(&self, s: &str) -> Option<usize> {
+        self.layer_index(s).or_else(|| letters_to_layer(s).filter(|&z| z <= self.layers.len()))
+    }
+
     /// The name of data layer `z`; the letter if it has none.
     pub fn layer_label(&self, z: usize) -> String {
         match z {

@@ -9,7 +9,10 @@ pub fn write(doc: &Document) -> String {
     crate::refs::normalize_table_dots(&mut doc);
     // Numbers are written with a decimal point, whatever was typed or read.
     crate::engine::normalize_numbers(&mut doc);
-    let parts: Vec<String> = doc.blocks.iter().map(write_block).collect();
+    let mut parts: Vec<String> = doc.blocks.iter().map(write_block).collect();
+    if let Some(v) = doc.version {
+        parts.insert(0, version_line(v));
+    }
     let mut out = parts.join("\n\n");
     out.push('\n');
     out
@@ -101,7 +104,12 @@ fn grid_lines(header: &[String], rows: &[Vec<String>], compact: bool) -> Vec<Str
 fn fence(info: &str, body: &[String]) -> String {
     // A longer fence than any line of backticks in the body.
     let longest = body.iter().map(|l| l.trim_start().chars().take_while(|c| *c == '`').count()).max().unwrap_or(0);
-    let marker = "`".repeat(if longest >= 3 { longest + 1 } else { 3 });
+    let mut marker = "`".repeat(if longest >= 3 { longest + 1 } else { 3 });
+    if info.contains('`') {
+        // Backticks cannot open a block whose info holds one; tildes can.
+        let longest = body.iter().map(|l| l.trim().chars().take_while(|c| *c == '~').count()).max().unwrap_or(0);
+        marker = "~".repeat(if longest >= 3 { longest + 1 } else { 3 });
+    }
     let mut out = format!("{marker}{info}\n");
     for l in body {
         out.push_str(l);

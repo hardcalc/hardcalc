@@ -34,12 +34,12 @@ fn formulas_back_to_excel() {
     assert_eq!(x(0, 0, "=round(B1)").unwrap(), "=ROUND(B2,0)");
     assert!(x(k, 6, "=spark(Expenses.Gross)").is_err());
     // Range arguments take the column, value arguments this row's cell.
-    assert_eq!(x(0, 0, "=sumif(Status, \"open\", Amount)").unwrap(), "=SUMIF($C$2:$C$4,\"open\",$B$2:$B$4)");
-    assert_eq!(x(0, 1, "=left(Item, 3) & upper(Status)").unwrap(), "=LEFT(A3,3)&UPPER(C3)");
-    assert_eq!(x(k, 0, "=xlookup(\"Power\", Expenses.Item, Expenses.Amount)").unwrap(), "=XLOOKUP(\"Power\",'Expenses'!$A$2:$A$4,'Expenses'!$B$2:$B$4)");
-    assert_eq!(x(0, 1, "=sum(@Amount, [@Gross])").unwrap(), "=SUM(B3,E3)", "@: this row even in an aggregate");
+    assert_eq!(x(0, 0, "=sumif(Status; \"open\"; Amount)").unwrap(), "=SUMIF($C$2:$C$4,\"open\",$B$2:$B$4)");
+    assert_eq!(x(0, 1, "=left(Item; 3) & upper(Status)").unwrap(), "=LEFT(A3,3)&UPPER(C3)");
+    assert_eq!(x(k, 0, "=xlookup(\"Power\"; Expenses.Item; Expenses.Amount)").unwrap(), "=XLOOKUP(\"Power\",'Expenses'!$A$2:$A$4,'Expenses'!$B$2:$B$4)");
+    assert_eq!(x(0, 1, "=sum(@Amount; [@Gross])").unwrap(), "=SUM(B3,E3)", "@: this row even in an aggregate");
     assert_eq!(x(k, 1, "=Expenses[@Amount]").unwrap(), "='Expenses'!B3");
-    assert_eq!(x(0, 0, "=concatenate(Item, \"!\")").unwrap(), "=CONCAT($A$2:$A$4,\"!\")", "the whole column, as in hardcalc");
+    assert_eq!(x(0, 0, "=concatenate(Item; \"!\")").unwrap(), "=CONCAT($A$2:$A$4,\"!\")", "the whole column, as in hardcalc");
 }
 
 #[test]
@@ -138,13 +138,13 @@ fn ods_content_has_styles_notes_and_validation() {
 
 #[test]
 fn user_functions_are_inlined() {
-    let src = format!("{BUDGET}\n```functions\ngross(x) = x * 1.19\nshare(t, g) = t / g\nfak(n) = if(n <= 1, 1, n * fak(n - 1))\n```\n");
+    let src = format!("{BUDGET}\n```functions\ngross(x) = x * 1.19\nshare(t; g) = t / g\nfak(n) = if(n <= 1; 1; n * fak(n - 1))\n```\n");
     let doc = parse(&src).unwrap();
     let (mut wb, _) = Workbook::from_document(&doc);
     wb.eval_all();
     let names: Vec<String> = wb.sheets.iter().map(|s| s.name.clone().unwrap_or_default()).collect();
     assert_eq!(formula_to_excel(&wb, &names, 0, 1, "=gross(Amount)").unwrap(), "=(B3*1.19)");
-    assert_eq!(formula_to_excel(&wb, &names, 0, 0, "=share(B1, sum(B))").unwrap(), "=(B2/SUM($B$2:$B$4))");
+    assert_eq!(formula_to_excel(&wb, &names, 0, 0, "=share(B1; sum(B))").unwrap(), "=(B2/SUM($B$2:$B$4))");
     assert!(formula_to_excel(&wb, &names, 0, 0, "=fak(3)").is_err(), "recursion stays a value with note");
 }
 

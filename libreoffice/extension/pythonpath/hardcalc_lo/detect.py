@@ -6,7 +6,8 @@ import re
 SUFFIXES = (".hcmd",)
 
 _MARKERS = re.compile(
-    r"^(#{1,6} [^\n]*::\s*(matrix|vector|tensor|playground)\b"
+    r"^(<!-- hardcalc \d+ -->"
+    r"|#{1,6} [^\n]*::\s*(matrix|vector|tensor|playground)\b"
     r"|```(types|functions|hardcalc|footer|layer |slice |scenario |chart |layout ))",
     re.M,
 )

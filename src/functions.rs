@@ -46,7 +46,7 @@ impl FnDef {
         if !is_identifier(&name) {
             return Err(format!("'{name}' is not a valid function name"));
         }
-        let params: Vec<String> = params.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
+        let params: Vec<String> = params.split(';').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
         if let Some(bad) = params.iter().find(|p| !is_identifier(p)) {
             return Err(format!("'{bad}' is not a valid parameter name"));
         }
@@ -54,7 +54,7 @@ impl FnDef {
     }
 
     pub fn to_line(&self) -> String {
-        let mut line = format!("{}({}) = {}", self.name, self.params.join(", "), self.body);
+        let mut line = format!("{}({}) = {}", self.name, self.params.join("; "), self.body);
         if let Some(d) = &self.description {
             line.push_str(&format!("   # {d}"));
         }
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn inlining() {
-        let f = FnDef::parse("share(t, g) = t / g").unwrap().compile().unwrap();
+        let f = FnDef::parse("share(t; g) = t / g").unwrap().compile().unwrap();
         let args = [Expr::Name("B1".into()), Expr::Call("sum".into(), vec![Expr::Name("B".into())])];
         assert_eq!(substitute(&f.body, &f.params, &args), parse_formula("B1 / sum(B)").unwrap());
     }

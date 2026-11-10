@@ -93,7 +93,7 @@ fn type_diagnostics() {
 #[test]
 fn functions_and_dates() {
     let mut wb = book(
-        "| d | x |\n|---|---|\n| 2026-10-08 | 4 |\n| 2026-12-24 | =if(A2 - A1 > 30{d}, sqrt(B1), 0) |\n| =A2 - A1 | =round(mean(B1:B2) / 3, 2) |\n",
+        "| d | x |\n|---|---|\n| 2026-10-08 | 4 |\n| 2026-12-24 | =if(A2 - A1 > 30{d}; sqrt(B1); 0) |\n| =A2 - A1 | =round(mean(B1:B2) / 3; 2) |\n",
     );
     assert_eq!(wb.value((0, 1, 1)), Value::num(2.0));
     assert_eq!(wb.value((0, 2, 0)), Value::Num(77.0, Unit::symbol("d")));
@@ -113,18 +113,18 @@ fn references_to_other_tables() {
 #[test]
 fn user_functions() {
     let src = format!(
-        "{BUDGET}\n```functions\ngross(x) = x * 1.19   # with VAT\nshare(part, total) = part / total\n\
-         fak(n) = if(n <= 1, 1, n * fak(n - 1))\nendlos(n) = endlos(n + 1)\nposten(Amount) = Amount * 2\n```\n"
+        "{BUDGET}\n```functions\ngross(x) = x * 1.19   # with VAT\nshare(part; total) = part / total\n\
+         fak(n) = if(n <= 1; 1; n * fak(n - 1))\nendlos(n) = endlos(n + 1)\nposten(Amount) = Amount * 2\n```\n"
     );
     let mut wb = book(&src);
     let a = wb.sheet_index("Expenses").unwrap();
     assert!(matches!(wb.eval_formula("gross(B2)", a), Value::Num(n, _) if (n - 101.745).abs() < 1e-9));
-    assert!(matches!(wb.eval_formula("share(B1, sum(B))", a), Value::Num(n, _) if (n - 1200.0 / 1325.49).abs() < 1e-12));
+    assert!(matches!(wb.eval_formula("share(B1; sum(B))", a), Value::Num(n, _) if (n - 1200.0 / 1325.49).abs() < 1e-12));
     // Columns as arguments: element-wise, units kept.
     assert!(matches!(wb.eval_formula("sum(gross(Amount))", a), Value::Num(n, u) if (n - 1577.3331).abs() < 1e-9 && u == Unit::symbol("€")));
     assert_eq!(wb.eval_formula("fak(5)", a), Value::num(120.0));
     assert!(matches!(wb.eval_formula("endlos(1)", a), Value::Error(e) if e.contains("nested too deeply")));
-    assert!(matches!(wb.eval_formula("gross(1, 2)", a), Value::Error(e) if e.contains("expects 1 argument")));
+    assert!(matches!(wb.eval_formula("gross(1; 2)", a), Value::Error(e) if e.contains("expects 1 argument")));
     // A parameter shadows a column of the same name.
     assert_eq!(wb.eval_formula("posten(3)", a), Value::num(6.0));
 }
@@ -186,48 +186,48 @@ mod block1_functions {
 
     #[test]
     fn month_arithmetic() {
-        assert_eq!(text("edate(B1, 1)"), "2024-02-29");
-        assert_eq!(text("edate(date(2024,1,31), -2)"), "2023-11-30");
-        assert_eq!(text("edate(date(2023,12,15), 1)"), "2024-01-15");
-        assert_eq!(text("eomonth(B3, 12)"), "2021-02-28");
-        assert_eq!(text("eomonth(date(2024,2,10), 0)"), "2024-02-29");
-        assert!(eval("edate(B2, 1)").is_error(), "an empty cell is no date");
+        assert_eq!(text("edate(B1; 1)"), "2024-02-29");
+        assert_eq!(text("edate(date(2024;1;31); -2)"), "2023-11-30");
+        assert_eq!(text("edate(date(2023;12;15); 1)"), "2024-01-15");
+        assert_eq!(text("eomonth(B3; 12)"), "2021-02-28");
+        assert_eq!(text("eomonth(date(2024;2;10); 0)"), "2024-02-29");
+        assert!(eval("edate(B2; 1)").is_error(), "an empty cell is no date");
     }
 
     #[test]
     fn datedif_as_calc_computes_it() {
-        let d = |a: &str, b: &str, u: &str| text(&format!("datedif({a}, {b}, \"{u}\")"));
-        assert_eq!(d("date(2020,2,29)", "date(2024,2,28)", "Y"), "3");
-        assert_eq!(d("date(2020,1,15)", "date(2024,3,10)", "M"), "49");
-        assert_eq!(d("date(2020,1,15)", "date(2024,3,10)", "YM"), "1");
-        assert_eq!(d("date(2020,1,15)", "date(2020,1,25)", "d"), "10");
+        let d = |a: &str, b: &str, u: &str| text(&format!("datedif({a}; {b}; \"{u}\")"));
+        assert_eq!(d("date(2020;2;29)", "date(2024;2;28)", "Y"), "3");
+        assert_eq!(d("date(2020;1;15)", "date(2024;3;10)", "M"), "49");
+        assert_eq!(d("date(2020;1;15)", "date(2024;3;10)", "YM"), "1");
+        assert_eq!(d("date(2020;1;15)", "date(2020;1;25)", "d"), "10");
         // The roll-over cases from Calc's source.
-        assert_eq!(d("date(2012,1,28)", "date(2012,3,1)", "MD"), "2");
-        assert_eq!(d("date(2011,1,29)", "date(2011,3,1)", "MD"), "0");
-        assert_eq!(d("date(1988,6,22)", "date(2012,5,11)", "YD"), "324");
-        assert!(eval("datedif(date(2020,1,15), date(2020,1,10), \"D\")").is_error());
-        assert!(eval("datedif(date(2020,1,15), date(2021,1,10), \"X\")").is_error());
+        assert_eq!(d("date(2012;1;28)", "date(2012;3;1)", "MD"), "2");
+        assert_eq!(d("date(2011;1;29)", "date(2011;3;1)", "MD"), "0");
+        assert_eq!(d("date(1988;6;22)", "date(2012;5;11)", "YD"), "324");
+        assert!(eval("datedif(date(2020;1;15); date(2020;1;10); \"D\")").is_error());
+        assert!(eval("datedif(date(2020;1;15); date(2021;1;10); \"X\")").is_error());
     }
 
     #[test]
     fn ifs_and_switch_take_one_branch() {
-        assert_eq!(text("ifs(1>2, \"a\", 2>1, \"b\")"), "b");
-        assert_eq!(text("ifs(true, 1, 1/0, 2)"), "1");
-        assert!(eval("ifs(1>2, 1)").is_error());
-        assert_eq!(text("switch(3, 1, \"one\", 3, \"three\", \"other\")"), "three");
-        assert_eq!(text("switch(9, 1, \"one\", \"other\")"), "other");
-        assert_eq!(text("switch(\"X\", \"x\", 1, 2)"), "1", "text without regard to case");
-        assert!(eval("switch(9, 1, 2)").is_error());
-        assert_eq!(text("switch(1, 1, 5, 1/0)"), "5");
+        assert_eq!(text("ifs(1>2; \"a\"; 2>1; \"b\")"), "b");
+        assert_eq!(text("ifs(true; 1; 1/0; 2)"), "1");
+        assert!(eval("ifs(1>2; 1)").is_error());
+        assert_eq!(text("switch(3; 1; \"one\"; 3; \"three\"; \"other\")"), "three");
+        assert_eq!(text("switch(9; 1; \"one\"; \"other\")"), "other");
+        assert_eq!(text("switch(\"X\"; \"x\"; 1; 2)"), "1", "text without regard to case");
+        assert!(eval("switch(9; 1; 2)").is_error());
+        assert_eq!(text("switch(1; 1; 5; 1/0)"), "5");
     }
 
     #[test]
     fn conditional_aggregates() {
-        assert_eq!(text("averageifs(Amount, Grp, \"x\")"), "7.5");
-        assert_eq!(text("minifs(Amount, Grp, \"x\")"), "5");
-        assert_eq!(text("maxifs(Amount, Grp, \"x\")"), "10");
-        assert_eq!(text("maxifs(Amount, Grp, \"z\")"), "0", "no match gives 0, like Calc");
-        assert_eq!(text("sumifs(Amount, Grp, \"x\")"), "15");
+        assert_eq!(text("averageifs(Amount; Grp; \"x\")"), "7.5");
+        assert_eq!(text("minifs(Amount; Grp; \"x\")"), "5");
+        assert_eq!(text("maxifs(Amount; Grp; \"x\")"), "10");
+        assert_eq!(text("maxifs(Amount; Grp; \"z\")"), "0", "no match gives 0, like Calc");
+        assert_eq!(text("sumifs(Amount; Grp; \"x\")"), "15");
     }
 }
 

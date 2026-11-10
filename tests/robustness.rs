@@ -114,7 +114,7 @@ fn notes_on_what_is_dropped_or_double() {
     assert_eq!(notes.len(), 2, "{notes:?}");
     assert_eq!(notes[0].line, 5);
     assert!(notes[0].message.contains("3 cells"));
-    assert!(notes[1].message.contains("used before"));
+    assert!(notes[1].message.contains("only in upper and lower case"));
     assert!(hardcalc::parse::notes("| a | b |\n|---|---|\n| 1 | 2 |\n").is_empty());
 }
 
@@ -128,4 +128,83 @@ fn charts_name_columns_like_formulas() {
         let chart = hardcalc::chart::resolve(&spec, &mut wb).unwrap();
         assert_eq!(chart.series.len(), 1, "{data}");
     }
+}
+
+#[test]
+fn second_round() {
+    // A table below a list item is a table; indented code is not.
+    assert_eq!(tables("1. Step\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n").len(), 1);
+    assert!(tables("Text\n\n    | a | b |\n    |---|---|\n").is_empty());
+    // A comment that is never closed hides nothing, and says so.
+    let src = "<!-- TODO\n\n## T :: matrix\n\n| a |\n|---|\n| 1 |\n";
+    assert_eq!(tables(src)[0].0.as_deref(), Some("T"));
+    assert!(hardcalc::parse::notes(src)[0].message.contains("not closed"));
+    // Names differing only in case are two tables; the note says what is so.
+    let notes = hardcalc::parse::notes("## T :: matrix\n\n| a |\n|---|\n\n## t :: matrix\n\n| a |\n|---|\n\n## T :: matrix\n\n| a |\n|---|\n");
+    assert!(notes[0].message.contains("only in upper and lower case") && notes[1].message.contains("only the first"), "{notes:?}");
+    // A block whose info holds a backtick is written with tildes and read back.
+    let src = "~~~ a`b\n| x |\n|---|\n~~~\n";
+    let out = write(&parse(src).unwrap());
+    assert_eq!(write(&parse(&out).unwrap()), out);
+    assert!(tables(&out).is_empty());
+    // Thousands separators are not written, whichever they were.
+    let out = write(&parse("| a |\n|---|\n| 1,234,567 |\n| 1 200,5 kg |\n| -1e3 |\n| +5 |\n").unwrap());
+    assert!(out.contains("| 1234567 |") && out.contains("| 1200.5 kg |") && out.contains("| -1e3 |") && out.contains("| +5 |"), "{out}");
+    assert_eq!(hardcalc::parse::split_header("Time 12:00"), ("Time 12:00".to_string(), None));
+}
+
+#[test]
+fn text_that_starts_with_an_equals_sign() {
+    let src = "## T :: matrix\n\n| k | v:text | n |\n|---|---|---|\n| \\=ok | \\=1+2 | =len(A1) |\n";
+    let doc = parse(src).unwrap();
+    assert_eq!(write(&doc), src);
+    let (mut wb, diags) = hardcalc::Workbook::from_document(&doc);
+    assert!(diags.is_empty(), "{diags:?}");
+    assert_eq!(wb.display((0, 0, 0)), "=ok");
+    assert_eq!(wb.display((0, 0, 1)), "=1+2");
+    assert_eq!(wb.display((0, 0, 2)), "3");
+}
+
+#[test]
+fn unknown_colors_are_errors() {
+    use hardcalc::layers::CellStyle;
+    for ok in ["fg red", "bg light-blue", "fg #ff8800 bold", "fg none", "bg Grey"] {
+        assert!(CellStyle::parse(ok).1.is_empty(), "{ok}");
+    }
+    for bad in ["fg nocolor", "bg #12", "fg purple"] {
+        assert_eq!(CellStyle::parse(bad).1.len(), 1, "{bad}");
+    }
+}
+
+#[test]
+fn format_version_and_argument_separators() {
+    use hardcalc::model::FORMAT_VERSION;
+    // A file from before the versions: `,` between arguments is read and written as `;`.
+    let old = "## T :: matrix\n\n| a | b | c |\n|---|---|---|\n| 1 | 2 | =sum(A1, B1) + T[1, 2] & left(\"a,b\", 1) |\n\nSum {=sum(T!a, T!b)}.\n\n```functions\nshare(part, total) = part / total   # (part, total)\n```\n";
+    let mut doc = parse(old).unwrap();
+    assert_eq!(doc.version, None);
+    let out = write(&doc);
+    assert!(out.contains("| =sum(A1; B1) + T[1, 2] & left(\"a,b\"; 1) |"), "{out}");
+    assert!(out.contains("{=sum(T!a; T!b)}") && out.contains("share(part; total) = part / total   # (part, total)"), "{out}");
+    assert!(!out.contains("<!-- hardcalc"), "the library writes the version the document has");
+    // Saved by hardcalc, it names the version – and is then read strictly.
+    doc.stamp();
+    let stamped = write(&doc);
+    assert!(stamped.starts_with(&format!("<!-- hardcalc {FORMAT_VERSION} -->\n\n## T :: matrix")), "{stamped}");
+    let again = parse(&stamped).unwrap();
+    assert_eq!(again.version, Some(FORMAT_VERSION));
+    assert_eq!(write(&again), stamped);
+    let strict = stamped.replace("=sum(A1; B1)", "=sum(A1, B1)");
+    let (mut wb, _) = hardcalc::Workbook::from_document(&parse(&strict).unwrap());
+    assert!(wb.display((0, 0, 2)).contains("separated by ';'"), "{}", wb.display((0, 0, 2)));
+    // In a formula as typed, only `;` separates arguments.
+    assert!(hardcalc::formula::parse_formula("sum(1; 2)").is_ok());
+    assert!(hardcalc::formula::parse_formula("sum(1, 2)").unwrap_err().contains("separated by ';'"));
+    assert!(hardcalc::formula::parse_formula("T[Rent, Amount]").is_ok());
+    // A newer file is read, with a note.
+    let newer = "<!-- hardcalc 99 -->\n\n| a |\n|---|\n| 1 |\n";
+    assert!(hardcalc::parse::notes(newer)[0].message.contains("format version 99"));
+    let mut doc = parse(newer).unwrap();
+    doc.stamp();
+    assert_eq!(doc.version, Some(99), "saving does not claim a lower version");
 }

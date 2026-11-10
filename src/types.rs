@@ -464,15 +464,20 @@ fn split_number(raw: &str) -> (&str, &str) {
 }
 
 /// The raw text of a number cell as written in files, with a decimal point:
-/// `1200,50` → `1200.50`, `5,5 m/s` → `5.5 m/s`. `None` if the cell is no
-/// number or already written with a point.
+/// `1200,50` → `1200.50`, `5,5 m/s` → `5.5 m/s`, `1,234,567` → `1234567`.
+/// `None` if the cell is no number or already written that way.
 pub fn point_cell(raw: &str, ty: &Type) -> Option<String> {
     let parsed = parse_cell(raw, ty);
-    if !matches!(parsed.value, Value::Num(..)) || !parsed.comma_decimal {
+    if !matches!(parsed.value, Value::Num(..)) {
         return None;
     }
     let (num, rest) = split_number(raw);
-    Some(format!("{}{rest}", crate::value::point_number(num)?))
+    // Only separators change: a sign or an exponent stays as written.
+    if !num.contains([',', ' ', '\'']) && num.matches('.').count() < 2 {
+        return None;
+    }
+    let point = crate::value::point_number(num)?;
+    (point != num).then(|| format!("{point}{rest}"))
 }
 
 /// The raw text of a number cell as shown for editing: with the decimal comma
@@ -497,6 +502,15 @@ pub fn parse_cell(raw: &str, ty: &Type) -> Parsed {
     }
     if raw.is_empty() {
         return plain(Value::Null);
+    }
+    // `\=text`: text that starts with `=` and is no formula.
+    if matches!(ty.base, Base::Auto | Base::Text)
+        && let Some(text) = raw.strip_prefix('\\').filter(|t| t.starts_with('='))
+    {
+        return match check_constraints(ty, text, &Value::Text(text.to_string())) {
+            Ok(()) => plain(Value::Text(text.to_string())),
+            Err(e) => plain(Value::err(e)),
+        };
     }
     let number = |unit: &Unit| -> Option<Parsed> {
         // Accept an optional trailing unit symbol matching the type, e.g. `1200 €`.

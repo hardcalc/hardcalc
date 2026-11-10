@@ -74,7 +74,9 @@ where it is when saving and never changes it.
 `#%hardconf <version>`. Diagnostics before it are allowed, because a program
 typically writes them at the start of the file. This document describes
 version `1`. Without the identifier, the `#%` lines are treated as ordinary
-comments and the file is opened without a schema.
+comments and the file is opened without a schema. With another version the
+schema is not used: hardconf reports “unsupported schema version” and shows
+the file as one with schema problems (§7.1), the block is kept as it is.
 
 The content of a schema line is everything after `#%`, without leading
 spaces. Indentation is only a reading aid and has no meaning. `#%hardconf`,

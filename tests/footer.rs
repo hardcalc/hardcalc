@@ -42,7 +42,7 @@ fn footer_block_belongs_to_the_table() {
     assert_eq!(t.footer.len(), 4);
     assert_eq!(t.footer[0].label, "Total");
     assert_eq!(t.footer[0].cells, vec!["", "=sum", "=counta"]);
-    assert_eq!(t.footer[2].cells[1], "=sumif(Status, \"open\", Amount)");
+    assert_eq!(t.footer[2].cells[1], "=sumif(Status; \"open\"; Amount)");
     assert_eq!(t.footer[3].cells, vec!["planned", "1500,00", "ok, fine"]);
     assert!(!doc.blocks.iter().any(|b| matches!(b, Block::Code { .. })));
 }
@@ -131,7 +131,7 @@ fn renames_reach_footers() {
     let src = DOC.replace("| only open |", "| =Expenses!Amount[Total] + Amount[Total] |");
     let mut doc = hardcalc::parse(&src).unwrap();
     hardcalc::refs::rename_column(&mut doc, 0, "Amount", "Costs");
-    assert_eq!(footer_of(&doc)[2][1], "=sumif(Status, \"open\", Costs)");
+    assert_eq!(footer_of(&doc)[2][1], "=sumif(Status; \"open\"; Costs)");
     assert_eq!(footer_of(&doc)[2][0], "=Expenses!Costs[Total] + Costs[Total]");
     assert_eq!(footer_of(&doc)[3][2], "ok, fine", "texts are no formulas");
     assert!(hardcalc::write(&doc).contains("Total: {=Expenses!Costs[Total]}"));

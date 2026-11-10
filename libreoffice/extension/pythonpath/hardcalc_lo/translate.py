@@ -63,7 +63,8 @@ def parse_functions(lines):
             name, params = head.split("(", 1)
             if not params.endswith(")"):
                 continue
-            params = [p.strip() for p in params[:-1].split(",") if p.strip()]
+            # `;` between parameters; files from before format version 1 say `,`.
+            params = [p.strip() for p in params[:-1].replace(",", ";").split(";") if p.strip()]
         else:
             name, params = head, []
         name = name.strip().lower()
@@ -493,7 +494,8 @@ class _FromCalc(object):
                 i = j
                 continue
             if c == ";":
-                out.append(",")
+                # hardcalc separates arguments by `;`, as Calc does.
+                out.append(";")
             elif c == "(":
                 stack.append(False)
                 out.append(c)

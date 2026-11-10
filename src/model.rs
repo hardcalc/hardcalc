@@ -4,6 +4,34 @@
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Document {
     pub blocks: Vec<Block>,
+    /// The format version the file names in its first line
+    /// (`<!-- hardcalc 1 -->`); `None`: the file names none.
+    pub version: Option<u32>,
+}
+
+/// The version of the file format this program reads and writes.
+///
+/// 1: the first version with a number. Arguments of functions are separated
+/// by `;` only; files without a number may still say `,` and are converted
+/// when read.
+pub const FORMAT_VERSION: u32 = 1;
+
+impl Document {
+    /// Marks the document as written in the current format (never lower
+    /// than the version it came with).
+    pub fn stamp(&mut self) {
+        self.version = Some(self.version.unwrap_or(0).max(FORMAT_VERSION));
+    }
+}
+
+/// The first line of a file that names its format version.
+pub fn version_line(version: u32) -> String {
+    format!("<!-- hardcalc {version} -->")
+}
+
+/// The version a first line names: `<!-- hardcalc 1 -->`.
+pub fn version_of_line(line: &str) -> Option<u32> {
+    line.trim().strip_prefix("<!--")?.strip_suffix("-->")?.trim().strip_prefix("hardcalc")?.trim().parse().ok()
 }
 
 #[derive(Debug, Clone, PartialEq)]

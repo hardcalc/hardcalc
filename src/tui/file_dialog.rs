@@ -605,30 +605,42 @@ mod probe {
         /// Counts the finished probes; 0: none yet.
         n: u64,
         places: Vec<Place>,
-        running: bool,
+        /// When the probe that is still running started.
+        running: Option<Instant>,
     }
+
+    /// After this time a probe hangs (a dead network drive): a new one may start.
+    const GIVE_UP: Duration = Duration::from_secs(10);
 
     static STATE: Mutex<Option<State>> = Mutex::new(None);
     static DONE: Condvar = Condvar::new();
 
-    /// Starts a probe (unless one is still running) and waits up to `wait`
-    /// for it, so the dialog usually opens with fresh places.
+    /// Starts a probe and waits up to `wait` for it, so the dialog usually
+    /// opens with fresh places. While an earlier probe is still running
+    /// (it hangs), the dialog does not wait again; a probe that hangs for
+    /// long is given up and a new one starts.
     pub fn start(wait: Duration) {
         let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
         let state = guard.get_or_insert_with(State::default);
         let before = state.n;
-        if !state.running {
-            state.running = true;
-            std::thread::spawn(|| {
-                let places = super::places();
-                let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
-                let state = guard.get_or_insert_with(State::default);
-                state.places = places;
-                state.n += 1;
-                state.running = false;
-                DONE.notify_all();
-            });
+        match state.running {
+            Some(since) if since.elapsed() < GIVE_UP => return,
+            _ => {}
         }
+        let started = Instant::now();
+        state.running = Some(started);
+        std::thread::spawn(move || {
+            let places = super::places();
+            let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
+            let state = guard.get_or_insert_with(State::default);
+            state.places = places;
+            state.n += 1;
+            // A newer probe may be running by now; only this one is done.
+            if state.running == Some(started) {
+                state.running = None;
+            }
+            DONE.notify_all();
+        });
         let until = Instant::now() + wait;
         while guard.as_ref().is_some_and(|s| s.n == before) {
             let left = until.saturating_duration_since(Instant::now());

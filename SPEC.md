@@ -1,4 +1,4 @@
-# hardcalc – file format `.hcmd` (draft v0)
+# hardcalc – file format `.hcmd` (version 1)
 
 A hardcalc file is **valid Markdown**. Opened in any Markdown viewer, it
 shows headings, text and tables. hardcalc additionally reads types, shapes
@@ -11,8 +11,32 @@ annotation is already a valid hardcalc matrix.
 ## 1. Structure
 
 ```
-Document = { Text block | Table | Types | Functions | Layer | Chart | Layout | Code block }
+Document = [ Version ] { Text block | Table | Types | Functions | Layer | Chart | Layout | Code block }
 ```
+
+### Format version
+
+The first line of a file names the version of this format it is written
+in:
+
+```markdown
+<!-- hardcalc 1 -->
+```
+
+It is an HTML comment, so Markdown viewers do not show it. hardcalc writes
+the line whenever it saves a file (`hardcalc fmt` too) and reads it only as
+the first line.
+
+- **Version 1** is this document.
+- **A file without the line** is from before the versions. It is read as
+  version 1, with one difference: `,` between the arguments of functions is
+  accepted and written as `;` (section 4). Saving adds the line.
+- **A higher version** than the program knows is read as well as it can
+  be; hardcalc says so when opening, `hardcalc check` warns, and saving
+  keeps the higher number.
+
+The number rises only when files of the new version would be read wrongly
+by older programs or the other way round.
 
 | Block | Notation | Section |
 |---|---|---|
@@ -64,8 +88,10 @@ twice.
 
 Tables are not looked for in code blocks (fenced with three or more
 backticks or tildes; an unclosed block runs to the end of the file), in
-lines indented by four spaces or a tab, and in HTML comments that start a
-line (`<!--` … `-->`).
+lines indented by four spaces or a tab (unless they hang below a list
+item), and in HTML comments that start a line (`<!--` … `-->`; one that is
+never closed hides nothing). hardcalc writes code blocks with backticks,
+with tildes only where the info line itself holds a backtick.
 
 ### Tensors in “long format”
 
@@ -98,6 +124,9 @@ without a type, `Rate:decimal(1) special("-": "none")` a column *Rate*.
 ### Cells
 
 - A cell that starts with `=` is a **formula**.
+- `\=` starts text that begins with `=` and is no formula: `\=ok` shows
+  `=ok`. (Markdown reads `\=` the same way.) This holds without a type and
+  in `text` columns; imports write such text this way.
 - `\|` stands for a literal `|`.
 - An empty cell has no value (`null`).
 - Numbers are written with a decimal point and without thousands
@@ -125,7 +154,7 @@ after it is only for readers; the block belongs to the table before it.
 |---------|---------|--------------------------------|---------|
 | Total   | 3 items | =sum                           | =counta |
 | Average |         | =avg                           |         |
-| Open    |         | =sumif(Status, "open", Amount) |         |
+| Open    |         | =sumif(Status; "open"; Amount) |         |
 | Budget  | planned | 1500.00                        |         |
 ```
 ````
@@ -207,7 +236,7 @@ else: presentation, section 6.)
 | `B2a:B2c`, short `B2a:c` | stack of a cell over a–c |
 | `B2c:B4c`, short `B2:4c` | range in c (a letter at the end applies to both corners) |
 | `B2a:D4c` | cuboid |
-| `offset(B2, rows, columns[, levels])` | shifted reference, as in Excel |
+| `offset(B2; rows; columns[; levels])` | shifted reference, as in Excel |
 
 After the `:` only what changes is written; missing parts come from the
 start. A formula always reads **other tables** at their level a, unless the
@@ -264,7 +293,10 @@ and `record` are stored as text for now.
 ## 4. Formulas and functions
 
 A cell that starts with `=` is a formula. The decimal separator in formulas
-is always `.`, arguments are separated by `,` or `;`.
+is always `.`. The arguments of a function are separated by `;` and by
+nothing else: `=round(sum(B) / 3; 2)`. (A `,` there is an error; only files
+without a format version may still say it, section 1.) The `,` separates
+the keys in brackets: `Expenses[Rent, Amount]`.
 
 ### References
 
@@ -274,13 +306,13 @@ is always `.`, arguments are separated by `,` or `;`.
 | `B`, `Amount`                 | whole column as a vector (a name wins over a letter)   |
 | `B2:D5`                       | range as a vector (row by row)                         |
 | `B:B`, `B:D`                  | whole columns as a vector (row by row, like `B2:D5`)   |
-| `Speed`                       | the row with this name in the 1st column → its last value |
+| `Speed`                       | the row with this name in the 1st column → its last value (a column of this name wins over the row) |
 | `B2:4`, `B2:D`                | short form: after the `:` only what changes (`B2:B4`, `B2:D2`) |
 | `Expenses!Amount`, `Expenses!B2`, `Expenses!B2:B4`, `Expenses!B` | column, cell, range of another table (`"My sheet"!B2` for names with spaces) |
 | `Amount[Rent]`, `Amount[Total]` | cell of the column in the row or footer row with this name |
 | `Expenses[Rent, Amount]`      | cell by row key (1st column) and column; a key with spaces is quoted: `Cameras["Nikon Z7 II", Price]` |
 | `Sales[Region=North]`         | filter; gives the last column (value column) as a vector |
-| `@Amount`, `[@Amount]`        | value of the column in the same row – also in functions that otherwise take the whole column (`sum(@Amount, @Gross)`) |
+| `@Amount`, `[@Amount]`        | value of the column in the same row – also in functions that otherwise take the whole column (`sum(@Amount; @Gross)`) |
 | `@Expenses!Amount`, `Expenses[@Amount]` | the same row of another table |
 | `$B$2`, `B$2`, `$B2`          | like `B2`; `$` anchors the column or row when filling (Ctrl+D, fill handle) |
 
@@ -328,7 +360,7 @@ matter); the tab **ƒ functions** shows the complete list with descriptions:
 | hardcalc | `spark(values)` – sparkline as text |
 
 Names, units and options are always English and do not depend on the
-language settings (`datedif(a, b, "YM")`, `text(d, "dd.mm.yyyy")`); where
+language settings (`datedif(a; b; "YM")`, `text(d; "dd.mm.yyyy")`); where
 Excel and LibreOffice Calc differ, hardcalc follows Calc (`datedif` with
 `"MD"` and `"YD"`, `minifs` / `maxifs` without a match give 0).
 
@@ -345,12 +377,12 @@ Your own functions (like `LAMBDA` in Excel) live in a `functions` block:
 ````markdown
 ```functions
 gross(x) = x * 1.19                    # gross amount with 19 % VAT
-share(part, total) = part / total
-fac(n) = if(n <= 1, 1, n * fac(n - 1))
+share(part; total) = part / total
+fac(n) = if(n <= 1; 1; n * fac(n - 1))
 ```
 ````
 
-`name(parameter, …) = formula`, optionally with `# description`. In the body
+`name(parameter; …) = formula`, optionally with `# description`. In the body
 the parameters are local names; everything else is resolved as in the
 calling cell. Functions may call each other and themselves (up to a depth of
 64); `if` evaluates only the chosen branch. Columns as arguments are
@@ -432,8 +464,12 @@ Rules: `align left|right|center`, `fg <color>`, `bg <color>`, `bold`,
 characters, without n: 40; the file keeps the text as it is, only the
 display, the PDF and spreadsheet exports break lines; numbers are never
 broken). Several settings are combined with spaces
-(`fg yellow bold`); later rules override earlier ones. Colors: names (`red`,
-`lightblue`, `darkgray` …) or `#rrggbb`.
+(`fg yellow bold`); later rules override earlier ones. Colors: `#rrggbb` or
+a name – `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`,
+`gray`, `darkgray`, `white` and `lightred` … `lightcyan` (`grey` and
+`light-blue` are read too). Any other name is reported by `hardcalc check`
+and has no effect. `percent(n)` keeps the unit of the value: 2 € shows as
+`200.0 € %`.
 
 To take back what an earlier rule sets: `nobold`, `noitalic`,
 `nounderline`, `nowrap`, `fg none`, `bg none` – e.g. a cell in a bold column:
@@ -459,6 +495,12 @@ Predefined layers:
 | `formulas`  | built in: highlights formula cells (default: cyan, italic); a block of your own changes the presentation |
 | `links`     | *planned:* links to URLs, files, other tables      |
 | `scenario`  | *planned:* “what if” overrides of values           |
+
+A layer whose table does not exist (`@Name` unknown, or no table before
+it) is kept and has no effect; `hardcalc check` reports it. It also warns
+about a rule whose target meets nothing – a column the table does not
+have, a row or cell beyond it (in a playground or a `fill` table, cells
+beyond the data are fine).
 
 Layer names of your own are allowed; their rules are saved and shown in the
 layer view but have no other effect. Which layers are shown or hidden in the
@@ -526,8 +568,9 @@ grid: 12
 
 ## 9. Canonical form
 
-hardcalc writes files in a fixed, deterministic form (compact tables,
-normalised separator lines) so that diffs in Git stay readable.
+hardcalc writes files in a fixed, deterministic form (the format version
+in the first line, compact tables, normalised separator lines) so that
+diffs in Git stay readable.
 `hardcalc fmt` produces this form; it is idempotent.
 
 Tables are written without padding:
@@ -621,7 +664,8 @@ f_yd   = f_yk / γ_M
 | `#full`, `#formula`, `#result` | display of the following lines: full way to the result (default) / formula and result / result only; at the end of a line for that line only |
 
 - **Numbers** with a decimal point; a decimal comma is read too and written
-  with the point. **Arguments** are separated by `;`: `max(a; b)`. On
+  with the point. **Arguments** are separated by `;`, as in formulas:
+  `max(a; b)`. On
   screen, in printing and in the report numbers follow the locale.
 - **Units** follow a number: `4.0 kN/m`, `235 N/mm²`, `30°`, `5 %`. Known are
   the SI units and those common in construction: mm, cm, km, t, kN, MN, kPa,

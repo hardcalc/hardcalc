@@ -109,7 +109,7 @@ fn references_and_ranges() {
     assert_eq!(f(&mut wb, "sum(Zugang.February)"), 70.0);
     assert_eq!(f(&mut wb, "Account!B1.March + Account!B2b"), 40.0);
     assert_eq!(f(&mut wb, "Zugang[Total].February"), 70.0);
-    assert_eq!(f(&mut wb, "offset(B1, 0, 0, 1) + offset(B1, 1, 1, 0)"), 60.0);
+    assert_eq!(f(&mut wb, "offset(B1; 0; 0; 1) + offset(B1; 1; 1; 0)"), 60.0);
     assert!(wb.eval_formula("B1.Mai", 0).is_error());
     assert!(wb.eval_formula("B1d", 0).is_error());
     // Relative to the layer a formula stands in.
@@ -167,7 +167,7 @@ fn other_tables_are_read_in_layer_a_unless_named() {
     assert_eq!(num(wb.eval_formula_in("Plan!B1", 0, 1)), 100.0);
     assert_eq!(num(wb.eval_formula_in("sum(Plan!Value)", 0, 1)), 110.0);
     assert_eq!(num(wb.eval_formula_in("Plan!B1.Optimistisch + Plan!B1b", 0, 1)), 400.0);
-    assert_eq!(num(wb.eval_formula_in("offset(Plan!B1, 1, 0)", 0, 1)), 10.0);
+    assert_eq!(num(wb.eval_formula_in("offset(Plan!B1; 1; 0)", 0, 1)), 10.0);
     // In its own table a reference keeps the formula's layer.
     assert_eq!(num(wb.eval_formula_in("Account!B1", 0, 1)), 50.0);
 }

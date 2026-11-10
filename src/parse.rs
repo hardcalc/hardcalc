@@ -41,8 +41,16 @@ fn parse_with_notes(src: &str) -> Result<(Document, Vec<Note>), ParseError> {
     let lines: Vec<&str> = src.lines().collect();
     let mut doc = Document::default();
     let mut notes: Vec<Note> = Vec::new();
+    // The first line may name the format version: `<!-- hardcalc 1 -->`.
+    doc.version = lines.first().and_then(|l| version_of_line(l));
+    if let Some(v) = doc.version.filter(|v| *v > FORMAT_VERSION) {
+        notes.push(Note {
+            line: 1,
+            message: format!("the file is written in format version {v}, this hardcalc knows version {FORMAT_VERSION} – it may not read everything as meant"),
+        });
+    }
     let mut text: Vec<String> = Vec::new();
-    let mut i = 0;
+    let mut i = if doc.version.is_some() { 1 } else { 0 };
 
     let flush = |text: &mut Vec<String>, doc: &mut Document| {
         // Trailing blank lines belong to the separator between blocks, not the text.
@@ -100,16 +108,15 @@ fn parse_with_notes(src: &str) -> Result<(Document, Vec<Note>), ParseError> {
 
         // An HTML comment over several lines is text, whatever it holds.
         if line.trim_start().starts_with("<!--") && !line.contains("-->") {
-            text.push(line.to_string());
-            i += 1;
-            while i < lines.len() {
-                text.push(lines[i].to_string());
-                i += 1;
-                if lines[i - 1].contains("-->") {
-                    break;
+            match lines[i..].iter().position(|l| l.contains("-->")) {
+                Some(n) => {
+                    text.extend(lines[i..=i + n].iter().map(|l| l.to_string()));
+                    i += n + 1;
+                    continue;
                 }
+                // Never closed: it must not hide the rest of the document.
+                None => notes.push(Note { line: i + 1, message: "the comment <!-- is not closed – what follows is read as usual".into() }),
             }
-            continue;
         }
 
         if let Some((level, name, shape)) = table_heading(line) {
@@ -117,7 +124,7 @@ fn parse_with_notes(src: &str) -> Result<(Document, Vec<Note>), ParseError> {
             while j < lines.len() && lines[j].trim().is_empty() {
                 j += 1;
             }
-            if j + 1 < lines.len() && starts_table(lines[j]) && is_separator(lines[j + 1]) {
+            if j + 1 < lines.len() && starts_table(&lines, j) && is_separator(lines[j + 1]) {
                 match parse_shape_and_layer(&shape) {
                     Ok((shape, fill, layer_name, compact)) => {
                         flush(&mut text, &mut doc);
@@ -139,7 +146,7 @@ fn parse_with_notes(src: &str) -> Result<(Document, Vec<Note>), ParseError> {
             }
         }
 
-        if starts_table(line) && i + 1 < lines.len() && is_separator(lines[i + 1]) {
+        if starts_table(&lines, i) && i + 1 < lines.len() && is_separator(lines[i + 1]) {
             flush(&mut text, &mut doc);
             let (table, next) = parse_table(&lines, i, &mut notes);
             doc.blocks.push(Block::Table(table));
@@ -152,21 +159,24 @@ fn parse_with_notes(src: &str) -> Result<(Document, Vec<Note>), ParseError> {
     }
     flush(&mut text, &mut doc);
     crate::refs::normalize_table_dots(&mut doc);
-    // Tables are found by their name; file systems and some tools do not tell
-    // upper from lower case, so names that differ only in case count as equal.
-    let mut seen: Vec<(String, usize)> = Vec::new();
+    if doc.version.is_none() {
+        // Files from before the versions may separate arguments by `,`.
+        crate::refs::legacy_separators(&mut doc);
+    }
+    // Tables are found by their name: of two with the same name, references
+    // find the first. Names that differ only in upper and lower case are two
+    // tables, but easy to mix up (and one file in some tools).
+    let mut seen: Vec<(&str, usize)> = Vec::new();
     for block in &doc.blocks {
         if let Block::Table(t) = block
-            && let Some(name) = &t.name
+            && let Some(name) = t.name.as_deref()
         {
-            let key = name.to_lowercase();
-            match seen.iter().find(|(k, _)| *k == key) {
-                Some((_, first)) => notes.push(Note {
-                    line: t.line.0,
-                    message: format!("table name '{name}' is used before (line {first}) – references find only one of them"),
-                }),
-                None => seen.push((key, t.line.0)),
+            if let Some((_, first)) = seen.iter().find(|(n, _)| *n == name) {
+                notes.push(Note { line: t.line.0, message: format!("table name '{name}' is used before (line {first}) – references find only the first") });
+            } else if let Some((other, first)) = seen.iter().find(|(n, _)| n.to_lowercase() == name.to_lowercase()) {
+                notes.push(Note { line: t.line.0, message: format!("table name '{name}' differs from '{other}' (line {first}) only in upper and lower case") });
             }
+            seen.push((name, t.line.0));
         }
     }
     notes.sort_by_key(|n| n.line);
@@ -190,11 +200,25 @@ fn fence_close(line: &str, mark: char, len: usize) -> bool {
     t.chars().all(|c| c == mark) && t.chars().count() >= len
 }
 
-/// Whether a table can start at this line of the text: a table row that is
-/// not indented as code (four spaces or a tab).
-fn starts_table(line: &str) -> bool {
-    let indent: usize = line.chars().take_while(|c| matches!(c, ' ' | '\t')).map(|c| if c == '\t' { 4 } else { 1 }).sum();
-    indent < 4 && is_table_row(line)
+/// Whether a table can start at line `i` of the text: a table row that is
+/// not indented as code (four spaces or a tab). Below a list item such a
+/// line continues the item and is no code.
+fn starts_table(lines: &[&str], i: usize) -> bool {
+    let indent = |l: &str| -> usize { l.chars().take_while(|c| matches!(c, ' ' | '\t')).map(|c| if c == '\t' { 4 } else { 1 }).sum() };
+    if !is_table_row(lines[i]) {
+        return false;
+    }
+    if indent(lines[i]) < 4 {
+        return true;
+    }
+    // The line the indented ones hang below.
+    let owner = lines[..i].iter().rev().find(|l| !l.trim().is_empty() && indent(l) < 4);
+    owner.is_some_and(|l| {
+        let t = l.trim_start();
+        let numbered = t.trim_start_matches(|c: char| c.is_ascii_digit());
+        let bullet = ["- ", "* ", "+ "].iter().any(|b| t.starts_with(b));
+        bullet || (numbered.len() < t.len() && [". ", ") "].iter().any(|b| numbered.starts_with(b)))
+    })
 }
 
 /// `Name:Type` of a column header → (name, type). The colon is the last one

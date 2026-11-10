@@ -202,7 +202,7 @@ bold below the `+` row, their name on the left in the row column. Footer
 cells are written like data cells: value, text or formula with `=`. An
 aggregate on its own applies to its column (`=sum`, `=avg`, `=min`, `=max`,
 `=count`, `=counta`, `=median` …); anything else is a formula over the table
-(`=sumif(Status, "open", Amount)`). Del clears a cell. ← onto the name and
+(`=sumif(Status; "open"; Amount)`). Del clears a cell. ← onto the name and
 typing renames the footer row, F8 deletes it. Formulas and text reach the
 values as `Amount[Total]` or `Expenses!Amount[Total]`
 (`{=Expenses!Amount[Total]}`). They are saved as a `footer` block right after
@@ -227,7 +227,7 @@ columns stay uniform in slices and scenarios too.
   level – in the split window two months can be compared.
 - **Formulas:** `B2b`, `B2.February`, `Amount.February`, `B2[-1]` (the level
   before, e.g. a running total `=C2[-1] + B2`), stacks `=sum(B2a:c)`, ranges
-  `B2:4c`, `offset(B2, 0, 0, 1)`. Other tables are read at their level a,
+  `B2:4c`, `offset(B2; 0; 0; 1)`. Other tables are read at their level a,
   unless the reference names one (`Plan!B2.Optimistic`). The inspector shows
   the stack of a cell.
 - `:z rename Name` renames the level shown (also a), `:z delete` deletes it.

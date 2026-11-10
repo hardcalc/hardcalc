@@ -180,7 +180,8 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
                 ')' => ")",
                 '[' => "[",
                 ']' => "]",
-                ',' | ';' => ",",
+                ',' => ",",
+                ';' => ";",
                 ':' => ":",
                 '.' => ".",
                 '!' => "!",
@@ -323,10 +324,19 @@ impl Parser {
             if self.eat(close) {
                 return Ok(args);
             }
-            if !self.peek_op(",") && close == "]" && self.pos < self.toks.len() {
-                return Err("expected ',' or ']' – a row key with spaces or other special characters must be quoted: Table[\"Row name\", Column]".into());
+            if close == "]" {
+                // Keys and filters in brackets: `Table[Row, Column]`.
+                if !self.peek_op(",") && self.pos < self.toks.len() {
+                    return Err("expected ',' or ']' – a row key with spaces or other special characters must be quoted: Table[\"Row name\", Column]".into());
+                }
+                self.expect(",")?;
+            } else {
+                // Arguments of a function: only `;`.
+                if self.peek_op(",") {
+                    return Err("arguments are separated by ';' – sum(a; b)".into());
+                }
+                self.expect(";")?;
             }
-            self.expect(",")?;
         }
     }
 

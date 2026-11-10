@@ -185,7 +185,7 @@ impl App {
                         new.name = name;
                     }
                     1 => {
-                        let params: Vec<String> = text.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
+                        let params: Vec<String> = text.split(';').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
                         if let Some(bad) = params.iter().find(|p| !valid_name(p)) {
                             return self.error(format!("'{bad}' is not a valid parameter name"));
                         }

@@ -124,7 +124,8 @@ impl Bundle {
                 if f.is_dir() {
                     continue;
                 }
-                let name = f.name().map_err(invalid)?.to_string();
+                // Some Windows tools write `\` between folders.
+                let name = f.name().map_err(invalid)?.replace('\\', "/");
                 // Never a path that leads out of the bundle (`../x`, `/x`).
                 if !inside(&name) {
                     continue;
@@ -182,7 +183,7 @@ impl Bundle {
         // Replace the old bundle only once the new one is complete. A file is
         // replaced in one step; a folder is moved aside first and comes back
         // if the new one cannot take its place.
-        if !path.is_dir() {
+        if !path.exists() || (kind.is_zip() && !path.is_dir()) {
             return std::fs::rename(&tmp, path).inspect_err(|_| {
                 let _ = remove(&tmp);
             });
@@ -205,9 +206,13 @@ impl Bundle {
 }
 
 /// Whether a path of a bundle's file stays inside the bundle: relative, with
-/// `/` between its parts and no `..`.
+/// `/` between its parts and no `..` – and on Windows no `:` (`C:x` names a
+/// drive, `x:y` a stream of a file).
 fn inside(rel: &str) -> bool {
-    !rel.is_empty() && !rel.starts_with('/') && !rel.contains('\\') && rel.split('/').all(|part| part != ".." && !part.ends_with(':'))
+    !rel.is_empty()
+        && !rel.starts_with('/')
+        && !rel.contains('\\')
+        && rel.split('/').all(|part| part != ".." && !(cfg!(windows) && part.contains(':')))
 }
 
 fn remove(p: &Path) -> std::io::Result<()> {
@@ -363,7 +368,10 @@ pub fn build(doc: &Document, base: Option<&Bundle>, kind: Kind, transient: bool)
         "raster": raster,
     });
     info.insert(CREATOR.into(), own);
-    Bundle { text: crate::write(doc), info, files }
+    // What hardcalc writes names its format version.
+    let mut doc = doc.clone();
+    doc.stamp();
+    Bundle { text: crate::write(&doc), info, files }
 }
 
 /// The name without document suffixes: `Report.hcmd.gz`, `Report.textpack` → `Report`.
@@ -435,7 +443,8 @@ mod tests {
             assert_eq!(back.files["assets/raster/Loads.tsv"], b"Case\tn_Ed\nG\t12.4\nG+S\t=B1*3\n");
             assert_eq!(back.files["assets/bilder/skizze.png"], vec![1, 2, 3]);
             let (doc2, opened) = document(&back).unwrap();
-            assert_eq!(doc2, doc);
+            // The bundle's text names the format version.
+            assert_eq!((&doc2.blocks, doc2.version), (&doc.blocks, Some(crate::model::FORMAT_VERSION)));
             assert!(opened.from_tsv.is_empty());
         }
         std::fs::remove_dir_all(&d).unwrap();
@@ -502,11 +511,12 @@ mod safety_tests {
             build(&doc, None, kind, false).write(&path, kind).unwrap();
             let back = Bundle::read(&path).unwrap();
             let (doc2, opened) = document(&back).unwrap();
-            assert_eq!(doc2, doc);
+            // The bundle's text names the format version.
+            assert_eq!((&doc2.blocks, doc2.version), (&doc.blocks, Some(crate::model::FORMAT_VERSION)));
             assert!(opened.from_tsv.is_empty());
             // Written over itself: the old bundle is replaced as a whole.
             build(&doc2, Some(&back), kind, false).write(&path, kind).unwrap();
-            assert_eq!(document(&Bundle::read(&path).unwrap()).unwrap().0, doc);
+            assert_eq!(document(&Bundle::read(&path).unwrap()).unwrap().0.blocks, doc.blocks);
         }
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -516,9 +526,14 @@ mod safety_tests {
         let d = tmp("slip");
         let pack = d.join("in").join("x.textpack");
         std::fs::create_dir_all(pack.parent().unwrap()).unwrap();
-        write_zip(&pack, &[("text.md", b"# Hello\n"), ("../evil.txt", b"x"), ("/abs.txt", b"x"), ("assets/ok.txt", b"ok")]).unwrap();
+        write_zip(&pack, &[("text.md", b"# Hello\n"), ("../evil.txt", b"x"), ("/abs.txt", b"x"), ("..\\evil2.txt", b"x"), ("assets/ok.txt", b"ok"), ("assets\\win.txt", b"ok")]).unwrap();
         let b = Bundle::read(&pack).unwrap();
-        assert_eq!(b.files.keys().collect::<Vec<_>>(), ["assets/ok.txt"]);
+        assert_eq!(b.files.keys().collect::<Vec<_>>(), ["assets/ok.txt", "assets/win.txt"]);
+        // A folder bundle takes the place of a pack of the same name.
+        let same = d.join("in").join("z.textbundle");
+        std::fs::copy(&pack, &same).unwrap();
+        b.write(&same, Kind::TextBundle).unwrap();
+        assert!(same.is_dir() && same.join("text.md").exists());
         // Also when such a path comes from elsewhere: nothing is written outside.
         let mut b = b;
         b.files.insert("../../evil.txt".into(), b"x".to_vec());

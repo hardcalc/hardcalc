@@ -24,7 +24,7 @@ fn save_as_bundle_and_reopen_keeps_assets() {
     std::fs::create_dir_all(path.join("assets/bilder")).unwrap();
     std::fs::write(path.join("assets/bilder/skizze.png"), [1, 2, 3]).unwrap();
     let mut app = App::open(&path).unwrap();
-    assert_eq!(app.doc, hardcalc::parse(BUDGET).unwrap());
+    assert_eq!(app.doc.blocks, hardcalc::parse(BUDGET).unwrap().blocks);
     app.save(None);
     assert_eq!(std::fs::read(path.join("assets/bilder/skizze.png")).unwrap(), [1, 2, 3]);
     let info: serde_json::Value = serde_json::from_slice(&std::fs::read(path.join("info.json")).unwrap()).unwrap();
@@ -76,6 +76,8 @@ fn export_textpack_is_transient_and_cli_reads_bundles() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(Bundle::read(&pack).unwrap().transient());
     let out = std::process::Command::new(exe).arg("fmt").arg(&pack).output().unwrap();
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), hardcalc::write(&hardcalc::parse(BUDGET).unwrap()));
+    let mut canonical = hardcalc::parse(BUDGET).unwrap();
+    canonical.stamp();
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), hardcalc::write(&canonical));
     std::fs::remove_dir_all(&d).unwrap();
 }

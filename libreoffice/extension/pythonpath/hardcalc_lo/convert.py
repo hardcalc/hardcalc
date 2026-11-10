@@ -18,6 +18,8 @@ from .formula import FormulaError, col_letters
 from .translate import Book, TableInfo, from_calc, parse_functions, to_calc
 
 STATE_VERSION = 1
+# The version of the file format new documents are written in (SPEC.md §1).
+FORMAT_VERSION = 1
 
 # Calc sheet names must not contain these.
 _BAD_SHEET_CHARS = "[]*?:/\\"
@@ -30,23 +32,47 @@ NOTE_KEPT = "hardcalc formula, not computed in Calc (kept as text)"
 
 def parse_number(s):
     """hardcalc's number reading: `1200,50`, `1.200,50`, `1,200.50` → (value, comma, decimals)."""
-    s = "".join(c for c in s.strip().lstrip("+") if c not in " '")
+    s = s.strip().lstrip("+")
     if not s or not any(c.isdigit() for c in s):
         return None
-    commas, dots = s.count(","), s.count(".")
+    sign, body = ("-", s[1:].lstrip()) if s.startswith("-") else ("", s)
+
+    def grouped(t, sep):
+        # Separators between thousands group the digits in threes: `1.2.3` is no number.
+        parts = t.split(sep)
+        return (1 <= len(parts[0]) <= 3 and all(p.isdigit() for p in parts)
+                and all(len(p) == 3 for p in parts[1:]))
+
+    for sep in (" ", "'"):
+        if sep in body:
+            whole = re.split(r"[.,]", body, maxsplit=1)[0]
+            rest = body[len(whole):]
+            if not grouped(whole, sep) or " " in rest or "'" in rest:
+                return None
+            body = whole.replace(sep, "") + rest
+            break
+    commas, dots = body.count(","), body.count(".")
+
+    def both(sep, decimal):
+        whole, fraction = body.split(decimal, 1)
+        if not grouped(whole, sep) or sep in fraction or decimal in fraction:
+            return None
+        return whole.replace(sep, "") + "." + fraction
+
     if commas and dots:
-        if s.rfind(",") > s.rfind("."):
-            norm, comma = s.replace(".", "").replace(",", "."), True
-        else:
-            norm, comma = s.replace(",", ""), False
+        comma = body.rfind(",") > body.rfind(".")
+        norm = both(".", ",") if comma else both(",", ".")
     elif commas == 1:
-        norm, comma = s.replace(",", "."), True
+        norm, comma = body.replace(",", "."), True
     elif commas > 1:
-        norm, comma = s.replace(",", ""), False
+        norm, comma = (body.replace(",", "") if grouped(body, ",") else None), False
     elif dots > 1:
-        norm, comma = s.replace(".", ""), True
+        norm, comma = (body.replace(".", "") if grouped(body, ".") else None), True
     else:
-        norm, comma = s, False
+        norm, comma = body, False
+    if norm is None:
+        return None
+    norm = sign + norm
     if not re.match(r"^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$", norm):
         return None
     try:
@@ -183,6 +209,7 @@ class SheetPlan(object):
         self.notes = []         # (row, col, text) – sheet positions, header is row 0
         self.formulas = {}      # "r,c" → hardcalc formula (sheet positions)
         self.texts = {}         # "r,c" → original text where it differs from the default
+        self.kept = []          # formulas Calc holds as text (not computed there)
         # Formatting to apply in order: (r0, r1, c0, c1, parts) in data rows.
         self.format_ops = []
 
@@ -293,6 +320,11 @@ def plan_import(src):
                     except (FormulaError, RecursionError, ValueError, IndexError):
                         out.append(("s", cell))
                         plan.notes.append((r + 1, c, NOTE_KEPT))
+                        plan.kept.append(cell)
+                    continue
+                if cell.startswith("\\="):
+                    # Text that starts with `=`: in Calc the text without the mask.
+                    out.append(("s", cell[1:]))
                     continue
                 kind = kinds[c]
                 value = None
@@ -319,6 +351,9 @@ def plan_import(src):
             "texts": plan.texts,
             # filled in by the filter: "r,c" → [Calc formula as read back, hardcalc formula]
             "formulas": {},
+            # formulas Calc holds as text: they come back as formulas, any
+            # other text that starts with `=` comes back masked (`\=…`)
+            "kept": plan.kept,
         })
     state = {"v": STATE_VERSION, "source": text, "crlf": crlf, "sheets": state_sheets}
     return plans, state
@@ -422,6 +457,8 @@ def export(sheets, state=None):
             continue
         decimals = dict((int(k), v) for k, v in (entry or {}).get("decimals", {}).items())
         texts = (entry or {}).get("texts", {})
+        # Without the list (a state of an older version): as before, unmasked.
+        kept = (entry or {"kept": []}).get("kept")
         known = (entry or {}).get("formulas", {})
         out_rows = []
         for r in range(1, rows):
@@ -453,7 +490,10 @@ def export(sheets, state=None):
                     else:
                         out.append(render_number(v, decimals.get(c)))
                 else:
-                    out.append(_cell_text(v or ""))
+                    t = _cell_text(v or "")
+                    if t.startswith("=") and kept is not None and t not in kept:
+                        t = "\\" + t
+                    out.append(t)
             out_rows.append(out)
         if seg is not None:
             level, shape, aligns = seg.level, seg.shape, seg.aligns
@@ -505,6 +545,10 @@ def export(sheets, state=None):
             _blank_line(result)
             result.append(markdown.Text(["```" + info] + lines + ["```", ""]))
     text = markdown.write(result)
+    if not state:
+        # A new document names the format version it is written in. (One read
+        # from a file keeps its first line, with or without a version.)
+        text = "<!-- hardcalc %d -->\n\n%s" % (FORMAT_VERSION, text.lstrip("\n"))
     if not text.endswith("\n"):
         text += "\n"
     if state and state.get("crlf"):

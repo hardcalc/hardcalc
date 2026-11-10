@@ -1,3 +1,5 @@
+<!-- hardcalc 1 -->
+
 # Budget 2026
 
 An example of the hardcalc format. This file is valid Markdown.
@@ -9,7 +11,7 @@ Status = enum(open, paid, cancelled)
 
 ```functions
 gross(x) = x * 1.19   # gross amount with 19 % VAT
-share(part, total) = part / total
+share(part; total) = part / total
 ```
 
 ## Expenses :: matrix[*, 5]

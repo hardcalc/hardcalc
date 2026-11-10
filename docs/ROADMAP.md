@@ -101,5 +101,5 @@ the two), and into the table in `SPEC.md`.
   `sequence`, `xmatch`, `let`: Calc 24.8 and later only).
 - **Not planned**: `indirect`, `offset`, `cell` (cannot be traced by the
   dependency tracking).
-- Check `text(value, format)` against Calc: format codes there depend on the
+- Check `text(value; format)` against Calc: format codes there depend on the
   language settings; hardcalc's must not.

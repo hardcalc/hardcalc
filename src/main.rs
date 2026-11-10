@@ -113,7 +113,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         return match hardcalc::import::import_file(input) {
-            Ok((doc, report)) => match std::fs::write(&out, hardcalc::write(&doc)) {
+            Ok((mut doc, report)) => match std::fs::write(&out, {
+                doc.stamp();
+                hardcalc::write(&doc)
+            }) {
                 Ok(()) => {
                     println!("{} – {report}", out.display());
                     ExitCode::SUCCESS
@@ -195,7 +198,12 @@ fn main() -> ExitCode {
     };
 
     match cmd {
-        "fmt" => print!("{}", hardcalc::write(&doc)),
+        "fmt" => {
+            // The canonical form names its format version.
+            let mut doc = doc.clone();
+            doc.stamp();
+            print!("{}", hardcalc::write(&doc))
+        }
         "check" => {
             let json = args[2..].iter().any(|a| a == "--json");
             if let Some(bad) = args[2..].iter().find(|a| *a != "--json") {
@@ -249,7 +257,53 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            for n in hardcalc::parse::notes(&src) {
+            // A bundle's text as it is in the bundle, not as it would be written.
+            let p = std::path::Path::new(path);
+            let text = match hardcalc::bundle::Kind::from_path(p) {
+                Some(_) => hardcalc::bundle::Bundle::read(p).map(|b| b.text).unwrap_or_default(),
+                None => src.clone(),
+            };
+            // Layers that name a table that is not there (or stand before the first) do nothing.
+            let mut tables = false;
+            for block in &doc.blocks {
+                match block {
+                    Block::Table(_) => tables = true,
+                    Block::Layer(l) => {
+                        let missing = match &l.target {
+                            Some(t) if wb.sheet_index(t).is_none() => Some(format!("unknown table '{t}'")),
+                            None if !tables => Some("no table before it".to_string()),
+                            _ => None,
+                        };
+                        if let Some(message) = missing {
+                            findings.push(Finding { severity: "error", line: l.line.0, block: format!("layer {}", l.name), table: None, cell: None, message });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Rules whose target meets nothing: a column that is not there, a cell beyond the table.
+            let open: Vec<bool> = doc
+                .blocks
+                .iter()
+                .filter_map(|b| if let Block::Table(t) = b { Some(t.shape == hardcalc::model::Shape::Playground || t.fill == Some(true)) } else { None })
+                .collect();
+            for a in &attached {
+                for (i, rule) in a.layer.rules.iter().enumerate() {
+                    if let hardcalc::model::Rule::Rule { target, .. } = rule
+                        && let Some(problem) = hardcalc::layers::target_problem(&wb, a.sheet, target, open.get(a.sheet).copied().unwrap_or(false))
+                    {
+                        findings.push(Finding {
+                            severity: "warning",
+                            line: a.layer.line.0 + 1 + i,
+                            block: format!("layer {}", a.layer.name),
+                            table: wb.sheets[a.sheet].name.clone(),
+                            cell: None,
+                            message: format!("{target}: {problem} – the rule has no effect"),
+                        });
+                    }
+                }
+            }
+            for n in hardcalc::parse::notes(&text) {
                 findings.push(Finding { severity: "warning", line: n.line, block: "document".into(), table: None, cell: None, message: n.message });
             }
             let calc_problems = hardcalc::sheet::problems(&hardcalc::sheet::evaluate_document(&doc, &mut wb));

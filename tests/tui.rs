@@ -1137,15 +1137,15 @@ fn functions_tab() {
     typ(&mut a, "Skonto");
     key(&mut a, KeyCode::Enter);
     assert_eq!(a.view.cursor, (2, 1), "continues with the parameters");
-    typ(&mut a, "betrag, tage");
+    typ(&mut a, "betrag; tage");
     key(&mut a, KeyCode::Tab);
-    typ(&mut a, "if(tage <= 10, betrag * 0.98, betrag)");
+    typ(&mut a, "if(tage <= 10; betrag * 0.98; betrag)");
     key(&mut a, KeyCode::Enter);
-    assert!(hardcalc::write(&a.doc).contains("skonto(betrag, tage) = if(tage <= 10, betrag * 0.98, betrag)"));
+    assert!(hardcalc::write(&a.doc).contains("skonto(betrag; tage) = if(tage <= 10; betrag * 0.98; betrag)"));
 
     // Used in a table, it computes – and the overview lists where.
     a.switch_sheet(0);
-    a.set_cells(vec![(0, 5, "=skonto(Amount, 7)".into())]);
+    a.set_cells(vec![(0, 5, "=skonto(Amount; 7)".into())]);
     assert!(matches!(a.wb.value((0, 0, 5)), hardcalc::value::Value::Num(n, _) if (n - 1176.0).abs() < 1e-9));
     click(&mut a, Hit::ViewTab(ViewKind::Functions));
     a.view.cursor = (2, 4);

@@ -707,11 +707,12 @@ impl App {
         if crate::bundle::Kind::from_path(path).is_some() && path.exists() {
             return App::open_bundle(path);
         }
+        let mut notes = Vec::new();
         let (doc, compression) = match crate::storage::read_text(path) {
-            Ok((src, c)) => (
-                crate::parse(&src).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display())))?,
-                c,
-            ),
+            Ok((src, c)) => {
+                notes = crate::parse::notes(&src);
+                (crate::parse(&src).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display())))?, c)
+            }
             // A new file: compressed as its name says.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Document::default(), crate::storage::Compression::from_path(path)),
             Err(e) => return Err(e),
@@ -725,6 +726,10 @@ impl App {
             app.info(format!("read from the zip – F2 saves as {}", app.path.display()));
         } else if compression != crate::storage::Compression::None && crate::storage::Compression::from_path(path) != compression {
             app.info(format!("{} is {}-compressed – saving keeps that", path.display(), compression.name()));
+        } else if let Some(first) = notes.first() {
+            // What `hardcalc check` warns about: read, but perhaps not as meant.
+            let more = if notes.len() > 1 { format!(" (and {} more – hardcalc check lists them)", notes.len() - 1) } else { String::new() };
+            app.info(format!("line {}: {}{more}", first.line, first.message));
         }
         Ok(app)
     }
@@ -1304,7 +1309,7 @@ impl App {
                 lines.push(String::new());
             }
             let start = lines.len();
-            let text = crate::write(&Document { blocks: vec![block.clone()] });
+            let text = crate::write(&Document { blocks: vec![block.clone()], version: None });
             lines.extend(text.lines().map(str::to_string));
             let marked = match block {
                 Block::Table(_) => {
@@ -2649,9 +2654,7 @@ impl App {
                 Some(sheet) => {
                     let z = match &e.z {
                         None => Some(0),
-                        Some(z) => self.wb.sheets[sheet]
-                            .layer_index(z)
-                            .or_else(|| crate::engine::letters_to_layer(z).filter(|&n| n <= self.wb.sheets[sheet].layers.len())),
+                        Some(z) => self.wb.sheets[sheet].layer_named_or_lettered(z),
                     };
                     match z {
                         Some(z) => {
@@ -3674,6 +3677,8 @@ impl App {
                 Err(e) => self.error(format!("cannot write {}: {e}", self.path.display())),
             };
         }
+        // What hardcalc writes names its format version.
+        self.doc.stamp();
         let text = crate::write(&self.doc);
         match crate::storage::write_text(&self.path, &text, self.compression) {
             Ok(bytes) => {
@@ -3761,10 +3766,9 @@ impl App {
     /// references to the old name follow. A column beyond the data is added.
     fn rename_column(&mut self, text: &str) {
         let c = self.view.cursor.1;
-        let (name, ty) = match text.split_once(':') {
-            Some((n, t)) => (table_name(n), Some(t.trim().to_string()).filter(|t| !t.is_empty())),
-            None => (table_name(text), None),
-        };
+        // Read as the header of a table in a file is.
+        let (name, ty) = crate::parse::split_header(text.trim().trim_end_matches(':'));
+        let name = table_name(&name);
         let starts = name.chars().next().is_some_and(|ch| ch.is_alphabetic() || ch == '_');
         if !starts || !valid_table_name(&name) {
             return self.error(format!("'{name}' is not a valid column name (letters, digits, spaces, _ and -, starting with a letter)"));
@@ -5144,10 +5148,7 @@ impl App {
             }
             "addcol" => {
                 let Some(spec) = args.first() else { return self.error("usage: :addcol Name[:Type]") };
-                let (name, ty) = match spec.split_once(':') {
-                    Some((n, t)) => (n.to_string(), Some(t.to_string())),
-                    None => (spec.to_string(), None),
-                };
+                let (name, ty) = crate::parse::split_header(spec);
                 let (rows, cols) = self.dims();
                 let at = (self.view.cursor.1 + 1).min(cols);
                 let sheet = self.view.sheet;

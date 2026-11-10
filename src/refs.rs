@@ -694,6 +694,74 @@ fn remap_layers(doc: &mut Document, sheet: usize, map: &dyn Fn(usize) -> Option<
     }
 }
 
+/// `,` between the arguments of functions (the form before format version
+/// 1) → `;`. Commas in brackets (`Table[Row, Column]`) and in texts stay.
+pub fn semicolons(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut open: Vec<char> = Vec::new();
+    let mut quoted = false;
+    for c in src.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => open.push(c),
+            ')' | ']' | '}' if !quoted => {
+                open.pop();
+            }
+            ',' if !quoted && open.last() == Some(&'(') => {
+                out.push(';');
+                continue;
+            }
+            _ => {}
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Applies [`semicolons`] to every formula of a document: cells, `{=…}`
+/// in texts and layouts, value elements and the functions of its own.
+pub fn legacy_separators(doc: &mut Document) {
+    for block in &mut doc.blocks {
+        match block {
+            Block::Table(t) => {
+                for cell in t.cells_mut().filter(|c| c.trim_start().starts_with('=') && c.contains(',')) {
+                    *cell = semicolons(cell);
+                }
+            }
+            Block::Text(lines) => {
+                for line in lines.iter_mut().filter(|l| l.contains("{=")) {
+                    *line = map_inline(line, semicolons);
+                }
+            }
+            Block::Functions(lines) => {
+                for line in lines.iter_mut().filter(|l| l.contains(',')) {
+                    // The description after ` #` is text.
+                    let (def, rest) = match line.find(" #") {
+                        Some(i) => line.split_at(i),
+                        None => (line.as_str(), ""),
+                    };
+                    *line = format!("{}{rest}", semicolons(def));
+                }
+            }
+            Block::Layout { lines, .. } => {
+                for line in lines.iter_mut().filter(|l| l.contains(',')) {
+                    let Ok(mut e) = crate::layout::Element::parse(line) else { continue };
+                    let content = match e.kind {
+                        crate::layout::ElementKind::Value => semicolons(&e.content),
+                        crate::layout::ElementKind::Text | crate::layout::ElementKind::Note | crate::layout::ElementKind::Heading => map_inline(&e.content, semicolons),
+                        _ => continue,
+                    };
+                    if content != e.content {
+                        e.content = content;
+                        *line = e.to_line();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Writes `Table.X` (the old form) as `Table!X` in all formulas and `{=…}`.
 pub fn normalize_table_dots(doc: &mut Document) {
     let tables: Vec<String> = doc.blocks.iter().filter_map(|b| if let Block::Table(t) = b { t.name.clone() } else { None }).collect();

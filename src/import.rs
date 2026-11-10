@@ -264,6 +264,8 @@ fn cell_text(v: &Data) -> String {
         Data::Int(i) => i.to_string(),
         Data::Float(f) => number_text(*f),
         Data::Bool(b) => b.to_string(),
+        // Text that starts with `=` is text, not a formula: `\=…`.
+        Data::String(s) if s.trim_start().starts_with('=') => format!("\\{}", s.trim_start().replace(['\r', '\n'], " ")),
         Data::String(s) => s.replace(['\r', '\n'], " "),
         Data::DateTime(dt) if dt.is_duration() => {
             let minutes = (dt.as_f64() * 1440.0).round() as i64;
@@ -454,8 +456,9 @@ fn translate(excel: &str, here: &str, geometry: &HashMap<String, Geometry>) -> R
                     return Err(format!("unknown name '{word}'"));
                 }
             }
-            ';' => {
-                out.push(',');
+            // hardcalc separates arguments by `;` (Excel by `,`).
+            ';' | ',' => {
+                out.push(';');
                 i += 1;
             }
             '{' | '#' | '@' | '[' => return Err(format!("'{c}' is not supported")),
@@ -547,8 +550,8 @@ mod tests {
         assert_eq!(t("SUM($B$2:$B$4)").unwrap(), "sum(B1:B3)");
         assert_eq!(t("SUM(B1:B100)").unwrap(), "sum(B1:B3)", "clipped to the data");
         assert_eq!(t("AVERAGE(B:B)").unwrap(), "avg(B)");
-        assert_eq!(t("IF(A2>0,\"ja\",\"nein\")").unwrap(), "if(A1>0,\"ja\",\"nein\")");
-        assert_eq!(t("ROUND(C3;2)").unwrap(), "round(C2,2)");
+        assert_eq!(t("IF(A2>0,\"ja\",\"nein\")").unwrap(), "if(A1>0;\"ja\";\"nein\")");
+        assert_eq!(t("ROUND(C3;2)").unwrap(), "round(C2;2)");
         assert_eq!(t("A2=TRUE").unwrap(), "A1=true");
     }
 

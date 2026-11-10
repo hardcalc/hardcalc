@@ -118,6 +118,7 @@ pub fn import(path: &Path) -> Result<(Document, crate::import::ImportReport), St
         kept: 0,
     };
     let doc = Document {
+        version: None,
         blocks: vec![
             Block::Text(vec![format!("# {stem}"), String::new(), format!("Imported from {source}.")]),
             Block::Table(Table { compact: true, line: SrcLine::default(), heading_level: Some(2), name: Some(stem), shape: Shape::Matrix(Vec::new()), columns, rows, footer: Vec::new(), layer_name: None, layers: Vec::new(), fill: None }),

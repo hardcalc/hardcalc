@@ -84,6 +84,12 @@ class Numbers(unittest.TestCase):
         self.assertIsNone(convert.parse_number("5 m/s"))
         self.assertIsNone(convert.parse_number("Nikon D70s"))
         self.assertIsNone(convert.parse_number("F FX"))
+        # As in hardcalc: separators between thousands group in threes.
+        self.assertEqual(convert.parse_number("1.200.000"), (1200000.0, True, 0))
+        self.assertEqual(convert.parse_number("1 200,5"), (1200.5, True, 1))
+        self.assertEqual(convert.parse_number("-1,234,567"), (-1234567.0, False, 0))
+        for text in ("1.2.3", "192.168.1.1", "030 1234567", "1.5,2"):
+            self.assertIsNone(convert.parse_number(text), text)
 
     def test_dates(self):
         self.assertEqual(convert.parse_date("2026-10-08"), 46303.0)
@@ -225,15 +231,15 @@ class FromCalc(unittest.TestCase):
         self.assertEqual(self.t("=SUM(B2:B100)"), "=sum(B)", "open end below the data")
         self.assertEqual(self.t("=SUM(B:B)"), "=sum(B)")
         self.assertEqual(self.t("=B2:B4*2"), "=B1:B3*2", "outside functions a range stays a range")
-        self.assertEqual(self.t("=IF(A2=\"x\";TRUE();FALSE())"), "=if(A1=\"x\",true,false)")
-        self.assertEqual(self.t("=ROUND(B3;2)"), "=round(B2,2)")
+        self.assertEqual(self.t("=IF(A2=\"x\";TRUE();FALSE())"), "=if(A1=\"x\";true;false)")
+        self.assertEqual(self.t("=ROUND(B3;2)"), "=round(B2;2)")
 
     def test_new_functions(self):
         self.assertEqual(self.t("=ISBLANK(B2)"), "=isblank(B1)")
-        self.assertEqual(self.t("=EDATE(B2;1)"), "=edate(B1,1)")
-        self.assertEqual(self.t("=DATEDIF(A2;B2;\"MD\")"), "=datedif(A1,B1,\"MD\")")
-        self.assertEqual(self.t("=IFS(A2>1;1;TRUE();2)"), "=ifs(A1>1,1,true,2)")
-        self.assertEqual(self.t("=MAXIFS(B2:B4;A2:A4;\"x\")"), "=maxifs(B,A,\"x\")", "whole data columns become the column")
+        self.assertEqual(self.t("=EDATE(B2;1)"), "=edate(B1;1)")
+        self.assertEqual(self.t("=DATEDIF(A2;B2;\"MD\")"), "=datedif(A1;B1;\"MD\")")
+        self.assertEqual(self.t("=IFS(A2>1;1;TRUE();2)"), "=ifs(A1>1;1;true;2)")
+        self.assertEqual(self.t("=MAXIFS(B2:B4;A2:A4;\"x\")"), "=maxifs(B;A;\"x\")", "whole data columns become the column")
 
     def test_other_sheets(self):
         self.assertEqual(self.t("=$'Meine Costs'.B2+1"), "=\"Meine Costs\"!B1+1")
@@ -249,7 +255,7 @@ class FromCalc(unittest.TestCase):
     def test_round_trip_of_translated_formulas(self):
         book = Book([TableInfo("T", "T", ["a", "b"], 4, [])])
         for hc in ("=B1/sum(B)", "=A1*2+B2", "=(A1+B1)*2", "=A1-(B1-B2)", "=A1^(2^3)",
-                   "=sumif(A, \">1\", B)", "=round(A1, 2)"):
+                   "=sumif(A; \">1\"; B)", "=round(A1; 2)"):
             calc_f = to_calc(hc, book, 0, 0)
             self.assertEqual(from_calc(calc_f, book, 0).replace(" ", ""), hc.replace(" ", ""), calc_f)
 
@@ -308,6 +314,8 @@ class Export(unittest.TestCase):
         sheets = [convert.SheetData("Sheet1", [["Name", "Amount"], ["Rent", 1200.5], ["Total", 0.0]],
                                     {(2, 1): "=SUM(B2:B2)"})]
         self.assertEqual(convert.export(sheets, None), "\n".join([
+            "<!-- hardcalc 1 -->",
+            "",
             "## Sheet1 :: matrix",
             "",
             "| Name | Amount |",
@@ -435,3 +443,21 @@ class ExportFormats(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MaskedEquals(unittest.TestCase):
+    SRC = "## T :: matrix\n\n| k | v |\n|---|---|\n| \\=ok | 1 |\n"
+
+    def test_text_with_equals_keeps_its_mask(self):
+        plans, state = convert.plan_import(self.SRC)
+        self.assertEqual(plans[0].cells[0][0], ("s", "=ok"))
+        sheets = [convert.SheetData("T", [["k", "v"], ["=ok", 1.0]], {}, {}, None)]
+        self.assertIn("| \\=ok | 1 |", convert.export(sheets, state))
+
+    def test_new_text_is_masked_and_old_states_stay_as_they_were(self):
+        sheets = [convert.SheetData("New", [["k"], ["=typed as text"]], {}, {}, None)]
+        self.assertIn("| \\=typed as text |", convert.export(sheets, None))
+        plans, state = convert.plan_import(self.SRC)
+        del state["sheets"][0]["kept"]
+        sheets = [convert.SheetData("T", [["k", "v"], ["=sum(B)", 1.0]], {}, {}, None)]
+        self.assertIn("| =sum(B) | 1 |", convert.export(sheets, state))

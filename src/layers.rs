@@ -172,6 +172,31 @@ impl Target {
     }
 }
 
+/// Why the target of a rule meets nothing in its table: a column that is
+/// not there, or a row or cell beyond the table. `open`: the table grows
+/// with the window (a playground, `fill`), so cells beyond it are fine.
+pub fn target_problem(wb: &Workbook, sheet: usize, target: &str, open: bool) -> Option<String> {
+    let s = &wb.sheets[sheet];
+    let (rows, cols) = (s.cells.len(), s.columns.len());
+    let beyond = |r: usize, c: usize| !open && (r >= rows || c >= cols);
+    let size = format!("the table has {rows} rows and {cols} columns");
+    match Target::parse(target) {
+        Target::All => None,
+        Target::Column(name) | Target::RowWhere { column: name, .. } => {
+            let letters = !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase());
+            match column_index(wb, sheet, &name) {
+                Some(_) => None,
+                None if letters && open => None,
+                None if letters => Some(format!("column {name} is beyond the table – {size}")),
+                None => Some(format!("unknown column '{name}'")),
+            }
+        }
+        Target::Row(n) => (!open && n > rows).then(|| format!("row {n} is beyond the table – {size}")),
+        Target::Cell(r, c) => beyond(r, c).then(|| format!("the cell is beyond the table – {size}")),
+        Target::Range((c1, r1), (c2, r2)) => (beyond(r1, c1) || beyond(r2, c2)).then(|| format!("the range reaches beyond the table – {size}")),
+    }
+}
+
 fn column_index(wb: &Workbook, sheet: usize, name: &str) -> Option<usize> {
     let cols = &wb.sheets[sheet].columns;
     cols.iter().position(|c| c.name == name).or_else(|| {
@@ -213,7 +238,13 @@ impl Color {
             let p = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
             return Some(Color::Rgb(p(0)?, p(2)?, p(4)?));
         }
-        Some(Color::Named(s.to_lowercase()))
+        // The names the screen and the printer both know (`light-blue` = `lightblue`).
+        const NAMES: &[&str] = &[
+            "black", "red", "green", "yellow", "blue", "magenta", "cyan", "gray", "grey", "darkgray", "darkgrey", "white", "lightred",
+            "lightgreen", "lightyellow", "lightblue", "lightmagenta", "lightcyan",
+        ];
+        let name = s.to_lowercase();
+        NAMES.contains(&name.replace(['-', '_'], "").as_str()).then_some(Color::Named(name))
     }
 }
 
