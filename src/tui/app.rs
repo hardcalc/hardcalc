@@ -2614,9 +2614,9 @@ impl App {
         let pages = p.layout.pages.len();
         let group = if p.zoom > 0 { p.grid().0 * p.grid().1 } else { 1 };
         match key.code {
-            KeyCode::Char('+' | '=') => return self.zoom_preview(-1),
-            KeyCode::Char('-' | '_') => return self.zoom_preview(1),
-            KeyCode::Char('0') => return self.zoom_preview(isize::MIN / 2),
+            KeyCode::Char('+' | '=') => self.zoom_preview(-1),
+            KeyCode::Char('-' | '_') => self.zoom_preview(1),
+            KeyCode::Char('0') => self.zoom_preview(isize::MIN / 2),
             KeyCode::Esc => self.preview = None,
             KeyCode::F(n) => self.preview_fkey(n),
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit_key(),
