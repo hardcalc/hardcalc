@@ -16,7 +16,7 @@ pub mod ui;
 use app::App;
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyEventKind,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use std::io::{stdout, Stdout, Write};
@@ -92,12 +92,15 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
         if animated && app.anim.record(drawn - start) {
             app.message = Some(app::Message { text: "animations off: frames take too long here (:anim on)".into(), error: false });
         }
-        // The next animation frame after a pause that fits the budget.
+        // Animation frames come in a steady beat: the next one is due a
+        // fixed time after this one began (not after it was drawn, which
+        // takes a different time for every frame). The time fits the budget.
         let pause = Duration::from_secs_f64(frame_bytes.take() as f64 / BYTES_PER_SECOND).clamp(FRAME, SLOWEST_FRAME);
+        let until = |due: Instant| due.saturating_duration_since(Instant::now());
         if app.quit {
             // Switching off, keys are no longer read.
             if app.anim.close() {
-                std::thread::sleep(pause.saturating_sub(drawn.elapsed()));
+                std::thread::sleep(until(start + pause));
                 continue;
             }
             return Ok(());
@@ -106,15 +109,15 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
             continue; // an error message needs a redraw
         }
         let animating = app.anim.active();
-        let wait = if animating {
-            pause.saturating_sub(drawn.elapsed())
+        let due = if animating {
+            Some(start + pause)
         } else if app.anim.flowing() {
-            pause.max(anim::FLOW_FRAME).saturating_sub(drawn.elapsed())
+            Some(start + pause.max(anim::FLOW_FRAME))
         } else {
-            Duration::from_secs(3)
+            None
         };
-        if !event::poll(wait)? {
-            if !animating && !app.anim.flowing() && can_query && app.theme == theme::ThemeSetting::Auto {
+        if !event::poll(due.map_or(Duration::from_secs(3), until))? {
+            if due.is_none() && can_query && app.theme == theme::ThemeSetting::Auto {
                 let light = detect_light();
                 if light.is_some() && light != app.detected_light {
                     app.detected_light = light;
@@ -126,21 +129,39 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
         // Keys that are already waiting (key repeat, fast typing) are all
         // handled before the next frame, so the screen does not lag behind.
         // A mouse event ends the batch: the next one needs the new frame's
-        // click regions.
+        // click regions. Not so the mouse merely moving, which changes nothing.
+        let mut typed = false;
         for _ in 0..64 {
             match event::read()? {
                 // Windows also reports key releases.
-                Event::Key(k) if k.kind == KeyEventKind::Press => app.on_key(k),
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    app.on_key(k);
+                    typed = true;
+                }
                 Event::Mouse(m) => {
                     app.on_mouse(m);
-                    break;
+                    if m.kind != MouseEventKind::Moved {
+                        break;
+                    }
                 }
-                Event::Paste(text) => app.on_paste(&text),
+                Event::Paste(text) => {
+                    app.on_paste(&text);
+                    typed = true;
+                }
                 _ => {}
             }
             if app.quit || !event::poll(Duration::ZERO)? {
                 break;
             }
+        }
+        // While an animation runs, events are handled at once but the frame
+        // keeps to the beat (and to the budget). Typing while only dots flow
+        // is drawn at once.
+        if let Some(due) = due
+            && !app.quit
+            && (animating || !typed)
+        {
+            std::thread::sleep(until(due));
         }
     })();
 

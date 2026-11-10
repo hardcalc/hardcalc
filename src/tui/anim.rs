@@ -73,6 +73,8 @@ struct WindowState {
     area: Rect,
     last: Buffer,
     turn: Option<Turn>,
+    /// The picture on screen while a turn runs.
+    shown: Option<Buffer>,
 }
 
 struct Turn {
@@ -285,22 +287,19 @@ impl Anim {
             return;
         }
         let now = self.now();
-        let mut fresh = Buffer::empty(area);
-        for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                fresh[(x, y)] = buf[(x, y)].clone();
-            }
-        }
+        let fresh = snapshot(buf, area);
         let Some(state) = self.windows.get_mut(&side) else {
-            self.windows.insert(side, WindowState { ident, area, last: fresh, turn: None });
+            self.windows.insert(side, WindowState { ident, area, last: fresh, turn: None, shown: None });
             return;
         };
         if state.area != area {
-            *state = WindowState { ident, area, last: fresh, turn: None };
+            *state = WindowState { ident, area, last: fresh, turn: None, shown: None };
             return;
         }
         if state.ident != ident {
-            let old = std::mem::replace(&mut state.last, Buffer::empty(area));
+            // A turn that still runs goes on from the picture on screen
+            // (the cube half turned), so nothing jumps.
+            let old = state.shown.take().unwrap_or_else(|| std::mem::replace(&mut state.last, Buffer::empty(area)));
             state.turn = Some(Turn { old, start: now, forward: ident > state.ident });
             state.ident = ident;
         }
@@ -310,13 +309,26 @@ impl Anim {
         let state = self.windows.get_mut(&side).unwrap();
         if t >= 1.0 {
             state.turn = None;
+            state.shown = None;
             return;
         }
         let p = ease_in_out(t);
         let old = &state.turn.as_ref().unwrap().old;
         let new = &state.last;
         if turn.1 { cube(buf, area, old, new, p) } else { cube(buf, area, new, old, 1.0 - p) }
+        state.shown = Some(snapshot(buf, area));
     }
+}
+
+/// The cells of `area` in `buf`.
+fn snapshot(buf: &Buffer, area: Rect) -> Buffer {
+    let mut copy = Buffer::empty(area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            copy[(x, y)] = buf[(x, y)].clone();
+        }
+    }
+    copy
 }
 
 /// The cells of a right-angled way from the edge of `source` to the edge of
@@ -508,6 +520,34 @@ mod tests {
         assert_eq!(out, a);
         cube(&mut out, area, &a, &b, 1.0);
         assert_eq!(out[(10, 3)].symbol(), "b");
+    }
+
+    #[test]
+    fn interrupted_turn_goes_on_from_the_picture_on_screen() {
+        let area = Rect::new(0, 0, 20, 6);
+        let table = |ch: &str| {
+            let mut b = Buffer::empty(area);
+            for y in 0..6 {
+                b.set_string(0, y, ch.repeat(20), Style::new());
+            }
+            b
+        };
+        let mut anim = Anim { enabled: true, ..Anim::default() };
+        let t0 = Instant::now();
+        let frame = |anim: &mut Anim, at: Duration, sheet: usize, ch: &str| {
+            anim.now = Some(t0 + at);
+            let mut buf = table(ch);
+            anim.window(true, (0, sheet), &mut buf, area);
+            buf
+        };
+        frame(&mut anim, Duration::ZERO, 0, "a");
+        assert_eq!(frame(&mut anim, Duration::ZERO, 1, "b"), table("a"), "the turn starts at the old table");
+        let half = frame(&mut anim, CUBE / 2, 1, "b");
+        assert!(half != table("a") && half != table("b"));
+        // The next table while the cube is half turned: no jump.
+        assert_eq!(frame(&mut anim, CUBE / 2, 2, "c"), half);
+        // And it ends at the newest table.
+        assert_eq!(frame(&mut anim, CUBE * 2, 2, "c"), table("c"));
     }
 
     #[test]
