@@ -31,6 +31,10 @@ zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 inherits = "release"
 lto = "thin"
 
+[target.'cfg(windows)'.dependencies]
+# Explorer's known folders (desktop, documents, downloads) for the file dialog.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+
 [features]
 # PDF calculation reports with typeset formulas (hardcalc report).
 typst = ["dep:typst", "dep:typst-pdf", "dep:typst-assets"]

@@ -120,7 +120,7 @@ pub const PAGES: &[Page] = &[
             ("  type, ↑ ↓, Tab", "narrow the list · choose · complete (also values like :theme dark)"),
             ("  Tab after a file command", "completes file names (:e :append :w :import :export :pdf)"),
             ("", ""),
-            ("Ctrl+E, :e, :append", "file dialog: Enter opens / appends, ← up, type to search, Ctrl+A all files"),
+            ("Ctrl+E, :e, :append", "file dialog: Enter opens / appends, ← up, Tab places, type to search, Ctrl+A all files"),
             ("", "unsaved changes? first: [S]ave · [D]iscard · [Esc] cancel"),
             (":e file  :e! file  :new", "open another file (! discards changes) · new document"),
             (":w [file]  :q  :q!  :wq", "write · quit · quit without saving · write and quit"),

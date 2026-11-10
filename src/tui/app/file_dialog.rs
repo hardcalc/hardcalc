@@ -3,7 +3,7 @@
 
 use super::App;
 pub use crate::tui::file_dialog::{FileDialog, Purpose};
-use crate::tui::file_dialog::Action;
+use crate::tui::file_dialog::{Action, Spot};
 use ratatui::crossterm::event::KeyEvent;
 use std::path::{Path, PathBuf};
 
@@ -58,10 +58,11 @@ impl App {
         self.dialog_action(action);
     }
 
-    /// Click on entry `i` of the list (double click: choose it).
-    pub(super) fn click_file_entry(&mut self, i: usize, double: bool) {
+    /// Click on an entry of the list (double click: choose it) or on a
+    /// place of the sidebar.
+    pub(super) fn click_file_spot(&mut self, spot: Spot, double: bool) {
         let Some(d) = &mut self.file_dialog else { return };
-        let action = d.click(i, double);
+        let action = d.click_spot(spot, double);
         self.dialog_action(action);
     }
 

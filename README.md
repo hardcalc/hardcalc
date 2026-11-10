@@ -583,7 +583,7 @@ For power users; the help (F1) lists them all.
 | `:sort [column] [desc]` | sort (without arguments: the current column, again: descending) |
 | `:addrow`, `:delrow`, `:addcol Name[:Type]`, `:delcol` | rows / columns |
 | `:footer [Name]` | add a footer row below the table (a summary per column) |
-| menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, Ctrl+A all files |
+| menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, Ctrl+A all files; a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter |
 | `:e file`, `:e! file` | open another file (xlsx/ods/csv are imported); with unsaved changes it asks, `!` discards them without asking |
 | `:append file` | append the tables, layers, charts, layouts, types, functions and text of another file; table names already in use get a number |
 | `:new`, `:new!` | new document with a playground |

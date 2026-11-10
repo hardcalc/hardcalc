@@ -108,6 +108,7 @@ pub enum Hit {
     Choice(usize),
     FKey(u8),
     FileEntry(usize),
+    FilePlace(usize),
 }
 
 pub struct Message {
@@ -1311,6 +1312,7 @@ impl ConfApp {
                     self.last_click = Some((now, m.column, m.row));
                     d.click(i, double)
                 }
+                (MouseEventKind::Down(MouseButton::Left), Some(Hit::FilePlace(i))) => d.click_place(i),
                 (MouseEventKind::ScrollDown, _) => {
                     d.scroll_by(3);
                     Action::None

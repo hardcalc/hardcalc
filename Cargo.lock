@@ -1024,6 +1024,7 @@ dependencies = [
  "typst-assets",
  "typst-pdf",
  "unicode-width",
+ "windows-sys",
  "zip 9.0.0",
 ]
 

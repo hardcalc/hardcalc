@@ -147,6 +147,8 @@ pub enum Hit {
     HelpPage(usize),
     /// Entry `n` of the file dialog's list.
     FileEntry(usize),
+    /// Place `n` of the file dialog's sidebar (favourites, locations).
+    FilePlace(usize),
     /// Button `n` of the unsaved-changes question (save, discard, cancel).
     Confirm(usize),
     /// `hardcalc` at the top left: opens the menu.
@@ -4428,16 +4430,17 @@ impl App {
             return;
         }
         if self.file_dialog.is_some() {
-            let entry = self.hits.iter().find_map(|(r, h)| match h {
-                Hit::FileEntry(i) if r.contains(pos) => Some(*i),
+            let spot = self.hits.iter().find_map(|(r, h)| match h {
+                Hit::FileEntry(i) if r.contains(pos) => Some(crate::tui::file_dialog::Spot::Entry(*i)),
+                Hit::FilePlace(i) if r.contains(pos) => Some(crate::tui::file_dialog::Spot::Place(*i)),
                 _ => None,
             });
-            match (m.kind, entry) {
-                (MouseEventKind::Down(MouseButton::Left), Some(i)) => {
+            match (m.kind, spot) {
+                (MouseEventKind::Down(MouseButton::Left), Some(spot)) => {
                     let now = Instant::now();
                     let double = self.last_click.is_some_and(|(t, x, y)| now.duration_since(t) < DOUBLE_CLICK && (x, y) == (m.column, m.row));
                     self.last_click = Some((now, m.column, m.row));
-                    self.click_file_entry(i, double);
+                    self.click_file_spot(spot, double);
                 }
                 (MouseEventKind::ScrollDown, _) => self.scroll_file_dialog(3),
                 (MouseEventKind::ScrollUp, _) => self.scroll_file_dialog(-3),
@@ -4593,7 +4596,7 @@ impl App {
                         self.fill_drag = Some(self.selection());
                         self.fill_to = None;
                     }
-                    Some(Hit::RowHeader(_) | Hit::FileEntry(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_)) => {}
+                    Some(Hit::RowHeader(_) | Hit::FileEntry(_) | Hit::FilePlace(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_)) => {}
                     Some(Hit::Corner) => {
                         if matches!(self.mode, Mode::Edit { .. }) {
                             self.commit_edit(0, 0);
