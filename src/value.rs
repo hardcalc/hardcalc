@@ -111,28 +111,59 @@ pub fn point_number(s: &str) -> Option<String> {
 
 /// `s` without thousands separators and with `.` as decimal separator, and
 /// whether `,` was the decimal separator.
+///
+/// Separators between thousands must really group the digits in threes
+/// (`1.200.000`, `1 200`, `1'200`): `1.2.3`, `192.168.1.1` or a phone number
+/// like `030 1234567` are no numbers. A single `,` or `.` is always the
+/// decimal separator (`1,200` is 1.2, as `1.200` is).
 fn point_form(s: &str) -> Option<(String, bool)> {
-    let s: String = s.trim().trim_start_matches('+').chars().filter(|c| *c != ' ' && *c != '\'').collect();
+    let s = s.trim().trim_start_matches('+');
     if s.is_empty() || !s.chars().any(|c| c.is_ascii_digit()) {
         return None;
     }
-    let commas = s.matches(',').count();
-    let dots = s.matches('.').count();
-    Some(match (commas, dots) {
-        (0, 0) => (s.clone(), false),
+    let (sign, body) = s.strip_prefix('-').map_or(("", s), |b| ("-", b.trim_start()));
+    // `1 200` and `1'200`: the space or apostrophe groups the whole part.
+    let body = match [' ', '\''].into_iter().find(|sep| body.contains(*sep)) {
+        Some(sep) => {
+            let whole = body.find([',', '.']).unwrap_or(body.len());
+            if !grouped(&body[..whole], sep) || body[whole..].contains([' ', '\'']) {
+                return None;
+            }
+            format!("{}{}", body[..whole].replace(sep, ""), &body[whole..])
+        }
+        None => body.to_string(),
+    };
+    let commas = body.matches(',').count();
+    let dots = body.matches('.').count();
+    // The whole part with `sep` between thousands, then the decimals after `decimal`.
+    let both = |sep: char, decimal: char| -> Option<String> {
+        let (whole, fraction) = body.split_once(decimal)?;
+        (grouped(whole, sep) && !fraction.contains([sep, decimal])).then(|| format!("{}.{fraction}", whole.replace(sep, "")))
+    };
+    let (number, comma_decimal) = match (commas, dots) {
+        (0, 0) => (body.clone(), false),
         (c, d) if c > 0 && d > 0 => {
-            if s.rfind(',') > s.rfind('.') {
-                (s.replace('.', "").replace(',', "."), true)
+            if body.rfind(',') > body.rfind('.') {
+                (both('.', ',')?, true)
             } else {
-                (s.replace(',', ""), false)
+                (both(',', '.')?, false)
             }
         }
-        (1, 0) => (s.replace(',', "."), true),
-        (_, 0) => (s.replace(',', ""), false),
-        (0, 1) => (s.clone(), false),
-        (0, _) => (s.replace('.', ""), true),
+        (1, 0) => (body.replace(',', "."), true),
+        (_, 0) => (grouped(&body, ',').then(|| body.replace(',', ""))?, false),
+        (0, 1) => (body.clone(), false),
+        (0, _) => (grouped(&body, '.').then(|| body.replace('.', ""))?, true),
         _ => unreachable!(),
-    })
+    };
+    Some((format!("{sign}{number}"), comma_decimal))
+}
+
+/// Whether `sep` splits `s` into groups of thousands: one to three digits,
+/// then groups of exactly three.
+fn grouped(s: &str, sep: char) -> bool {
+    let mut groups = s.split(sep);
+    let digits = |g: &str| g.chars().all(|c| c.is_ascii_digit());
+    groups.next().is_some_and(|g| (1..=3).contains(&g.len()) && digits(g)) && groups.all(|g| g.len() == 3 && digits(g))
 }
 
 /// Parses `2026-10-08` or `08.10.2026`.

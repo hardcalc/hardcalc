@@ -37,8 +37,8 @@ B1: Rent increase announced for July
 
 ```chart Spending
 type:   bar
-data:   Expenses.Amount, Expenses.Gross
-labels: Expenses.Item
+data:   Expenses!Amount, Expenses!Gross
+labels: Expenses!Item
 ```
 
 Rent is **{=Expenses[Rent, Share] | percent(1)}** of the expenses,

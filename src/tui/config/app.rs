@@ -107,8 +107,8 @@ pub enum Hit {
     Row(usize),
     Choice(usize),
     FKey(u8),
-    FileEntry(usize),
-    FilePlace(usize),
+    /// An entry of the file dialog's list or a place of its sidebar.
+    File(crate::tui::file_dialog::Spot),
 }
 
 pub struct Message {
@@ -1306,13 +1306,12 @@ impl ConfApp {
         let hit = self.hits.iter().rev().find(|(r, _)| r.contains((m.column, m.row).into())).map(|(_, h)| *h);
         if let Some(d) = &mut self.file_dialog {
             let action = match (m.kind, hit) {
-                (MouseEventKind::Down(MouseButton::Left), Some(Hit::FileEntry(i))) => {
+                (MouseEventKind::Down(MouseButton::Left), Some(Hit::File(spot))) => {
                     let now = Instant::now();
                     let double = self.last_click.is_some_and(|(t, x, y)| now.duration_since(t) < DOUBLE_CLICK && (x, y) == (m.column, m.row));
                     self.last_click = Some((now, m.column, m.row));
-                    d.click(i, double)
+                    d.click_spot(spot, double)
                 }
-                (MouseEventKind::Down(MouseButton::Left), Some(Hit::FilePlace(i))) => d.click_place(i),
                 (MouseEventKind::ScrollDown, _) => {
                     d.scroll_by(3);
                     Action::None

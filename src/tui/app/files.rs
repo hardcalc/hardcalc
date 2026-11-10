@@ -22,10 +22,10 @@ pub fn document_path(name: &str) -> PathBuf {
 }
 
 fn expand_home(name: &str) -> PathBuf {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let home = crate::tui::file_dialog::home_dir();
     match (name.strip_prefix("~/").or_else(|| name.strip_prefix("~\\")), home) {
-        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
-        _ if name == "~" => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+        (Some(rest), Some(home)) => home.join(rest),
+        (None, Some(home)) if name == "~" => home,
         _ => PathBuf::from(name),
     }
 }

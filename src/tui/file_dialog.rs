@@ -79,6 +79,11 @@ pub struct FileDialog {
     pub in_places: bool,
     /// Index into [`FileDialog::places`].
     pub place: usize,
+    /// The probe result the places were taken from; `None`: the places were
+    /// set by hand and stay as they are.
+    probed: Option<u64>,
+    /// The sidebar covers the list (narrow window, set while drawing).
+    side_only: bool,
 }
 
 impl FileDialog {
@@ -94,12 +99,41 @@ impl FileDialog {
             all_files: false,
             accept,
             tag: None,
-            places: places(),
+            places: Vec::new(),
             in_places: false,
             place: 0,
+            probed: Some(0),
+            side_only: false,
         };
+        probe::start(std::time::Duration::from_millis(150));
+        d.take_places();
         d.read();
         d
+    }
+
+    /// Takes over the places once the probe in the background has found them.
+    fn take_places(&mut self) {
+        let Some(seen) = self.probed else { return };
+        if let Some((n, places)) = probe::newer(seen) {
+            // The selected place stays selected if it is still there.
+            let selected = self.places.get(self.place).map(|p| p.path.clone());
+            self.places = places;
+            self.probed = Some(n);
+            self.place = selected.and_then(|s| self.places.iter().position(|p| p.path == s)).unwrap_or(0);
+            if self.places.is_empty() {
+                self.in_places = false;
+            }
+        }
+    }
+
+    /// Goes to the home folder.
+    fn go_home(&mut self) {
+        if let Some(home) = home_dir() {
+            // As the places are written, so the home folder's place lights up.
+            self.dir = plain(std::fs::canonicalize(&home).unwrap_or(home));
+            self.filter.clear();
+            self.read();
+        }
     }
 
     /// Labels readable files, e.g. with their format.
@@ -207,6 +241,15 @@ impl FileDialog {
             KeyCode::Home | KeyCode::PageUp => self.place = 0,
             KeyCode::End | KeyCode::PageDown => self.place = to(n - 1),
             KeyCode::Enter | KeyCode::Right => self.go_place(self.place),
+            // Keys of the list that mean the same here: home, all files, one folder up.
+            KeyCode::Char('~') | KeyCode::Backspace => {
+                self.in_places = false;
+                return self.key(key);
+            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.in_places = false;
+                return self.key(key);
+            }
             // Typing searches the list again.
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.in_places = false;
@@ -269,12 +312,7 @@ impl FileDialog {
                 self.all_files = !self.all_files;
                 self.read();
             }
-            KeyCode::Char('~') if self.filter.is_empty() => {
-                if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-                    self.dir = PathBuf::from(home);
-                    self.read();
-                }
-            }
+            KeyCode::Char('~') if self.filter.is_empty() => self.go_home(),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.filter.push(c);
                 self.select(0);
@@ -286,11 +324,20 @@ impl FileDialog {
 
     /// Click on entry `i` of the list (double click: choose it).
     pub fn click(&mut self, i: usize, double: bool) -> Action {
+        // The keys follow the click: Enter opens the clicked entry.
+        self.in_places = false;
         self.select(i as isize);
         if double { self.choose() } else { Action::None }
     }
 
     pub fn scroll_by(&mut self, lines: isize) {
+        if self.in_places && self.side_only {
+            // Only the sidebar is on screen: the wheel moves its selection.
+            let last = self.places.len().saturating_sub(1) as isize;
+            self.place = (self.place as isize + lines.signum()).clamp(0, last) as usize;
+            return;
+        }
+        self.in_places = false;
         let sel = self.selected as isize;
         self.select(sel + lines);
     }
@@ -312,6 +359,7 @@ impl FileDialog {
     /// Draws the dialog over the frame; returns the screen rows of the entries
     /// and of the places in the sidebar.
     pub fn draw(&mut self, f: &mut Frame, title: &str, filter_label: &str) -> Vec<(Rect, Spot)> {
+        self.take_places();
         let area = f.area();
         let w = (area.width * 4 / 5).clamp(40.min(area.width), 120.min(area.width));
         let h = (area.height * 4 / 5).max(8.min(area.height));
@@ -342,6 +390,7 @@ impl FileDialog {
         } else {
             0
         };
+        self.side_only = side_w > 0 && side_w >= full_w;
         if side_w > 0 {
             hits.extend(self.draw_places(buf, Rect::new(inner.x, list_y, side_w as u16, rows as u16)));
         }
@@ -463,7 +512,7 @@ pub fn places() -> Vec<Place> {
             }
         }
     };
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    let home = home_dir();
     if let Some(home) = &home {
         for (name, path) in standard_folders(home) {
             add(name, path, false);
@@ -508,8 +557,7 @@ pub fn places() -> Vec<Place> {
         }
         if let Some(home) = &home {
             for (name, path) in subfolders(home) {
-                let cloud = ["OneDrive", "Dropbox", "iCloudDrive", "SynologyDrive", "Google Drive", "pCloud", "Nextcloud", "ownCloud", "Box"];
-                if cloud.iter().any(|c| name.starts_with(c)) {
+                if is_cloud_folder(&name) {
                     add(name, path, true);
                 }
             }
@@ -518,14 +566,84 @@ pub fn places() -> Vec<Place> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         add("Computer".into(), PathBuf::from("/"), true);
-        let user = std::env::var("USER").unwrap_or_default();
-        for base in [format!("/media/{user}"), format!("/run/media/{user}")] {
+        // Removable media are mounted below a folder named after the user;
+        // without the name there is nothing to list (not the other users' folders).
+        let user = ["USER", "LOGNAME"].into_iter().filter_map(|k| std::env::var(k).ok()).find(|u| !u.is_empty() && !u.contains('/'));
+        for base in user.iter().flat_map(|user| [format!("/media/{user}"), format!("/run/media/{user}")]) {
             for (name, path) in subfolders(std::path::Path::new(&base)) {
                 add(name, path, true);
             }
         }
     }
     out
+}
+
+/// The user's home folder, as the environment names it.
+pub fn home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"].into_iter().filter_map(std::env::var_os).find(|h| !h.is_empty()).map(PathBuf::from)
+}
+
+/// Whether a folder in the user's folder is the one of a cloud storage:
+/// its usual name, alone or with an addition (`OneDrive - Company`,
+/// `Dropbox (Personal)`) – not `Boxes` or `Dropbox-backup`.
+#[cfg(any(test, windows))]
+fn is_cloud_folder(name: &str) -> bool {
+    let cloud = ["OneDrive", "Dropbox", "iCloudDrive", "SynologyDrive", "Google Drive", "pCloud", "Nextcloud", "ownCloud", "Box"];
+    cloud.iter().any(|c| name.strip_prefix(c).is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '('])))
+}
+
+/// The places are looked up in the background: a disconnected network drive
+/// or a stale mount can make a single look take many seconds, and the dialog
+/// must not wait for that. It shows the places found last time meanwhile.
+mod probe {
+    use super::Place;
+    use std::sync::{Condvar, Mutex};
+    use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct State {
+        /// Counts the finished probes; 0: none yet.
+        n: u64,
+        places: Vec<Place>,
+        running: bool,
+    }
+
+    static STATE: Mutex<Option<State>> = Mutex::new(None);
+    static DONE: Condvar = Condvar::new();
+
+    /// Starts a probe (unless one is still running) and waits up to `wait`
+    /// for it, so the dialog usually opens with fresh places.
+    pub fn start(wait: Duration) {
+        let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
+        let state = guard.get_or_insert_with(State::default);
+        let before = state.n;
+        if !state.running {
+            state.running = true;
+            std::thread::spawn(|| {
+                let places = super::places();
+                let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
+                let state = guard.get_or_insert_with(State::default);
+                state.places = places;
+                state.n += 1;
+                state.running = false;
+                DONE.notify_all();
+            });
+        }
+        let until = Instant::now() + wait;
+        while guard.as_ref().is_some_and(|s| s.n == before) {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            guard = DONE.wait_timeout(guard, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    /// The places of a probe finished after probe `seen`, with its number.
+    pub fn newer(seen: u64) -> Option<(u64, Vec<Place>)> {
+        let guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().filter(|s| s.n > seen).map(|s| (s.n, s.places.clone()))
+    }
 }
 
 /// Visible subfolders of `dir`, sorted by name.
@@ -560,9 +678,11 @@ fn standard_folders(home: &std::path::Path) -> Vec<(String, PathBuf)> {
                 let dirs = xdg_user_dirs(&text, home);
                 english()
                     .into_iter()
-                    .map(|(name, path)| match dirs.iter().find(|(n, _)| *n == name) {
-                        Some((_, p)) => (p.file_name().map_or(name, |n| n.to_string_lossy().into_owned()), p.clone()),
-                        None => (name, path),
+                    .filter_map(|(name, path)| match dirs.iter().find(|(n, _)| *n == name) {
+                        Some((_, Some(p))) => Some((p.file_name().map_or(name, |n| n.to_string_lossy().into_owned()), p.clone())),
+                        // Switched off by the user: no such folder.
+                        Some((_, None)) => None,
+                        None => Some((name, path)),
                     })
                     .collect()
             }
@@ -574,9 +694,10 @@ fn standard_folders(home: &std::path::Path) -> Vec<(String, PathBuf)> {
 }
 
 /// The desktop, documents and download folders of an XDG `user-dirs.dirs`
-/// (`XDG_DESKTOP_DIR="$HOME/Schreibtisch"`), under their English names.
+/// (`XDG_DESKTOP_DIR="$HOME/Schreibtisch"`), under their English names;
+/// `None` for a folder the user switched off.
 #[cfg(any(test, all(unix, not(target_os = "macos"))))]
-fn xdg_user_dirs(text: &str, home: &std::path::Path) -> Vec<(String, PathBuf)> {
+fn xdg_user_dirs(text: &str, home: &std::path::Path) -> Vec<(String, Option<PathBuf>)> {
     let keys = [("XDG_DESKTOP_DIR", "Desktop"), ("XDG_DOCUMENTS_DIR", "Documents"), ("XDG_DOWNLOAD_DIR", "Downloads")];
     text.lines()
         .filter_map(|line| {
@@ -589,7 +710,7 @@ fn xdg_user_dirs(text: &str, home: &std::path::Path) -> Vec<(String, PathBuf)> {
                 None => return None,
             };
             // A folder set to the home folder itself means "none".
-            (path != home).then(|| (name.to_string(), path))
+            Some((name.to_string(), (path != home).then_some(path)))
         })
         .collect()
 }
@@ -680,6 +801,9 @@ mod tests {
             Place { name: "a".into(), path: root.join("a"), location: false },
             Place { name: "b".into(), path: root.join("b"), location: true },
         ];
+        // Places set by hand: the probe must not replace them.
+        d.probed = None;
+        d.place = 0;
         d
     }
 
@@ -715,8 +839,47 @@ mod tests {
         let home = std::path::Path::new("/home/m");
         assert_eq!(
             xdg_user_dirs(text, home),
-            vec![("Desktop".to_string(), PathBuf::from("/home/m/Schreibtisch")), ("Documents".to_string(), PathBuf::from("/data/Dokumente"))]
+            vec![
+                ("Desktop".to_string(), Some(PathBuf::from("/home/m/Schreibtisch"))),
+                // Set to the home folder: switched off.
+                ("Downloads".to_string(), None),
+                ("Documents".to_string(), Some(PathBuf::from("/data/Dokumente"))),
+            ]
         );
+    }
+
+    #[test]
+    fn cloud_folders_by_their_names() {
+        for name in ["OneDrive", "OneDrive - Company", "Dropbox (Personal)", "Box", "Box Sync", "Google Drive"] {
+            assert!(is_cloud_folder(name), "{name}");
+        }
+        for name in ["Boxes", "BoxSync-old", "Dropbox-backup-2019", "OneDriveTemp", "Documents"] {
+            assert!(!is_cloud_folder(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_click_in_the_list_takes_the_keys_back() {
+        let root = std::env::temp_dir().join(format!("hardcalc-places-click-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        std::fs::write(root.join("x.md"), "").unwrap();
+        let mut d = dialog(&root);
+        key(&mut d, KeyCode::Tab);
+        assert!(d.in_places);
+        let i = d.shown().iter().position(|e| e.name == "x.md").unwrap();
+        d.click(i, false);
+        assert!(!d.in_places);
+        assert_eq!(key(&mut d, KeyCode::Enter), Action::Chosen(root.join("x.md")));
+        // In the sidebar, Ctrl+A and Backspace act as in the list instead of doing nothing.
+        key(&mut d, KeyCode::Tab);
+        d.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert!(d.all_files && !d.in_places);
+        // The wheel scrolls the list, also while the sidebar has the keys.
+        key(&mut d, KeyCode::Tab);
+        d.scroll_by(1);
+        assert!(!d.in_places);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

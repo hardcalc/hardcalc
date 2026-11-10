@@ -16,9 +16,31 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Something in the source that is read, but probably not as it was meant;
+/// `hardcalc check` shows these as warnings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Note {
+    pub line: usize,
+    pub message: String,
+}
+
 pub fn parse(src: &str) -> Result<Document, ParseError> {
+    parse_with_notes(src).map(|(doc, _)| doc)
+}
+
+/// The notes on a source text: headings that look like table headings but
+/// name no shape, rows with more cells than columns, unclosed code blocks,
+/// tables that share a name.
+pub fn notes(src: &str) -> Vec<Note> {
+    parse_with_notes(src).map(|(_, notes)| notes).unwrap_or_default()
+}
+
+fn parse_with_notes(src: &str) -> Result<(Document, Vec<Note>), ParseError> {
+    // A byte order mark (Windows editors write one) is not part of the text.
+    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
     let lines: Vec<&str> = src.lines().collect();
     let mut doc = Document::default();
+    let mut notes: Vec<Note> = Vec::new();
     let mut text: Vec<String> = Vec::new();
     let mut i = 0;
 
@@ -38,20 +60,22 @@ pub fn parse(src: &str) -> Result<Document, ParseError> {
     while i < lines.len() {
         let line = lines[i];
 
-        if let Some(fence) = fence_marker(line) {
+        if let Some((mark, len)) = fence_open(line) {
             flush(&mut text, &mut doc);
-            let info = line.trim_start()[fence.len()..].trim().to_string();
+            let info = line.trim_start()[len..].trim().to_string();
             let start = i;
             i += 1;
             let mut body = Vec::new();
-            while i < lines.len() && !lines[i].trim_start().starts_with(fence) {
+            while i < lines.len() && !fence_close(lines[i], mark, len) {
                 body.push(lines[i].to_string());
                 i += 1;
             }
             if i == lines.len() {
-                return Err(ParseError { line: start + 1, message: "unclosed code fence".into() });
+                // As in CommonMark: the block runs to the end of the document.
+                notes.push(Note { line: start + 1, message: "unclosed code fence – the block runs to the end of the file".into() });
+            } else {
+                i += 1;
             }
-            i += 1;
             // A slice or scenario belongs to the last table before it.
             if let Some((name, kind)) = data_layer_info(&info)
                 && let Some(t) = doc.blocks.iter_mut().rev().find_map(|b| if let Block::Table(t) = b { Some(t) } else { None })
@@ -74,30 +98,50 @@ pub fn parse(src: &str) -> Result<Document, ParseError> {
             continue;
         }
 
+        // An HTML comment over several lines is text, whatever it holds.
+        if line.trim_start().starts_with("<!--") && !line.contains("-->") {
+            text.push(line.to_string());
+            i += 1;
+            while i < lines.len() {
+                text.push(lines[i].to_string());
+                i += 1;
+                if lines[i - 1].contains("-->") {
+                    break;
+                }
+            }
+            continue;
+        }
+
         if let Some((level, name, shape)) = table_heading(line) {
             let mut j = i + 1;
             while j < lines.len() && lines[j].trim().is_empty() {
                 j += 1;
             }
-            if j + 1 < lines.len() && is_table_row(lines[j]) && is_separator(lines[j + 1]) {
-                flush(&mut text, &mut doc);
-                let (shape, fill, layer_name, compact) = parse_shape_and_layer(&shape).map_err(|m| ParseError { line: i + 1, message: m })?;
-                let (mut table, next) = parse_table(&lines, j);
-                table.heading_level = Some(level);
-                table.name = Some(name);
-                table.shape = shape;
-                table.layer_name = layer_name;
-                table.fill = fill;
-                table.compact = compact;
-                doc.blocks.push(Block::Table(table));
-                i = next;
-                continue;
+            if j + 1 < lines.len() && starts_table(lines[j]) && is_separator(lines[j + 1]) {
+                match parse_shape_and_layer(&shape) {
+                    Ok((shape, fill, layer_name, compact)) => {
+                        flush(&mut text, &mut doc);
+                        let (mut table, next) = parse_table(&lines, j, &mut notes);
+                        table.heading_level = Some(level);
+                        table.name = Some(name);
+                        table.shape = shape;
+                        table.layer_name = layer_name;
+                        table.fill = fill;
+                        table.compact = compact;
+                        doc.blocks.push(Block::Table(table));
+                        i = next;
+                        continue;
+                    }
+                    // Any Markdown may say `::` in a heading (`## std::map`): it
+                    // stays a heading, and the table below it has no name.
+                    Err(m) => notes.push(Note { line: i + 1, message: format!("heading is not a table heading ({m}) – the table below has no name") }),
+                }
             }
         }
 
-        if is_table_row(line) && i + 1 < lines.len() && is_separator(lines[i + 1]) {
+        if starts_table(line) && i + 1 < lines.len() && is_separator(lines[i + 1]) {
             flush(&mut text, &mut doc);
-            let (table, next) = parse_table(&lines, i);
+            let (table, next) = parse_table(&lines, i, &mut notes);
             doc.blocks.push(Block::Table(table));
             i = next;
             continue;
@@ -108,18 +152,76 @@ pub fn parse(src: &str) -> Result<Document, ParseError> {
     }
     flush(&mut text, &mut doc);
     crate::refs::normalize_table_dots(&mut doc);
-    Ok(doc)
+    // Tables are found by their name; file systems and some tools do not tell
+    // upper from lower case, so names that differ only in case count as equal.
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    for block in &doc.blocks {
+        if let Block::Table(t) = block
+            && let Some(name) = &t.name
+        {
+            let key = name.to_lowercase();
+            match seen.iter().find(|(k, _)| *k == key) {
+                Some((_, first)) => notes.push(Note {
+                    line: t.line.0,
+                    message: format!("table name '{name}' is used before (line {first}) – references find only one of them"),
+                }),
+                None => seen.push((key, t.line.0)),
+            }
+        }
+    }
+    notes.sort_by_key(|n| n.line);
+    Ok((doc, notes))
 }
 
-fn fence_marker(line: &str) -> Option<&'static str> {
+/// The code fence a line opens: its character and length – three or more
+/// backticks or tildes. (After backticks the info must not hold another
+/// backtick: that is inline code.)
+fn fence_open(line: &str) -> Option<(char, usize)> {
     let t = line.trim_start();
-    if t.starts_with("````") {
-        Some("````")
-    } else if t.starts_with("```") {
-        Some("```")
-    } else {
-        None
+    let mark = t.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let len = t.chars().take_while(|c| *c == mark).count();
+    (len >= 3 && !(mark == '`' && t[len..].contains('`'))).then_some((mark, len))
+}
+
+/// Whether the line closes a fence: the same character, at least as often,
+/// and nothing else.
+fn fence_close(line: &str, mark: char, len: usize) -> bool {
+    let t = line.trim();
+    t.chars().all(|c| c == mark) && t.chars().count() >= len
+}
+
+/// Whether a table can start at this line of the text: a table row that is
+/// not indented as code (four spaces or a tab).
+fn starts_table(line: &str) -> bool {
+    let indent: usize = line.chars().take_while(|c| matches!(c, ' ' | '\t')).map(|c| if c == '\t' { 4 } else { 1 }).sum();
+    indent < 4 && is_table_row(line)
+}
+
+/// `Name:Type` of a column header → (name, type). The colon is the last one
+/// outside brackets and quotes, and a type starts with a letter – so
+/// `Rate:decimal(1) special("-": "none")` has a type and `Time 12:00` has none.
+pub fn split_header(h: &str) -> (String, Option<String>) {
+    let mut depth = 0i32;
+    let mut quoted = false;
+    let mut colon = None;
+    let mut prev = ' ';
+    for (i, c) in h.char_indices() {
+        match c {
+            '"' if prev != '\\' => quoted = !quoted,
+            '(' | '[' if !quoted => depth += 1,
+            ')' | ']' if !quoted => depth -= 1,
+            ':' if !quoted && depth == 0 => colon = Some(i),
+            _ => {}
+        }
+        prev = c;
     }
+    if let Some(i) = colon {
+        let (name, ty) = (h[..i].trim(), h[i + 1..].trim());
+        if !name.is_empty() && ty.starts_with(|c: char| c.is_alphabetic() || c == '_') {
+            return (name.to_string(), Some(ty.to_string()));
+        }
+    }
+    (h.trim().to_string(), None)
 }
 
 fn fenced_block(info: String, body: Vec<String>, line: usize) -> Block {
@@ -281,14 +383,16 @@ fn parse_shape_and_fill(s: &str) -> Result<(Shape, Option<bool>), String> {
     Ok((parse_shape(s)?, None))
 }
 
-/// Layer names: not empty, no `,` `:` `.` `"` `[` `]`, and nothing that
-/// reads like a reference or a layer letter (`B2`, `b`).
+/// Layer names: not empty, no `,` `:` `.` `"` `[` `]` `` ` `` `@` `!`, not
+/// only digits, and nothing that reads like a reference or a layer letter
+/// (`B2`, `b`, `ab` – one or two lower-case letters are letters of levels).
 pub fn valid_layer_name(name: &str) -> bool {
+    let letters = name.len() <= 2 && name.chars().all(|c| c.is_ascii_lowercase());
     !name.is_empty()
         && !name.contains([',', ':', '.', '"', '[', ']', '`', '@', '!'])
         && name.trim() == name
         && name != "*"
-        && !name.chars().all(|c| c.is_ascii_lowercase())
+        && !letters
         && !name.chars().all(|c| c.is_ascii_digit())
         && crate::engine::RefParts::parse(name).is_none()
 }
@@ -340,7 +444,8 @@ fn column_targets(header: &[String], columns: &[Column]) -> Result<Vec<usize>, S
     header
         .iter()
         .map(|h| {
-            let name = h.rsplit_once(':').map_or(h.as_str(), |(n, _)| n).trim();
+            let (name, _) = split_header(h);
+            let name = name.as_str();
             columns
                 .iter()
                 .position(|c| c.name == name || c.name == h.trim())
@@ -435,19 +540,14 @@ fn parse_align(sep: &str) -> Align {
     }
 }
 
-fn parse_table(lines: &[&str], start: usize) -> (Table, usize) {
+fn parse_table(lines: &[&str], start: usize, notes: &mut Vec<Note>) -> (Table, usize) {
     let header = split_row(lines[start]);
     let seps = split_row(lines[start + 1]);
     let columns: Vec<Column> = header
         .iter()
         .enumerate()
         .map(|(idx, h)| {
-            let (name, ty) = match h.rsplit_once(':') {
-                Some((n, t)) if !t.trim().is_empty() && !n.trim().is_empty() => {
-                    (n.trim().to_string(), Some(t.trim().to_string()))
-                }
-                _ => (h.clone(), None),
-            };
+            let (name, ty) = split_header(h);
             let align = seps.get(idx).map(|s| parse_align(s)).unwrap_or_default();
             Column { name, ty, align }
         })
@@ -457,6 +557,13 @@ fn parse_table(lines: &[&str], start: usize) -> (Table, usize) {
     let mut i = start + 2;
     while i < lines.len() && is_table_row(lines[i]) {
         let mut cells = split_row(lines[i]);
+        if cells.len() > columns.len() {
+            // As in GitHub's Markdown the cells beyond the header are not part of the table.
+            notes.push(Note {
+                line: i + 1,
+                message: format!("row has {} cells, the table has {} columns – the cells beyond are dropped when saving", cells.len(), columns.len()),
+            });
+        }
         cells.resize(columns.len(), String::new());
         rows.push(cells);
         i += 1;

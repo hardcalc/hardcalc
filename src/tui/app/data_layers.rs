@@ -146,7 +146,7 @@ impl App {
 
     fn check_layer_name(&self, name: &str, current: Option<usize>) -> Result<(), String> {
         if !crate::parse::valid_layer_name(name) {
-            return Err(format!("'{name}' is not a valid name (no , : . \" [ ], not like B2 or a lower-case letter)"));
+            return Err(format!("'{name}' is not a valid name (no , : . \" [ ], not like B2 or the letters of a level such as b)"));
         }
         let s = &self.wb.sheets[self.view.sheet];
         if s.layer_index(name).is_some_and(|z| Some(z) != current) {
@@ -232,7 +232,8 @@ impl App {
             let list: Vec<String> = (0..=self.layer_count()).map(|z| self.layer_title(z)).collect();
             return self.info(format!("z: {} – :z rename Name, :z delete", list.join(" · ")));
         };
-        let z = letters_to_layer(arg).or_else(|| self.wb.sheets[self.view.sheet].layer_index(arg));
+        // A name first: `plan` is a name, although it could be read as letters.
+        let z = self.wb.sheets[self.view.sheet].layer_index(arg).or_else(|| letters_to_layer(arg));
         match z {
             Some(z) if z <= self.layer_count() => self.set_layer(z),
             _ => self.error(format!("no '{arg}' on the z axis – :z lists them")),

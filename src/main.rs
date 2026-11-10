@@ -249,6 +249,9 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            for n in hardcalc::parse::notes(&src) {
+                findings.push(Finding { severity: "warning", line: n.line, block: "document".into(), table: None, cell: None, message: n.message });
+            }
             let calc_problems = hardcalc::sheet::problems(&hardcalc::sheet::evaluate_document(&doc, &mut wb));
             for p in &calc_problems {
                 findings.push(Finding { severity: "error", line: 0, block: "calc".into(), table: None, cell: None, message: p.to_string() });
@@ -268,7 +271,8 @@ fn main() -> ExitCode {
                     println!("{place}{}  {text}", f.severity);
                 }
             }
-            if !findings.is_empty() {
+            // Warnings say what may not be meant; the file is still in order.
+            if findings.iter().any(|f| f.severity != "warning") {
                 return ExitCode::FAILURE;
             }
         }

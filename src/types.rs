@@ -510,6 +510,10 @@ pub fn parse_cell(raw: &str, ty: &Type) -> Parsed {
             // Dates first: `08.10.2026` would otherwise read as a number with thousands dots.
             if let Some(d) = parse_date(raw) {
                 plain(Value::Date(d))
+            } else if raw.len() > 1 && raw.starts_with('0') && raw.chars().all(|c| c.is_ascii_digit()) {
+                // `01234`, `007`: a code (postal code, number of an item) whose
+                // zeros matter. A column of type `int` reads it as a number.
+                plain(Value::Text(raw.to_string()))
             } else if let Some(p) = number(&ty.unit) {
                 p
             } else if let Some(b) = parse_bool(raw) {

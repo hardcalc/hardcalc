@@ -145,10 +145,8 @@ pub enum Hit {
     LayerScope,
     /// Title of help page `n`.
     HelpPage(usize),
-    /// Entry `n` of the file dialog's list.
-    FileEntry(usize),
-    /// Place `n` of the file dialog's sidebar (favourites, locations).
-    FilePlace(usize),
+    /// An entry of the file dialog's list or a place of its sidebar.
+    File(crate::tui::file_dialog::Spot),
     /// Button `n` of the unsaved-changes question (save, discard, cancel).
     Confirm(usize),
     /// `hardcalc` at the top left: opens the menu.
@@ -740,7 +738,10 @@ impl App {
         let own = bundle.may_overwrite();
         let target = if own { path.to_path_buf() } else { crate::bundle::new_file_for(path) };
         let mut app = App::new(target, doc);
-        if !own {
+        if bundle.newer_format() {
+            app.dirty = true;
+            app.info(format!("made by a newer hardcalc – F2 saves as {}", app.path.display()));
+        } else if !own {
             let creator = bundle.creator().unwrap_or("another program").to_string();
             app.dirty = true;
             app.info(format!("made by {creator} – F2 saves as {}", app.path.display()));
@@ -2648,9 +2649,9 @@ impl App {
                 Some(sheet) => {
                     let z = match &e.z {
                         None => Some(0),
-                        Some(z) => crate::engine::letters_to_layer(z)
-                            .filter(|&n| n <= self.wb.sheets[sheet].layers.len())
-                            .or_else(|| self.wb.sheets[sheet].layer_index(z)),
+                        Some(z) => self.wb.sheets[sheet]
+                            .layer_index(z)
+                            .or_else(|| crate::engine::letters_to_layer(z).filter(|&n| n <= self.wb.sheets[sheet].layers.len())),
                     };
                     match z {
                         Some(z) => {
@@ -4431,8 +4432,7 @@ impl App {
         }
         if self.file_dialog.is_some() {
             let spot = self.hits.iter().find_map(|(r, h)| match h {
-                Hit::FileEntry(i) if r.contains(pos) => Some(crate::tui::file_dialog::Spot::Entry(*i)),
-                Hit::FilePlace(i) if r.contains(pos) => Some(crate::tui::file_dialog::Spot::Place(*i)),
+                Hit::File(spot) if r.contains(pos) => Some(*spot),
                 _ => None,
             });
             match (m.kind, spot) {
@@ -4596,7 +4596,7 @@ impl App {
                         self.fill_drag = Some(self.selection());
                         self.fill_to = None;
                     }
-                    Some(Hit::RowHeader(_) | Hit::FileEntry(_) | Hit::FilePlace(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_)) => {}
+                    Some(Hit::RowHeader(_) | Hit::File(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_)) => {}
                     Some(Hit::Corner) => {
                         if matches!(self.mode, Mode::Edit { .. }) {
                             self.commit_edit(0, 0);

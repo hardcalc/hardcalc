@@ -96,9 +96,16 @@ impl Bundle {
         self.info.get("transient").and_then(Value::as_bool).unwrap_or(false)
     }
 
-    /// May hardcalc write over this bundle? (Spec: only its creator, or when transient.)
+    /// May hardcalc write over this bundle? (Spec: only its creator, or when
+    /// transient.) Not one of a newer hardcalc: what this version does not
+    /// know would be lost.
     pub fn may_overwrite(&self) -> bool {
-        self.is_own() || self.transient()
+        (self.is_own() || self.transient()) && !self.newer_format()
+    }
+
+    /// Written by a newer hardcalc, in a format this version does not know.
+    pub fn newer_format(&self) -> bool {
+        self.creator() == Some(CREATOR) && self.hardcalc().and_then(|h| h.get("formatVersion")).and_then(Value::as_u64).is_some_and(|v| v > FORMAT_VERSION)
     }
 
     fn hardcalc(&self) -> Option<&Map<String, Value>> {
@@ -118,6 +125,10 @@ impl Bundle {
                     continue;
                 }
                 let name = f.name().map_err(invalid)?.to_string();
+                // Never a path that leads out of the bundle (`../x`, `/x`).
+                if !inside(&name) {
+                    continue;
+                }
                 let mut data = Vec::new();
                 f.read_to_end(&mut data)?;
                 entries.insert(name, data);
@@ -156,7 +167,7 @@ impl Bundle {
         let result = if kind.is_zip() {
             write_zip(&tmp, &all)
         } else {
-            all.iter().try_for_each(|(rel, data)| {
+            all.iter().filter(|(rel, _)| inside(rel)).try_for_each(|(rel, data)| {
                 let p = tmp.join(rel);
                 if let Some(parent) = p.parent() {
                     std::fs::create_dir_all(parent)?;
@@ -168,10 +179,35 @@ impl Bundle {
             let _ = remove(&tmp);
             return Err(e);
         }
-        // Replace the old bundle only once the new one is complete.
-        let _ = remove(path);
-        std::fs::rename(&tmp, path)
+        // Replace the old bundle only once the new one is complete. A file is
+        // replaced in one step; a folder is moved aside first and comes back
+        // if the new one cannot take its place.
+        if !path.is_dir() {
+            return std::fs::rename(&tmp, path).inspect_err(|_| {
+                let _ = remove(&tmp);
+            });
+        }
+        let old = path.with_file_name(format!(".{name}.old"));
+        let _ = remove(&old);
+        std::fs::rename(path, &old)?;
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => {
+                let _ = remove(&old);
+                Ok(())
+            }
+            Err(e) => {
+                let _ = std::fs::rename(&old, path);
+                let _ = remove(&tmp);
+                Err(e)
+            }
+        }
     }
+}
+
+/// Whether a path of a bundle's file stays inside the bundle: relative, with
+/// `/` between its parts and no `..`.
+fn inside(rel: &str) -> bool {
+    !rel.is_empty() && !rel.starts_with('/') && !rel.contains('\\') && rel.split('/').all(|part| part != ".." && !part.ends_with(':'))
 }
 
 fn remove(p: &Path) -> std::io::Result<()> {
@@ -290,11 +326,22 @@ pub fn build(doc: &Document, base: Option<&Bundle>, kind: Kind, transient: bool)
     // Old TSVs and the formula cache are made anew.
     files.retain(|k, _| !k.starts_with(RASTER) && !k.starts_with("assets/cache/"));
     let mut raster = Map::new();
+    // Every table its own file, also where upper and lower case are the same
+    // (`Plan` and `plan`) or the names differ only in characters a file name
+    // cannot hold (`A/B` and `A_B`). Tables of the same name share one entry.
+    let mut taken: Vec<String> = Vec::new();
     for block in &doc.blocks {
         if let Block::Table(t) = block
             && let Some(name) = &t.name
+            && !raster.contains_key(name)
         {
-            let file = raster_name(name);
+            let first = raster_name(name);
+            let file = (2..)
+                .map(|k| format!("{} {k}.tsv", first.trim_end_matches(".tsv")))
+                .find(|f| !taken.contains(&f.to_lowercase()))
+                .filter(|_| taken.contains(&first.to_lowercase()))
+                .unwrap_or(first);
+            taken.push(file.to_lowercase());
             let data = table_tsv(t).into_bytes();
             raster.insert(name.clone(), json!({ "file": file, "checksum": checksum(&data) }));
             files.insert(file, data);
@@ -431,5 +478,62 @@ mod tests {
         assert_eq!(b.text, "# Hello\n");
         assert_eq!(b.info["version"], json!(2));
         std::fs::remove_dir_all(&d).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("hardcalc-bundle-safety-{}-{name}", std::process::id()));
+        let _ = remove(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn tables_with_similar_names_keep_their_rows() {
+        let src = "## Plan :: matrix\n\n| k | v |\n|---|---|\n| a | 1 |\n\n## plan :: matrix\n\n| k | v |\n|---|---|\n| z | 9 |\n\n## A/B :: matrix\n\n| k |\n|---|\n| x |\n\n## A_B :: matrix\n\n| k |\n|---|\n| y |\n";
+        let doc = crate::parse(src).unwrap();
+        let d = tmp("names");
+        for kind in [Kind::TextBundle, Kind::TextPack] {
+            let path = d.join(format!("x.{}", kind.extension()));
+            build(&doc, None, kind, false).write(&path, kind).unwrap();
+            let back = Bundle::read(&path).unwrap();
+            let (doc2, opened) = document(&back).unwrap();
+            assert_eq!(doc2, doc);
+            assert!(opened.from_tsv.is_empty());
+            // Written over itself: the old bundle is replaced as a whole.
+            build(&doc2, Some(&back), kind, false).write(&path, kind).unwrap();
+            assert_eq!(document(&Bundle::read(&path).unwrap()).unwrap().0, doc);
+        }
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn paths_out_of_the_bundle_are_left_out() {
+        let d = tmp("slip");
+        let pack = d.join("in").join("x.textpack");
+        std::fs::create_dir_all(pack.parent().unwrap()).unwrap();
+        write_zip(&pack, &[("text.md", b"# Hello\n"), ("../evil.txt", b"x"), ("/abs.txt", b"x"), ("assets/ok.txt", b"ok")]).unwrap();
+        let b = Bundle::read(&pack).unwrap();
+        assert_eq!(b.files.keys().collect::<Vec<_>>(), ["assets/ok.txt"]);
+        // Also when such a path comes from elsewhere: nothing is written outside.
+        let mut b = b;
+        b.files.insert("../../evil.txt".into(), b"x".to_vec());
+        let out = d.join("in").join("y.textbundle");
+        b.write(&out, Kind::TextBundle).unwrap();
+        assert!(out.join("assets/ok.txt").exists());
+        assert!(!d.join("evil.txt").exists() && !d.join("in/evil.txt").exists());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_of_a_newer_hardcalc_is_not_overwritten() {
+        let mut b = build(&Document::default(), None, Kind::HcBundle, false);
+        assert!(b.may_overwrite() && !b.newer_format());
+        b.info.insert(CREATOR.into(), json!({ "formatVersion": FORMAT_VERSION + 1 }));
+        assert!(b.newer_format() && !b.may_overwrite());
     }
 }

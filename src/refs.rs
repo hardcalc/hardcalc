@@ -486,10 +486,10 @@ pub fn rename_column(doc: &mut Document, sheet: usize, old: &str, new: &str) {
                     let mut changed = false;
                     let renamed: Vec<String> = items
                         .split(',')
-                        .map(|item| match item.split_once('.') {
-                            Some((t, col)) if is_this(t) && col.trim() == old => {
+                        .map(|item| match crate::chart::split_ref(item) {
+                            Some((t, col, sep)) if is_this(t) && col.trim() == old => {
                                 changed = true;
-                                format!("{}.{new}", t.trim())
+                                format!("{}{sep}{new}", t.trim())
                             }
                             _ => item.trim().to_string(),
                         })
@@ -943,7 +943,7 @@ pub fn rename_table(doc: &mut Document, sheet: usize, new: &str) {
             }
             Block::Layer(l) if l.target.as_deref() == Some(old.as_str()) => l.target = Some(new.to_string()),
             Block::Chart { lines, .. } => {
-                // `key: Table.Column, …` or `data: Table` (a tensor).
+                // `key: Table!Column, …` or `data: Table` (a tensor).
                 for line in lines {
                     let Some((key, items)) = line.split_once(':') else { continue };
                     if !matches!(key.trim(), "data" | "labels" | "x") {
@@ -951,8 +951,8 @@ pub fn rename_table(doc: &mut Document, sheet: usize, new: &str) {
                     }
                     let renamed: Vec<String> = items
                         .split(',')
-                        .map(|item| match item.split_once('.') {
-                            Some((t, col)) if is_old(t) => format!("{new}.{}", col.trim()),
+                        .map(|item| match crate::chart::split_ref(item) {
+                            Some((t, col, sep)) if is_old(t) => format!("{new}{sep}{}", col.trim()),
                             None if is_old(item) => new.to_string(),
                             _ => item.trim().to_string(),
                         })

@@ -53,10 +53,7 @@ pub fn draw(f: &mut Frame, app: &mut ConfApp) {
     draw_confirm(f, app);
     if let Some(d) = &mut app.file_dialog {
         let hits = d.draw(f, " open file ", "TOML files");
-        app.hits.extend(hits.into_iter().map(|(r, k)| (r, match k {
-            crate::tui::file_dialog::Spot::Entry(i) => Hit::FileEntry(i),
-            crate::tui::file_dialog::Spot::Place(i) => Hit::FilePlace(i),
-            })));
+        app.hits.extend(hits.into_iter().map(|(r, spot)| (r, Hit::File(spot))));
     }
     if app.show_help {
         draw_help(f);

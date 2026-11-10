@@ -726,11 +726,11 @@ pub fn export_xlsx(doc: &Document, path: &Path) -> Result<ExportReport, String> 
         let mut xc = xl::Chart::new(kind);
         xc.title().set_name(&data.title);
         let host = data.sheet;
-        let columns: Option<Vec<usize>> = spec.data.iter().map(|d| d.split_once('.').and_then(|(_, c)| wb.sheets[host].columns.iter().position(|x| x.name == c.trim()))).collect();
+        let columns: Option<Vec<usize>> = spec.data.iter().map(|d| crate::chart::split_ref(d).and_then(|(_, c, _)| wb.sheets[host].columns.iter().position(|x| x.name == c.trim()))).collect();
         match columns.filter(|_| data.rows_are_categories && data.xs.is_none()) {
             Some(cols) => {
                 let rows = wb.sheets[host].cells.len() as u32;
-                let label = spec.labels.as_ref().and_then(|l| l.split_once('.')).and_then(|(_, c)| wb.sheets[host].columns.iter().position(|x| x.name == c.trim()));
+                let label = spec.labels.as_ref().and_then(|l| crate::chart::split_ref(l)).and_then(|(_, c, _)| wb.sheets[host].columns.iter().position(|x| x.name == c.trim()));
                 for (k, c) in cols.iter().enumerate() {
                     let series = xc.add_series();
                     series.set_values((names[host].as_str(), 1, *c as u16, rows, *c as u16)).set_name(data.series[k].name.as_str());

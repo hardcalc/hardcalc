@@ -56,7 +56,16 @@ playgrounds without footer rows fill, other tables do not.
 `## Account :: matrix fill aligned [January]`) selects padded columns instead
 of the compact form, see section 9.
 
-Tables without a heading are anonymous `matrix[*, *]`.
+Tables without a heading are anonymous `matrix[*, *]`. So is a table below
+a heading that says `::` but names no shape (`## std::map overview`): the
+heading stays a heading, and `hardcalc check` warns. Table names should
+differ in more than upper and lower case; `check` warns about names used
+twice.
+
+Tables are not looked for in code blocks (fenced with three or more
+backticks or tildes; an unclosed block runs to the end of the file), in
+lines indented by four spaces or a tab, and in HTML comments that start a
+line (`<!--` … `-->`).
 
 ### Tensors in “long format”
 
@@ -82,7 +91,9 @@ Name[:Type]
 ```
 
 `Amount:Euro` means: column *Amount*, type *Euro*. Without a type, the type
-is inferred from the values (`auto`).
+is inferred from the values (`auto`). The type follows the last `:` outside
+brackets and quotes and starts with a letter – `Time 12:00` is a column name
+without a type, `Rate:decimal(1) special("-": "none")` a column *Rate*.
 
 ### Cells
 
@@ -93,6 +104,14 @@ is inferred from the values (`auto`).
   separators (`1200.50`). A decimal comma (`1200,50`, `1.200,50`) is read
   too and written with the point. How numbers are shown – point or comma –
   follows the locale of the user, not the file.
+- A single `,` or `.` is always the decimal separator: `1,200` is 1.2, as
+  `1.200` is. Separators between thousands are read only where they group
+  the digits in threes (`1.200.000`, `1,234,567`, `1 200`, `1'200`).
+  Anything else is text and stays as written: `1.2.3`, `192.168.1.1`,
+  `030 1234567`. Without a type, digits with a leading zero (`01234`, `007`)
+  are text too; a column of type `int` reads them as numbers.
+- A row with more cells than the header has columns loses the cells beyond
+  when saved, as in GitHub's Markdown; `hardcalc check` warns about it.
 
 ### Footer rows
 
@@ -171,8 +190,10 @@ else: presentation, section 6.)
 - Formula columns stay uniform here too: a formula in a uniform (or empty)
   column of a slice applies to the whole column of that slice, new rows get
   it (values stay exceptions).
-- Names must not look like references or letters (`B2`, `b`) and must not
-  contain `,` `:` `.` `"` `[` `]`.
+- Names must not look like references (`B2`) or the letters of a level
+  (one or two lower-case letters: `b`, `ab`), must not be only digits or
+  `*`, and must not contain `,` `:` `.` `"` `[` `]` `` ` `` `@` `!`. Where
+  a name or a letter may stand (`z:` in layouts, `:z`), the name wins.
 
 ### References on the z axis
 
@@ -222,7 +243,7 @@ More modifiers (shared with hardconf, [CONFIG-SPEC.md](CONFIG-SPEC.md) §3.2):
 
 ```types
 Port  = int range 1..65535
-Code  = text pattern "^[A-Z]{2.4}$" length ..4
+Code  = text pattern "^[A-Z]{2,4}$" length ..4
 Mail  = text check email
 Rate  = decimal(1) unit "%" special("-": "not recorded")
 ```
@@ -350,8 +371,8 @@ to table data and is therefore always up to date.
 ````markdown
 ```chart Spending
 type:   bar
-data:   Expenses.Amount, Expenses.Gross
-labels: Expenses.Item
+data:   Expenses!Amount, Expenses!Gross
+labels: Expenses!Item
 ```
 
 ```chart SalesTrend
@@ -366,7 +387,7 @@ filter: Product=A
 | Key       | Meaning                                                          |
 |-----------|------------------------------------------------------------------|
 | `type`    | `bar`, `line`, `area`, `scatter`, `histogram`                    |
-| `data`    | `Table.Column[, …]` – one series per column; or a tensor         |
+| `data`    | `Table!Column[, …]` – one series per column; or a tensor         |
 | `labels`  | column with the labels (column charts)                           |
 | `x`       | tensor: the axis for the x direction; scatter: the column of x values |
 | `series`  | tensor: the axis whose values form the series                    |
@@ -374,7 +395,9 @@ filter: Product=A
 | `bins`    | histogram: number of classes                                     |
 | `title`   | title (default: the name)                                        |
 
-All values of a chart must have the same unit; it labels the axis. For
+Columns are named as in formulas, `Table!Column`; the older form
+`Table.Column` is read too. All values of a chart must have the same unit;
+it labels the axis. For
 tensors, several rows with the same keys are added up (as in the pivot
 view). `=spark(range)` gives a sparkline (`▁▃▅█`) as text in a cell.
 
@@ -501,34 +524,6 @@ grid: 12
   7-12 / 1-10   table    Account   z: February
   ```
 
-## 9a. Files and bundles
-
-| Form | Extension | Content |
-|---|---|---|
-| Markdown | `.hcmd` | default; plain `.md` is read too |
-| compressed | `.hcmd.gz`, `.hcmd.zst`, `.hcmd.xz` | the same Markdown, recognised by extension and magic bytes |
-| TextBundle | `.textbundle/`, `.hcbundle/` | folder: `info.json`, `text.md`, `assets/` |
-| TextPack | `.textpack`, `.hcpack` | the same as ZIP |
-
-`text.md` is the complete document and the single source of truth.
-`info.json` holds `version: 2`, `type: "net.daringfireball.markdown"`,
-`creatorIdentifier: "org.hardcalc"` and the block
-
-```json
-"org.hardcalc": {
-  "formatVersion": 1,
-  "kind": "hcbundle",
-  "raster": { "Loads": { "file": "assets/raster/Loads.tsv", "checksum": "…" } }
-}
-```
-
-Every named table is stored in `assets/raster/<Name>.tsv`: a header line with
-the column names, then the cells as in the table (formulas with `=`). If a
-TSV differs from its checksum, it was changed outside hardcalc; its rows
-replace those of the table when opening (columns by name). `assets/cache/`
-may be missing and is not read. Bundles with a foreign `creatorIdentifier`
-are not overwritten, unless they are `transient`.
-
 ## 9. Canonical form
 
 hardcalc writes files in a fixed, deterministic form (compact tables,
@@ -557,6 +552,38 @@ every line of the table when a value grows. `compact` is accepted in the
 heading too and is not written. A table without a heading cannot say
 `aligned` and is always compact. `:compact [on|off]` switches it for the
 table in the interface.
+
+## 9a. Files and bundles
+
+| Form | Extension | Content |
+|---|---|---|
+| Markdown | `.hcmd` | default; plain `.md` is read too |
+| compressed | `.hcmd.gz`, `.hcmd.zst`, `.hcmd.xz` | the same Markdown, recognised by extension and magic bytes |
+| TextBundle | `.textbundle/`, `.hcbundle/` | folder: `info.json`, `text.md`, `assets/` |
+| TextPack | `.textpack`, `.hcpack` | the same as ZIP |
+
+`text.md` is the complete document and the single source of truth.
+`info.json` holds `version: 2`, `type: "net.daringfireball.markdown"`,
+`creatorIdentifier: "org.hardcalc"` and the block
+
+```json
+"org.hardcalc": {
+  "formatVersion": 1,
+  "kind": "hcbundle",
+  "raster": { "Loads": { "file": "assets/raster/Loads.tsv", "checksum": "…" } }
+}
+```
+
+Every named table is stored in `assets/raster/<Name>.tsv`: a header line with
+the column names, then the cells as in the table (formulas with `=`). The
+`file` entry names the file; tables whose names would give the same file
+(`Plan` and `plan`, `A/B` and `A_B`) get a number (`Plan 2.tsv`). If a
+TSV differs from its checksum, it was changed outside hardcalc; its rows
+replace those of the table when opening (columns by name). `assets/cache/`
+may be missing and is not read. Bundles with a foreign `creatorIdentifier`
+are not overwritten, unless they are `transient`; neither are bundles with
+a higher `formatVersion` – both are saved as a new file. Files whose path
+would lead out of the bundle (`../x`) are ignored.
 
 ## 10. Calculation sheets
 

@@ -170,9 +170,15 @@ impl ChartData {
     }
 }
 
-/// `Table.Column` → (sheet, column).
+/// `Table!Column` (or `Table.Column`, the older form) → table, column and
+/// the character between them.
+pub fn split_ref(item: &str) -> Option<(&str, &str, char)> {
+    ['!', '.'].into_iter().find_map(|sep| item.split_once(sep).map(|(t, c)| (t, c, sep)))
+}
+
+/// `Table!Column` → (sheet, column).
 fn column_ref(wb: &Workbook, r: &str) -> Result<(usize, usize), String> {
-    let (table, col) = r.split_once('.').ok_or_else(|| format!("expected Table.Column, got '{r}'"))?;
+    let (table, col, _) = split_ref(r).ok_or_else(|| format!("expected Table!Column, got '{r}'"))?;
     let table = table.trim().trim_matches('"');
     let s = wb.sheet_index(table).ok_or_else(|| format!("unknown table '{table}'"))?;
     let col = col.trim();
@@ -227,7 +233,7 @@ pub fn resolve(spec: &ChartSpec, wb: &mut Workbook) -> Result<ChartData, String>
 
     // A single bare table name refers to a tensor.
     if let [name] = spec.data.as_slice()
-        && !name.contains('.')
+        && !name.contains(['.', '!'])
     {
         return resolve_tensor(spec, wb, name.trim_matches('"'), base(0, spec.kind));
     }
@@ -278,7 +284,7 @@ pub fn resolve(spec: &ChartSpec, wb: &mut Workbook) -> Result<ChartData, String>
 fn resolve_tensor(spec: &ChartSpec, wb: &mut Workbook, name: &str, mut data: ChartData) -> Result<ChartData, String> {
     let s = wb.sheet_index(name).ok_or_else(|| format!("unknown table '{name}'"))?;
     let Shape::Tensor(axes) = wb.sheets[s].shape.clone() else {
-        return Err(format!("'{name}' is not a tensor – use Table.Column for columns"));
+        return Err(format!("'{name}' is not a tensor – use Table!Column for columns"));
     };
     let axis = |a: &str| axes.iter().position(|x| x == a).ok_or_else(|| format!("'{a}' is not an axis of {name} ({})", axes.join(", ")));
     let x = match &spec.x {

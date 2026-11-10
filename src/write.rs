@@ -99,14 +99,15 @@ fn grid_lines(header: &[String], rows: &[Vec<String>], compact: bool) -> Vec<Str
 }
 
 fn fence(info: &str, body: &[String]) -> String {
-    // Use a longer fence if the body itself contains ``` lines.
-    let marker = if body.iter().any(|l| l.trim_start().starts_with("```")) { "````" } else { "```" };
+    // A longer fence than any line of backticks in the body.
+    let longest = body.iter().map(|l| l.trim_start().chars().take_while(|c| *c == '`').count()).max().unwrap_or(0);
+    let marker = "`".repeat(if longest >= 3 { longest + 1 } else { 3 });
     let mut out = format!("{marker}{info}\n");
     for l in body {
         out.push_str(l);
         out.push('\n');
     }
-    out.push_str(marker);
+    out.push_str(&marker);
     out
 }
 

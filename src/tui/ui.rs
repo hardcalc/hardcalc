@@ -430,10 +430,7 @@ fn draw_file_dialog(f: &mut Frame, app: &mut App) {
         super::app::Purpose::Append => " append file ",
     };
     let hits = d.draw(f, title, "documents");
-    app.hits.extend(hits.into_iter().map(|(r, k)| (r, match k {
-        crate::tui::file_dialog::Spot::Entry(i) => Hit::FileEntry(i),
-        crate::tui::file_dialog::Spot::Place(i) => Hit::FilePlace(i),
-    })));
+    app.hits.extend(hits.into_iter().map(|(r, spot)| (r, Hit::File(spot))));
 }
 
 fn draw_split_title(f: &mut Frame, app: &mut App, area: Rect) {

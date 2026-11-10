@@ -1446,8 +1446,8 @@ fn table_origin_renames_the_table() {
     assert_eq!(a.wb.sheets[0].name.as_deref(), Some("Costs"));
     let text = hardcalc::write(&a.doc);
     assert!(text.contains("## Costs :: matrix"));
-    assert!(text.contains("data:   Costs.Amount") || text.contains("data: Costs.Amount"), "{text}");
-    assert!(!text.contains("Expenses."), "{text}");
+    assert!(text.contains("data:   Costs!Amount") || text.contains("data: Costs!Amount"), "{text}");
+    assert!(!text.contains("Expenses.") && !text.contains("Expenses!"), "{text}");
 
     typ(&mut a, "a.b");
     key(&mut a, KeyCode::Enter);
@@ -1463,7 +1463,7 @@ fn table_origin_renames_the_table() {
     assert_eq!(a.wb.sheets[0].name.as_deref(), Some("Meine Costs"));
     let text = hardcalc::write(&a.doc);
     assert!(text.contains("## Meine Costs :: matrix"), "{text}");
-    assert!(text.contains("Meine Costs.Amount"), "{text}");
+    assert!(text.contains("Meine Costs!Amount"), "{text}");
     assert!(a.chart_data(0).is_ok(), "{:?}", a.chart_data(0).err());
     ctrl(&mut a, 'z');
     ctrl(&mut a, 'z');
@@ -1572,7 +1572,7 @@ fn column_header_names_the_column() {
     assert_eq!(a.on_header(), Some(Header::Column), "stays on the header");
     let text = hardcalc::write(&a.doc);
     assert!(text.contains("Total:Euro"), "{text}");
-    assert!(text.contains("=Total * 1.19") && text.contains("Expenses.Total"), "{text}");
+    assert!(text.contains("=Total * 1.19") && text.contains("Expenses!Total"), "{text}");
     assert!(!a.wb.value((0, 1, 4)).is_error());
 
     // Ambiguous or taken names are refused.
@@ -1745,7 +1745,7 @@ fn untitled_document_open_and_append() {
     let names: Vec<_> = a.wb.sheets.iter().filter_map(|s| s.name.clone()).collect();
     assert!(names.contains(&"Expenses 2".to_string()), "{names:?}");
     let text = hardcalc::write(&a.doc);
-    assert!(text.contains("data: Expenses 2.Amount, Expenses 2.Gross"), "the copy's chart follows: {text}");
+    assert!(text.contains("data: Expenses 2!Amount, Expenses 2!Gross"), "the copy's chart follows: {text}");
     assert_eq!(text.matches("# Budget 2026").count(), 1, "the title is not appended");
     assert!(a.dirty);
 
@@ -1811,8 +1811,8 @@ fn file_dialog_opens_and_appends() {
     assert_eq!(a.file_dialog.as_ref().unwrap().purpose, hardcalc::tui::app::Purpose::Append);
     render(&mut a);
     let i = names(&a).iter().position(|n| n == "budget.hcmd").unwrap();
-    click(&mut a, Hit::FileEntry(i));
-    click(&mut a, Hit::FileEntry(i));
+    click(&mut a, Hit::File(hardcalc::tui::file_dialog::Spot::Entry(i)));
+    click(&mut a, Hit::File(hardcalc::tui::file_dialog::Spot::Entry(i)));
     assert!(a.file_dialog.is_none());
     assert!(a.wb.sheets.iter().any(|s| s.name.as_deref() == Some("Expenses")));
 

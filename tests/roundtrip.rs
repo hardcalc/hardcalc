@@ -71,8 +71,12 @@ fn layer_with_explicit_target() {
 }
 
 #[test]
-fn rejects_bad_shape() {
-    assert!(parse("## X :: cube\n\n| a |\n|---|\n").is_err());
+fn bad_shape_is_a_heading_and_a_note() {
+    // Any Markdown opens: the heading stays text, `check` warns about it.
+    let src = "## X :: cube\n\n| a |\n|---|\n";
+    let doc = parse(src).unwrap();
+    assert!(matches!(&doc.blocks[0], hardcalc::model::Block::Text(t) if t == &["## X :: cube"]));
+    assert!(hardcalc::parse::notes(src)[0].message.contains("unknown shape 'cube'"));
 }
 
 #[test]
