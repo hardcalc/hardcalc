@@ -58,6 +58,18 @@
   .hero { padding: 48px 0 32px; display: grid; grid-template-columns: 1.05fr 1fr; gap: 40px; align-items: center; }
   .hero h1 { font-size: clamp(32px, 5vw, 50px); line-height: 1.1; margin: 0 0 18px; letter-spacing: -0.02em; }
   .hero p.lead { font-size: 19px; color: var(--muted); margin: 0 0 26px; }
+  .installs { display: grid; gap: 10px; }
+  .snip .c { color: var(--muted); font: 13px/1.4 var(--mono); margin-bottom: 3px; }
+  .snip .cmd {
+    display: flex; align-items: flex-start; gap: 10px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 8px 8px 14px;
+  }
+  .snip code { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.6; overflow-x: auto; white-space: pre; padding: 2px 0; }
+  .copy {
+    flex: none; font: 600 13px var(--sans); padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  .copy:hover { border-color: var(--accent); }
   .install {
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
     padding: 14px 16px; font: 14px/1.7 var(--mono); overflow-x: auto; white-space: pre;
@@ -137,14 +149,12 @@
     <div>
       <h1>A spreadsheet for the terminal, saved as Markdown.</h1>
       <p class="lead">Tables with types and units, formulas, layers, charts and traceable calculations – in plain text files you can read anywhere and diff in Git.</p>
-      <div class="install"><span class="c"># macOS / Linux (Homebrew)</span>
-brew install hardcalc/tap/hardcalc
-<span class="c"># macOS / Linux (installer script)</span>
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/hardcalc/hardcalc/releases/latest/download/hardcalc-installer.sh | sh
-<span class="c"># Windows (PowerShell)</span>
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/hardcalc/hardcalc/releases/latest/download/hardcalc-installer.ps1 | iex"
-<span class="c"># or from source</span>
-cargo install --git https://github.com/hardcalc/hardcalc</div>
+      <div class="installs">
+        <div class="snip"><div class="c">macOS / Linux (Homebrew)</div><div class="cmd"><code>brew install hardcalc/tap/hardcalc</code><button type="button" class="copy" aria-label="Copy command">Copy</button></div></div>
+        <div class="snip"><div class="c">macOS / Linux (installer script)</div><div class="cmd"><code>curl --proto '=https' --tlsv1.2 -LsSf https://github.com/hardcalc/hardcalc/releases/latest/download/hardcalc-installer.sh | sh</code><button type="button" class="copy" aria-label="Copy command">Copy</button></div></div>
+        <div class="snip"><div class="c">Windows (PowerShell)</div><div class="cmd"><code>powershell -ExecutionPolicy Bypass -c "irm https://github.com/hardcalc/hardcalc/releases/latest/download/hardcalc-installer.ps1 | iex"</code><button type="button" class="copy" aria-label="Copy command">Copy</button></div></div>
+        <div class="snip"><div class="c">or from source</div><div class="cmd"><code>cargo install --git https://github.com/hardcalc/hardcalc</code><button type="button" class="copy" aria-label="Copy command">Copy</button></div></div>
+      </div>
       <div class="buttons">
         <a class="btn primary" href="https://github.com/hardcalc/hardcalc/releases">Download</a>
         <a class="btn" href="https://github.com/hardcalc/hardcalc#readme">Read the docs</a>
@@ -253,5 +263,14 @@ M_Ed = q_d·L^2/8 = 9.90·5.0^2/8 = 30.9 kN·m
     · <a href="https://github.com/hardcalc/hardcalc/blob/main/SECURITY.md">Security</a>
   </div>
 </footer>
+<script>
+document.querySelectorAll('.snip .copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var t = b.parentNode.querySelector('code').textContent;
+    var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(done, function () {});
+  });
+});
+</script>
 </body>
 </html>
