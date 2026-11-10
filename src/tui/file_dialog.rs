@@ -39,8 +39,32 @@ const RECENT: &str = "\u{0}recent";
 pub struct Place {
     pub name: String,
     pub path: PathBuf,
-    /// Under "Locations" rather than "Favorites".
-    pub location: bool,
+    pub section: Section,
+}
+
+/// The sidebar's sections.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Section {
+    Recent,
+    Favorites,
+    Locations,
+}
+
+impl Section {
+    fn title(self) -> &'static str {
+        match self {
+            Section::Recent => "Recent",
+            Section::Favorites => "Favorites",
+            Section::Locations => "Locations",
+        }
+    }
+}
+
+/// What the list is sorted by.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SortKey {
+    Name,
+    Date,
 }
 
 /// What a screen area of the dialog stands for.
@@ -94,6 +118,8 @@ pub struct FileDialog {
     recent: Vec<PathBuf>,
     /// The folder shown before the list of recent files.
     before_recent: PathBuf,
+    /// Chosen order (key, descending); `None`: by name, recent files by use.
+    sort: Option<(SortKey, bool)>,
 }
 
 impl FileDialog {
@@ -116,6 +142,7 @@ impl FileDialog {
             side_only: false,
             recent: Vec::new(),
             before_recent: PathBuf::new(),
+            sort: None,
         };
         probe::start(std::time::Duration::from_millis(150));
         d.take_places();
@@ -136,7 +163,7 @@ impl FileDialog {
 
     fn add_recent_place(&mut self) {
         if !self.recent.is_empty() && !self.places.iter().any(|p| p.path.as_os_str() == RECENT) {
-            self.places.insert(0, Place { name: "Recent".into(), path: PathBuf::from(RECENT), location: false });
+            self.places.insert(0, Place { name: "Recent".into(), path: PathBuf::from(RECENT), section: Section::Recent });
         }
     }
 
@@ -215,6 +242,7 @@ impl FileDialog {
                     Some(Entry { name, dir: false, size: meta.len(), modified: meta.modified().ok(), tag, path: Some(p.clone()) })
                 })
                 .collect();
+            self.sort_entries();
             self.selected = 0;
             self.scroll = 0;
             return;
@@ -235,13 +263,56 @@ impl FileDialog {
                     .collect()
             })
             .unwrap_or_default();
-        entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
         if self.dir.parent().is_some() {
             entries.insert(0, Entry { name: "..".into(), dir: true, size: 0, modified: None, tag: None, path: None });
         }
         self.entries = entries;
+        self.sort_entries();
         self.selected = 0;
         self.scroll = 0;
+    }
+
+    /// Orders the entries: ".." and the folders first, then the files by the
+    /// chosen key (recent files: by use unless a key was chosen).
+    fn sort_entries(&mut self) {
+        let recent = self.in_recent();
+        let (key, desc) = match self.sort {
+            Some(s) => s,
+            None if recent => return,
+            None => (SortKey::Name, false),
+        };
+        self.entries.sort_by(|a, b| {
+            let by_key = match key {
+                SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                SortKey::Date => a.modified.cmp(&b.modified),
+            };
+            let by_key = if desc { by_key.reverse() } else { by_key };
+            (a.name != "..").cmp(&(b.name != "..")).then(b.dir.cmp(&a.dir)).then(by_key).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+    }
+
+    /// Ctrl+N / Ctrl+D: sorts by name or date; the same key again reverses.
+    /// The selected entry stays selected.
+    fn sort_by(&mut self, key: SortKey) {
+        self.sort = match self.sort {
+            Some((k, desc)) if k == key => Some((k, !desc)),
+            // Names run A–Z, dates newest first.
+            _ => Some((key, key == SortKey::Date)),
+        };
+        let keep = self.current().map(|e| e.name);
+        self.sort_entries();
+        self.selected = keep.and_then(|n| self.shown().iter().position(|e| e.name == n)).unwrap_or(0);
+        self.select(self.selected as isize);
+    }
+
+    /// What the order is, for the status line.
+    fn sort_label(&self) -> String {
+        match self.sort {
+            Some((SortKey::Name, desc)) => format!("sorted by name {}", if desc { "↓" } else { "↑" }),
+            Some((SortKey::Date, desc)) => format!("sorted by date {}", if desc { "newest first" } else { "oldest first" }),
+            None if self.in_recent() => "sorted by use".to_string(),
+            None => "sorted by name ↑".to_string(),
+        }
     }
 
     /// Entries matching the quick search.
@@ -386,6 +457,8 @@ impl FileDialog {
                 self.read();
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => self.toggle_recent(),
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => self.sort_by(SortKey::Name),
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => self.sort_by(SortKey::Date),
             KeyCode::Char('~') if self.filter.is_empty() => self.go_home(),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.filter.push(c);
@@ -515,6 +588,11 @@ impl FileDialog {
         }
         let search = if self.filter.is_empty() { String::new() } else { format!(" search: {}▏", self.filter) };
         buf.set_stringn(inner.x, inner.bottom() - 2, &search, full_w, Style::new().fg(Color::Yellow));
+        // Right-aligned on the same line: the order and its keys.
+        let order = format!("{} · Ctrl+N name · Ctrl+D date ", self.sort_label());
+        if order.width() + search.width() < full_w {
+            buf.set_stringn(inner.x + (full_w - order.width()) as u16, inner.bottom() - 2, &order, full_w, Style::new().fg(Color::DarkGray));
+        }
         let all = if self.all_files { format!("Ctrl+A: {filter_label} only") } else { "Ctrl+A: all files".to_string() };
         let all = if self.recent.is_empty() { all } else { format!("Ctrl+R: recent · {all}") };
         let keys = if self.in_places {
@@ -534,7 +612,7 @@ impl FileDialog {
         // Lines: a heading (`None`) or place `i`.
         let mut lines: Vec<Option<usize>> = Vec::new();
         for (i, p) in self.places.iter().enumerate() {
-            if i == 0 || p.location != self.places[i - 1].location {
+            if i == 0 || p.section != self.places[i - 1].section {
                 if i > 0 {
                     lines.push(None);
                 }
@@ -554,7 +632,7 @@ impl FileDialog {
                 None => {
                     // A heading: the section of the place below it.
                     let Some(Some(next)) = lines.get(k + 1) else { continue };
-                    let title = if self.places[*next].location { "Locations" } else { "Favorites" };
+                    let title = self.places[*next].section.title();
                     buf.set_stringn(area.x, y, format!(" {title}"), w, Style::new().fg(Color::DarkGray).bold());
                 }
                 Some(i) => {
@@ -579,26 +657,26 @@ impl FileDialog {
 /// its standard folders), then locations (disks, volumes, cloud storage).
 pub fn places() -> Vec<Place> {
     let mut out: Vec<Place> = Vec::new();
-    let mut add = |name: String, path: PathBuf, location: bool| {
+    let mut add = |name: String, path: PathBuf, section: Section| {
         if path.is_dir() {
             let path = plain(std::fs::canonicalize(&path).unwrap_or(path));
             if !out.iter().any(|p| p.path == path) {
-                out.push(Place { name, path, location });
+                out.push(Place { name, path, section });
             }
         }
     };
     let home = home_dir();
     if let Some(home) = &home {
         for (name, path) in standard_folders(home) {
-            add(name, path, false);
+            add(name, path, Section::Favorites);
         }
         let user = home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Home".into());
-        add(user, home.clone(), false);
+        add(user, home.clone(), Section::Favorites);
     }
     #[cfg(target_os = "macos")]
     {
         if let Some(home) = &home {
-            add("iCloud Drive".into(), home.join("Library/Mobile Documents/com~apple~CloudDocs"), true);
+            add("iCloud Drive".into(), home.join("Library/Mobile Documents/com~apple~CloudDocs"), Section::Locations);
         }
         // Volumes: the startup disk ("Macintosh HD" → /) first, then the others.
         let is_root = |p: &PathBuf| std::fs::canonicalize(p).is_ok_and(|p| p == std::path::Path::new("/"));
@@ -606,47 +684,47 @@ pub fn places() -> Vec<Place> {
         volumes.retain(|(name, _)| !name.starts_with("com.apple."));
         volumes.sort_by_key(|(_, path)| !is_root(path));
         if !volumes.iter().any(|(_, p)| is_root(p)) {
-            add("Macintosh HD".into(), PathBuf::from("/"), true);
+            add("Macintosh HD".into(), PathBuf::from("/"), Section::Locations);
         }
         for (name, path) in volumes {
-            add(name, path, true);
+            add(name, path, Section::Locations);
         }
         // Cloud storage (OneDrive, Synology Drive, Dropbox, Google Drive …).
         if let Some(home) = &home {
             for (name, path) in subfolders(&home.join("Library/CloudStorage")) {
-                add(name, path, true);
+                add(name, path, Section::Locations);
             }
         }
     }
     #[cfg(windows)]
     {
         for letter in 'A'..='Z' {
-            add(format!("{letter}:"), PathBuf::from(format!("{letter}:\\")), true);
+            add(format!("{letter}:"), PathBuf::from(format!("{letter}:\\")), Section::Locations);
         }
         // Cloud storage: OneDrive (private and business), then the usual
         // folders of other providers in the user's folder.
         let onedrive = ["OneDriveConsumer", "OneDriveCommercial", "OneDrive"].into_iter().filter_map(std::env::var_os).map(PathBuf::from);
         for path in onedrive {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "OneDrive".into());
-            add(name, path, true);
+            add(name, path, Section::Locations);
         }
         if let Some(home) = &home {
             for (name, path) in subfolders(home) {
                 if is_cloud_folder(&name) {
-                    add(name, path, true);
+                    add(name, path, Section::Locations);
                 }
             }
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        add("Computer".into(), PathBuf::from("/"), true);
+        add("Computer".into(), PathBuf::from("/"), Section::Locations);
         // Removable media are mounted below a folder named after the user;
         // without the name there is nothing to list (not the other users' folders).
         let user = ["USER", "LOGNAME"].into_iter().filter_map(|k| std::env::var(k).ok()).find(|u| !u.is_empty() && !u.contains('/'));
         for base in user.iter().flat_map(|user| [format!("/media/{user}"), format!("/run/media/{user}")]) {
             for (name, path) in subfolders(std::path::Path::new(&base)) {
-                add(name, path, true);
+                add(name, path, Section::Locations);
             }
         }
     }
@@ -885,13 +963,33 @@ mod tests {
     fn dialog(root: &std::path::Path) -> FileDialog {
         let mut d = FileDialog::new(Purpose::Open, root.to_path_buf(), |n| n.ends_with(".md"));
         d.places = vec![
-            Place { name: "a".into(), path: root.join("a"), location: false },
-            Place { name: "b".into(), path: root.join("b"), location: true },
+            Place { name: "a".into(), path: root.join("a"), section: Section::Favorites },
+            Place { name: "b".into(), path: root.join("b"), section: Section::Locations },
         ];
         // Places set by hand: the probe must not replace them.
         d.probed = None;
         d.place = 0;
         d
+    }
+
+    #[test]
+    fn sorting_by_name_and_date_keeps_folders_first() {
+        let root = std::env::temp_dir().join(format!("hardcalc-sort-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("zdir")).unwrap();
+        std::fs::write(root.join("b.md"), "").unwrap();
+        std::fs::write(root.join("a.md"), "").unwrap();
+        let old = std::fs::File::options().write(true).open(root.join("b.md")).unwrap();
+        old.set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
+        let mut d = dialog(&root);
+        let names = |d: &FileDialog| d.shown().iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&d), ["..", "zdir", "a.md", "b.md"]);
+        d.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(names(&d), ["..", "zdir", "a.md", "b.md"], "newest first: a.md");
+        d.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(names(&d), ["..", "zdir", "b.md", "a.md"]);
+        d.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        d.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(names(&d), ["..", "zdir", "b.md", "a.md"], "name descending");
     }
 
     #[test]

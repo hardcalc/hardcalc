@@ -1721,6 +1721,7 @@ fn draw_preview_status(f: &mut Frame, app: &mut App, area: Rect) {
                     if s.font_size.is_none() { " (auto)" } else { "" },
                     app.scope_name(s.scope),
                     match (app.graphics.is_some(), app.image_mode) {
+                        _ if p.zoom > 0 => " · 0 or i: back to the normal view",
                         (true, true) => " · i: text view",
                         (true, false) => " · i: image view · arrows scroll",
                         (false, true) => " · overview (no image protocol) · i: text view",

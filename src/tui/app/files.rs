@@ -72,6 +72,7 @@ impl App {
         next.bands = self.bands;
         next.anim = std::mem::take(&mut self.anim);
         next.show_keys = self.show_keys;
+        next.last_command = self.last_command.take();
         *self = next;
     }
 

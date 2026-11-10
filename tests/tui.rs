@@ -3006,3 +3006,29 @@ fn wrapped_row_keeps_its_height_when_the_cell_is_scrolled_away() {
     assert!(!after.contains("fox jumps"), "cell should be scrolled away\n{after}");
     assert_eq!(gap(&after), 3, "{after}");
 }
+
+#[test]
+fn a_lone_colon_repeats_the_last_command() {
+    let mut a = app();
+    typ(&mut a, ":bands off");
+    key(&mut a, KeyCode::Enter);
+    assert!(!a.bands);
+    a.bands = true;
+    typ(&mut a, ":");
+    key(&mut a, KeyCode::Enter);
+    assert!(!a.bands, "`:` ran `bands off` again");
+}
+
+#[test]
+fn zoom_in_the_preview_comes_back_to_the_normal_view() {
+    let mut a = app();
+    a.open_preview();
+    assert!(!a.image_mode);
+    key(&mut a, KeyCode::Char('-'));
+    assert!(a.image_mode && a.preview.as_ref().unwrap().zoom == 1);
+    key(&mut a, KeyCode::Char('0'));
+    assert!(!a.image_mode && a.preview.as_ref().unwrap().zoom == 0);
+    key(&mut a, KeyCode::Char('-'));
+    key(&mut a, KeyCode::Char('i'));
+    assert!(!a.image_mode && a.preview.as_ref().unwrap().zoom == 0, "i leaves the overview");
+}

@@ -437,8 +437,10 @@ pub struct App {
     /// Keep the cursor where a commit placed it instead of moving on.
     skip_move: bool,
     pub preview: Option<Preview>,
-    /// Zoom of the print preview, kept between previews.
-    pub preview_zoom: usize,
+    /// Whether the image view was on before the overview switched it on.
+    image_before_zoom: Option<bool>,
+    /// The last command line run from the command line (`:` alone repeats it).
+    pub last_command: Option<String>,
     /// Page setup, kept between previews.
     pub print_setup: PageSetup,
     pub layout_drag: Option<LayoutDrag>,
@@ -841,7 +843,8 @@ impl App {
             quit_armed: false,
             skip_move: false,
             preview: None,
-            preview_zoom: 0,
+            image_before_zoom: None,
+            last_command: None,
             print_setup: PageSetup::default(),
             layout_drag: None,
             layout_grab: false,
@@ -2393,8 +2396,11 @@ impl App {
     pub fn open_preview(&mut self) {
         let setup = self.print_setup.clone();
         let layout = self.layout(&setup);
-        let zoom = self.preview_zoom;
-        self.preview = Some(Preview { layout, page: 0, scroll: (0, 0), zoom });
+        // A preview opens in the normal view, whatever the last one showed.
+        if let Some(before) = self.image_before_zoom.take() {
+            self.image_mode = before;
+        }
+        self.preview = Some(Preview { layout, page: 0, scroll: (0, 0), zoom: 0 });
         self.message = None;
     }
 
@@ -2599,16 +2605,35 @@ impl App {
     pub fn zoom_preview(&mut self, by: isize) {
         let Some(p) = &mut self.preview else { return };
         p.zoom = (p.zoom as isize + by).clamp(0, PREVIEW_ZOOMS.len() as isize - 1) as usize;
-        self.preview_zoom = p.zoom;
         if p.zoom > 0 {
+            // The view before the overview comes back with zoom 0.
+            if self.image_before_zoom.is_none() {
+                self.image_before_zoom = Some(self.image_mode);
+            }
             self.image_mode = true;
+        } else if let Some(before) = self.image_before_zoom.take() {
+            self.image_mode = before;
+        }
+    }
+
+    /// `i` in the print preview: back from the overview to the normal text
+    /// view, else switches between image and text.
+    fn preview_view_key(&mut self) {
+        if self.preview.as_ref().is_some_and(|p| p.zoom > 0) {
+            if let Some(p) = &mut self.preview {
+                p.zoom = 0;
+            }
+            self.image_before_zoom = None;
+            self.image_mode = false;
+        } else {
+            self.toggle_image_mode();
         }
     }
 
     fn key_preview(&mut self, key: KeyEvent) {
         self.message = None;
         if key.code == KeyCode::Char('i') {
-            return self.toggle_image_mode();
+            return self.preview_view_key();
         }
         let Some(p) = &mut self.preview else { return };
         let pages = p.layout.pages.len();
@@ -4399,9 +4424,18 @@ impl App {
                     return;
                 }
                 let Mode::Command { buf } = &mut self.mode else { return };
-                let cmd = std::mem::take(buf);
+                let mut cmd = std::mem::take(buf);
                 self.mode = Mode::Normal;
                 self.cmd_choice = None;
+                // `:` alone runs the last command again.
+                if cmd.trim().is_empty() {
+                    match self.last_command.clone() {
+                        Some(last) => cmd = last,
+                        None => return,
+                    }
+                } else {
+                    self.last_command = Some(cmd.clone());
+                }
                 // Commands act on the main window when a helper is focused.
                 return self.run_command_line(&cmd);
             }
