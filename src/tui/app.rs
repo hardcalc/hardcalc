@@ -431,7 +431,7 @@ pub struct App {
     /// … and the cell it is over.
     fill_to: Option<(usize, usize)>,
     /// Last `:sort` (sheet, column, descending), cleared by any other action.
-    last_sort: Option<(usize, usize, bool)>,
+    last_sort: Option<(usize, usize, bool, bool)>,
     /// Quit was requested once with unsaved changes; a second request quits.
     quit_armed: bool,
     /// Keep the cursor where a commit placed it instead of moving on.
@@ -4911,7 +4911,7 @@ impl App {
                     self.move_to(new, 0);
                     return self.start_edit(None);
                 }
-                "addcol" | "delcol" | "sort" | "pivot" => {
+                "addcol" | "delcol" | "sort" | "sortcol" | "pivot" => {
                     return self.error(format!(":{cmd} is not available in the functions view"));
                 }
                 _ => {}
@@ -4921,7 +4921,7 @@ impl App {
             match cmd {
                 "delrow" => return self.delete_calc_lines(),
                 "addrow" => return self.insert_calc_line(),
-                "addcol" | "delcol" | "sort" | "pivot" => {
+                "addcol" | "delcol" | "sort" | "sortcol" | "pivot" => {
                     return self.error(format!(":{cmd} is not available in the calculation view"));
                 }
                 _ => {}
@@ -4935,13 +4935,13 @@ impl App {
                     self.move_to(new, 0);
                     return self.start_edit(None);
                 }
-                "addcol" | "delcol" | "sort" | "pivot" => {
+                "addcol" | "delcol" | "sort" | "sortcol" | "pivot" => {
                     return self.error(format!(":{cmd} is not available in the types view (F3 to leave)"));
                 }
                 _ => {}
             }
         }
-        let structural = matches!(cmd, "addrow" | "delrow" | "addcol" | "delcol" | "sort");
+        let structural = matches!(cmd, "addrow" | "delrow" | "addcol" | "delcol" | "sort" | "sortcol");
         if structural && self.view.pivot.is_some() {
             return self.error(format!(":{cmd} is not available in the pivot view (Ctrl+P to leave)"));
         }
@@ -5295,55 +5295,91 @@ impl App {
                 self.view.anchor = None;
                 self.view.cursor.1 = c0.min(self.dims().1 - 1);
             }
-            "sort" => {
-                // `:sort` sorts the cursor column ascending; repeating it right away flips to descending.
+            "sort" | "sortcol" => {
+                // `:sort` sorts the rows by the cursor column (in a selected block: only the block's
+                // rows); `:sortcol` sorts each column on its own. Repeating it flips to descending.
+                let single = cmd == "sortcol";
+                let (rows, cols) = self.dims();
                 let col = match args.first() {
                     Some(a) => self.find_column(a),
-                    None => (self.view.cursor.1 < self.dims().1).then_some(self.view.cursor.1),
+                    None => (self.view.cursor.1 < cols).then_some(self.view.cursor.1),
                 };
                 let Some(col) = col else {
-                    return self.error("usage: :sort [column] [desc] – or place the cursor in a data column");
+                    return self.error(format!("usage: :{cmd} [column] [desc] – or place the cursor in a data column"));
                 };
+                let ((mut r0, mut c0), (mut r1, mut c1)) = ((0, 0), (rows.saturating_sub(1), cols.saturating_sub(1)));
+                if self.has_range() {
+                    let ((sr0, sc0), (sr1, sc1)) = self.selection();
+                    (r0, c0, r1, c1) = (sr0, sc0.min(cols - 1), sr1.min(rows.saturating_sub(1)), sc1.min(cols - 1));
+                } else if single {
+                    (c0, c1) = (col, col);
+                }
+                if rows == 0 || r0 >= r1 && !single {
+                    return self.error("nothing to sort");
+                }
+                let first = if single { c0 } else { col };
                 let desc = match args.get(1) {
                     Some(a) => a.starts_with("desc"),
-                    None => args.is_empty() && self.last_sort == Some((self.view.sheet, col, false)),
+                    None => args.is_empty() && self.last_sort == Some((self.view.sheet, first, false, single)),
                 };
                 let s = self.view.sheet;
-                let keys: Vec<Value> = (0..self.dims().0).map(|r| self.wb.value((s, r, col))).collect();
-                let mut order: Vec<usize> = (0..keys.len()).collect();
-                order.sort_by(|&a, &b| {
-                    use std::cmp::Ordering;
-                    let o = match (&keys[a], &keys[b]) {
-                        (Value::Null, Value::Null) => Ordering::Equal,
-                        // Empty cells always go last.
-                        (Value::Null, _) => return Ordering::Greater,
-                        (_, Value::Null) => return Ordering::Less,
-                        (Value::Num(x, _), Value::Num(y, _)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
-                        (Value::Date(x), Value::Date(y)) => x.cmp(y),
-                        (x, y) => x.display(None, false).cmp(&y.display(None, false)),
-                    };
-                    if desc { o.reverse() } else { o }
-                });
-                // order[new] = old; references follow their rows.
-                let mut moved = vec![0; order.len()];
-                for (new, &old) in order.iter().enumerate() {
-                    moved[old] = new;
-                }
-                let cols: Vec<usize> = (0..self.dims().1).collect();
+                // The order of rows r0..=r1 by one column: order[new] = old (relative to r0).
+                let order_by = |keys: Vec<Value>| -> Vec<usize> {
+                    let mut order: Vec<usize> = (0..keys.len()).collect();
+                    order.sort_by(|&a, &b| {
+                        use std::cmp::Ordering;
+                        let o = match (&keys[a], &keys[b]) {
+                            (Value::Null, Value::Null) => Ordering::Equal,
+                            // Empty cells always go last.
+                            (Value::Null, _) => return Ordering::Greater,
+                            (_, Value::Null) => return Ordering::Less,
+                            (Value::Num(x, _), Value::Num(y, _)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+                            (Value::Date(x), Value::Date(y)) => x.cmp(y),
+                            (x, y) => x.display(None, false).cmp(&y.display(None, false)),
+                        };
+                        if desc { o.reverse() } else { o }
+                    });
+                    order
+                };
+                // (column range, order) pairs to apply.
+                let jobs: Vec<(usize, usize, Vec<usize>)> = if single {
+                    (c0..=c1).map(|c| (c, c, order_by((r0..=r1).map(|r| self.wb.value((s, r, c))).collect()))).collect()
+                } else {
+                    vec![(c0, c1, order_by((r0..=r1).map(|r| self.wb.value((s, r, col))).collect()))]
+                };
+                let whole_rows = !single && c0 == 0 && c1 + 1 == cols;
                 self.with_doc(|doc| {
-                    crate::refs::update_document(doc, s, &crate::refs::Moves { rows: &moved, cols: &cols });
+                    if whole_rows {
+                        // References follow their rows (only when whole rows move).
+                        let mut moved: Vec<usize> = (0..rows).collect();
+                        for (new, &old) in jobs[0].2.iter().enumerate() {
+                            moved[r0 + old] = r0 + new;
+                        }
+                        let all: Vec<usize> = (0..cols).collect();
+                        crate::refs::update_document(doc, s, &crate::refs::Moves { rows: &moved, cols: &all });
+                    }
                     if let Some(t) = table_mut(doc, s) {
                         data_layers::pad_layers(t);
                         for grid in t.grids_mut() {
-                            let rows = std::mem::take(grid);
-                            *grid = order.iter().map(|&i| rows[i].clone()).collect();
+                            for (ca, cb, order) in &jobs {
+                                let old: Vec<Vec<String>> = (r0..=r1)
+                                    .map(|r| (*ca..=*cb).map(|c| grid.get(r).and_then(|row| row.get(c)).cloned().unwrap_or_default()).collect())
+                                    .collect();
+                                for (new, &o) in order.iter().enumerate() {
+                                    if let Some(row) = grid.get_mut(r0 + new) {
+                                        row.resize(row.len().max(*cb + 1), String::new());
+                                        row[*ca..=*cb].clone_from_slice(&old[o]);
+                                    }
+                                }
+                            }
                         }
                     }
                 });
-                self.last_sort = Some((self.view.sheet, col, desc));
-                let name = self.wb.sheets[self.view.sheet].columns[col].name.clone();
-                let dir = if desc { "descending" } else { "ascending – :sort again for descending" };
-                self.info(format!("sorted by {name} {dir}"));
+                self.last_sort = Some((self.view.sheet, first, desc, single));
+                let name = self.wb.sheets[self.view.sheet].columns[first].name.clone();
+                let what = if single && c1 > c0 { "columns sorted individually".to_string() } else { format!("sorted by {name}") };
+                let dir = if desc { "descending" } else { "ascending – again for descending" };
+                self.info(format!("{what} {dir}"));
             }
             "table" | "newtable" | "playground" => {
                 let name = if args.is_empty() { format!("Sheet{}", self.wb.sheets.len() + 1) } else { table_name(&args.join(" ")) };

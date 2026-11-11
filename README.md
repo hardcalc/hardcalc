@@ -150,7 +150,8 @@ layer and column names.
 | drag the handle **▪** of the selection, `:autofill B10` | continue a series: numbers (1, 2 → 3, 4), dates, “Item 1”, month and weekday names; formulas as with Ctrl+D |
 | Ctrl+C / Ctrl+V                  | copy / paste (also tab-separated from Excel and the like)     |
 | Ctrl+Z / Ctrl+Y                  | undo / redo                                                   |
-| F7, F7 again                     | sort the current column ascending, then descending           |
+| F7, F7 again                     | sort the rows by the current column ascending, then descending; with a selection only its rows |
+| Shift+F7                         | sort the column on its own (a selection: each of its columns) |
 | Ctrl+P or click on ⊞ pivot       | pivot view of a tensor; there Tab rotates the dimensions      |
 | F10 or Ctrl+Q                    | quit; with unsaved changes only on the second press          |
 

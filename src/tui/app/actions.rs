@@ -53,6 +53,7 @@ impl App {
                 _ => self.command("delrow"),
             },
             Action::Sort => self.command("sort"),
+            Action::SortColumn => self.command("sortcol"),
             Action::Types => self.toggle_types(),
             Action::Pivot => self.toggle_pivot(None),
             Action::Split => self.toggle_split(),

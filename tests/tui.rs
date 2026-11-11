@@ -1785,6 +1785,10 @@ fn file_dialog_opens_and_appends() {
     let names = |a: &App| a.file_dialog.as_ref().unwrap().shown().iter().map(|e| e.name.clone()).collect::<Vec<_>>();
 
     ctrl(&mut a, 'e');
+    // The dialog opens on the recent files (if there are any); Ctrl+R goes to the folder.
+    if a.file_dialog.as_ref().unwrap().dir.as_os_str().to_string_lossy().contains("recent") {
+        ctrl(&mut a, 'r');
+    }
     assert_eq!(names(&a), ["..", "archiv", "budget.hcmd", "zweit.hcmd"], "folders first, documents only");
     let screen = render(&mut a);
     assert!(screen.contains("open file") && screen.contains("▸ archiv/"), "{screen}");
@@ -3031,4 +3035,25 @@ fn zoom_in_the_preview_comes_back_to_the_normal_view() {
     key(&mut a, KeyCode::Char('-'));
     key(&mut a, KeyCode::Char('i'));
     assert!(!a.image_mode && a.preview.as_ref().unwrap().zoom == 0, "i leaves the overview");
+}
+
+#[test]
+fn sort_column_alone_and_block() {
+    let mut a = app();
+    let col = |a: &App, c: usize| a.wb.sheets[0].raw.iter().map(|r| r[c].clone()).collect::<Vec<_>>();
+    let (names, amounts) = (col(&a, 0), col(&a, 1));
+    // Shift+F7: only the cursor column moves, the others stay.
+    a.view.cursor = (0, 0);
+    a.on_key(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(col(&a, 0), sorted);
+    assert_eq!(col(&a, 1), amounts);
+    // A block of the first two rows is sorted by itself; the last row stays.
+    let mut a = app();
+    a.view.cursor = (0, 0);
+    a.view.anchor = Some((1, 1));
+    typ(&mut a, ":sort Amount desc");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(a.wb.sheets[0].raw[2], app().wb.sheets[0].raw[2]);
 }

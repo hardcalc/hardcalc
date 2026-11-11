@@ -81,6 +81,7 @@ pub static CONTEXT_MENU: &[Group] = &[
             c('D', "Delete", "delcol"),
             c('T', "Type…", "type "),
             a('S', "Sort", Action::Sort),
+            a('O', "Sort columns individually", Action::SortColumn),
             a('F', "Fill right", Action::FillRight),
         ],
     },

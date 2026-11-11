@@ -69,7 +69,7 @@ impl App {
         let Mode::Command { buf } = &self.mode else { return Vec::new() };
         commands::suggestions(buf, |cmd| match cmd {
             "layer" | "solo" => self.layer_names.clone(),
-            "sort" => self.wb.sheets[self.view.sheet].columns.iter().map(|c| c.name.clone()).collect(),
+            "sort" | "sortcol" => self.wb.sheets[self.view.sheet].columns.iter().map(|c| c.name.clone()).collect(),
             // Own types besides the built-in ones.
             "type" => self
                 .type_rows()

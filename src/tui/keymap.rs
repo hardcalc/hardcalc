@@ -31,6 +31,7 @@ pub enum Action {
     InsertRow,
     DeleteLines,
     Sort,
+    SortColumn,
     Types,
     Pivot,
     Split,
@@ -41,7 +42,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 26] = [
         Action::ContextMenu,
         Action::Menu,
         Action::Help,
@@ -60,6 +61,7 @@ impl Action {
         Action::InsertRow,
         Action::DeleteLines,
         Action::Sort,
+        Action::SortColumn,
         Action::Types,
         Action::Pivot,
         Action::Split,
@@ -89,6 +91,7 @@ impl Action {
             Action::InsertRow => "Insert row",
             Action::DeleteLines => "Delete rows / columns",
             Action::Sort => "Sort by column",
+            Action::SortColumn => "Sort columns individually",
             Action::Types => "Types tab",
             Action::Pivot => "Pivot view",
             Action::Split => "Split window",
@@ -228,6 +231,8 @@ pub static KEYMAP: &[Binding] = &[
     key(Action::Sort, "F7", KeyCode::F(7), NONE),
     seq(Action::Sort, "/ C S"),
     mouse(Action::Sort, "click F7"),
+    key(Action::SortColumn, "Shift+F7", KeyCode::F(7), SHIFT),
+    seq(Action::SortColumn, "/ C O"),
     key(Action::Types, "F3", KeyCode::F(3), NONE),
     mouse(Action::Types, "click ⚙ types"),
     key(Action::Pivot, "Ctrl+P", KeyCode::Char('p'), CTRL),

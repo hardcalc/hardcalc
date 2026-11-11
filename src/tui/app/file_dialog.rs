@@ -19,7 +19,7 @@ impl App {
     /// The file dialog; for opening, unsaved changes are settled first.
     pub fn open_file_dialog(&mut self, purpose: Purpose) {
         match purpose {
-            Purpose::Open => self.after_unsaved(super::files::Pending::Dialog(false), false),
+            Purpose::Open => self.after_unsaved(super::files::Pending::Dialog(true), false),
             Purpose::Append => self.show_file_dialog(purpose, false),
         }
     }

@@ -26,6 +26,7 @@ context menu (`/`, then the marked letters).
 | Insert row | `Ins` · `/ R I` | `context menu` |
 | Delete rows / columns | `F8` · `/ R D` | `context menu` |
 | Sort by column | `F7` · `/ C S` | `click F7` |
+| Sort columns individually | `Shift+F7` · `/ C O` | – |
 | Types tab | `F3` | `click ⚙ types` |
 | Pivot view | `Ctrl+P` · `/ T P` | `click ⊞ pivot` |
 | Split window | `Ctrl+O` · `/ V S` | – |

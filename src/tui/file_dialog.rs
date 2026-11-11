@@ -155,7 +155,7 @@ impl FileDialog {
     pub fn with_recent(mut self, recent: Vec<PathBuf>, show: bool) -> FileDialog {
         self.recent = recent;
         self.add_recent_place();
-        if show {
+        if show && !self.recent.is_empty() {
             self.show_recent();
         }
         self
