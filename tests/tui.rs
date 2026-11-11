@@ -2514,7 +2514,7 @@ fn context_menu_by_key_sequence_mouse_and_shift_f10() {
     // Entries show their keys (only those that work here).
     typ(&mut a, "/e");
     let screen = render(&mut a);
-    assert!(screen.contains("Ctrl+C") && screen.contains("Ctrl+X") && screen.contains("F4"), "{screen}");
+    assert!(screen.contains("Ctrl+C") && screen.contains("Ctrl+X") && screen.contains("Ctrl+Z"), "{screen}");
     key(&mut a, KeyCode::Esc);
     assert!(a.context.is_none());
     // Right-click on a cell: the cursor goes there, the menu opens there.
@@ -3224,4 +3224,203 @@ A4: underline
     assert!(out.contains("A4: underline"), "{out}");
     assert!(out.contains("| a-jan | 10 |\n| b-jan | 20 |\n| c-jan | 30 |\n| z-jan | 90 |"), "{out}");
     assert!(out.contains("|  | 11 |\n|  | 21 |\n|  | 31 |\n|  | 91 |") || out.contains("| | 11 |\n| | 21 |\n| | 31 |\n| | 91 |"), "{out}");
+}
+
+const LINKED: &str = "\
+## Overview :: matrix
+
+| Area     | Total |
+|----------|-------|
+| Expenses | 1     |
+| Income   | 2     |
+
+```layer links
+A: Details[@Area, Amount]
+B1: Expenses
+```
+
+## Details :: matrix
+
+| Area     | Amount |
+|----------|--------|
+| Income   | 5      |
+| Expenses | 7      |
+
+## Expenses :: matrix
+
+| Item | Amount |
+|------|--------|
+| Rent | 1200   |
+| Tea  | 3      |
+";
+
+fn linked() -> App {
+    App::new(PathBuf::from("linked.hcmd"), hardcalc::parse(LINKED).unwrap())
+}
+
+#[test]
+fn a_click_on_the_link_mark_jumps_and_the_status_line_leads_back() {
+    let mut a = linked();
+    let screen = render(&mut a);
+    assert!(screen.contains('↗'), "{screen}");
+    // A click on the cell itself only selects it.
+    click(&mut a, Hit::Cell(1, 0));
+    assert_eq!((a.view.sheet, a.view.cursor), (0, (1, 0)));
+    // The ↗ of Income: the row of Details whose key is "Income".
+    click(&mut a, Hit::Link(1, 0));
+    assert_eq!((a.view.sheet, a.view.cursor), (1, (0, 1)));
+    assert!(!a.dirty, "a jump is no change");
+    let screen = render(&mut a);
+    assert!(screen.contains("← Overview!A2"), "{screen}");
+    click(&mut a, Hit::Back);
+    assert_eq!((a.view.sheet, a.view.cursor), (0, (1, 0)));
+    let screen = render(&mut a);
+    assert!(!screen.contains('←'), "no more way back: {screen}");
+}
+
+#[test]
+fn f4_on_a_link_holds_its_destination() {
+    let mut a = linked();
+    render(&mut a);
+    assert_eq!(a.fkeys()[3].1, "Link↗");
+    key(&mut a, KeyCode::F(4));
+    // `@` is shown as the cell it means from here.
+    assert!(matches!(&a.mode, Mode::Command { buf } if buf == "goto Details!B2"), "{:?}", a.mode);
+    key(&mut a, KeyCode::Enter);
+    assert_eq!((a.view.sheet, a.view.cursor), (1, (1, 1)));
+    // No link here: F4 asks for a destination as before.
+    assert_eq!(a.fkeys()[3].1, "Goto");
+    key(&mut a, KeyCode::F(4));
+    assert!(matches!(&a.mode, Mode::Command { buf } if buf == "goto "), "{:?}", a.mode);
+    typ(&mut a, "Expenses[Tea, Amount]");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!((a.view.sheet, a.view.cursor), (2, (1, 1)));
+}
+
+#[test]
+fn ctrl_z_goes_back_over_jumps_and_changes_in_order() {
+    let mut a = linked();
+    a.command("goto Expenses!B1");
+    assert_eq!((a.view.sheet, a.view.cursor), (2, (0, 1)));
+    typ(&mut a, "1300");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(a.wb.sheets[2].raw[0][1], "1300");
+    // First the change, then the jump.
+    ctrl(&mut a, 'z');
+    assert_eq!(a.wb.sheets[2].raw[0][1], "1200");
+    assert_eq!(a.view.sheet, 2);
+    ctrl(&mut a, 'z');
+    assert_eq!((a.view.sheet, a.view.cursor), (0, (0, 0)));
+    // Ctrl+Y: the jump again (to where the cursor was: Enter moved it down), then the change.
+    ctrl(&mut a, 'y');
+    assert_eq!((a.view.sheet, a.view.cursor), (2, (1, 1)));
+    ctrl(&mut a, 'y');
+    assert_eq!(a.wb.sheets[2].raw[0][1], "1300");
+}
+
+#[test]
+fn back_keeps_the_changes_made_after_the_jump() {
+    let mut a = linked();
+    a.command("goto Expenses!B1");
+    typ(&mut a, "1300");
+    key(&mut a, KeyCode::Enter);
+    a.command("back");
+    assert_eq!((a.view.sheet, a.view.cursor), (0, (0, 0)));
+    assert_eq!(a.wb.sheets[2].raw[0][1], "1300");
+    a.command("back");
+    assert!(a.message.as_ref().is_some_and(|m| m.error), "nothing left to go back to");
+}
+
+#[test]
+fn predefined_layers_are_always_listed_and_grey_while_empty() {
+    let mut a = App::new(PathBuf::from("plain.hcmd"), hardcalc::parse("## T :: matrix\n\n| A | B |\n|---|---|\n| x | 1 |\n").unwrap());
+    let screen = render(&mut a);
+    for name in ["formulas", "format", "validate", "comments", "links"] {
+        assert!(screen.contains(name), "{name}: {screen}");
+    }
+    assert!(screen.contains("○ links") && screen.contains("■ formulas"), "{screen}");
+    // A click on an empty layer explains instead of hiding it.
+    let links = a.layer_names.iter().position(|n| n == "links").unwrap();
+    click(&mut a, Hit::Layer(links));
+    assert!(a.layer_visible("links"));
+    assert!(a.message.as_ref().is_some_and(|m| m.text.contains("right-click")));
+    // Right-click: the layer view; a rule typed there makes the layer act.
+    let (rect, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Layer(links)).unwrap();
+    a.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE });
+    assert_eq!(a.solo.as_deref(), Some("links"));
+    typ(&mut a, "T!B1");
+    key(&mut a, KeyCode::Enter);
+    key(&mut a, KeyCode::Esc);
+    assert!(!a.layer_empty("links"));
+    let screen = render(&mut a);
+    assert!(screen.contains("■ links") && screen.contains('↗'), "{screen}");
+}
+
+#[test]
+fn the_layer_view_never_writes_data_also_beyond_the_table() {
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse("## T :: matrix\n\n| A |\n|---|\n| x |\n").unwrap());
+    render(&mut a);
+    a.command("solo links");
+    // The + row below the data.
+    click(&mut a, Hit::Cell(1, 0));
+    typ(&mut a, "T!A1");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(a.wb.sheets[0].raw, vec![vec!["x".to_string()]]);
+    assert!(hardcalc::write::write(&a.doc).contains("A2: T!A1"));
+}
+
+#[test]
+fn a_link_on_an_empty_cell_beyond_the_data_shows_and_jumps() {
+    let src = "## T :: matrix\n\n| A | B |\n|---|---|\n| x | 1 |\n\n```layer links\nA2: U\nB1: U\n```\n\n## U :: matrix\n\n| K |\n|---|\n| k |\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    render(&mut a);
+    // A2 is the + row: no data, no neighbour with data – the link still shows.
+    assert!(a.hits.iter().any(|(_, h)| *h == Hit::Link(1, 0)), "no ↗ on the empty A2");
+    click(&mut a, Hit::Link(1, 0));
+    assert_eq!((a.view.sheet, a.view.cursor), (1, (0, 0)));
+}
+
+#[test]
+fn f4_twice_follows_the_link_at_once() {
+    let mut a = linked();
+    render(&mut a);
+    key(&mut a, KeyCode::F(4));
+    assert_eq!(a.fkeys()[3].1, "Jump↗");
+    key(&mut a, KeyCode::F(4));
+    assert!(matches!(a.mode, Mode::Normal));
+    assert_eq!((a.view.sheet, a.view.cursor), (1, (1, 1)));
+}
+
+#[test]
+fn the_layer_view_shows_rules_beyond_the_data() {
+    let src = "## T :: matrix\n\n| A |\n|---|\n| x |\n\n```layer links\nB3: U\n```\n\n## U :: matrix\n\n| K |\n|---|\n| k |\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    a.command("solo links");
+    let screen = render(&mut a);
+    assert!(screen.contains('U'), "the rule on B3 is not shown:\n{screen}");
+    assert_eq!(a.cell_view(2, 1).text, "U");
+}
+
+#[test]
+fn the_link_mark_does_not_cover_a_right_aligned_number() {
+    let src = "## T :: matrix\n\n| A | B |\n|---|---|\n| 12345 | x |\n\n```layer links\nA1: U\n```\n\n## U :: matrix\n\n| K |\n|---|\n| k |\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    let screen = render(&mut a);
+    assert!(screen.contains("12345↗"), "{screen}");
+}
+
+#[test]
+fn a_link_may_lead_to_an_empty_cell_of_a_playground() {
+    let src = "## Sheet1 :: playground\n\n| A |\n|---|\n| Hallo |\n\n```layer links\nB9: C22\n```\n\n## Sheet2 :: playground\n\n| A |\n|---|\n| x |\n\n```layer links\nA1: Sheet1!A2\n```\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    a.command("goto Sheet2");
+    let screen = render(&mut a);
+    assert!(a.hits.iter().any(|(_, h)| *h == Hit::Link(0, 0)), "{} {:?} {:?}\n{screen}", a.view.sheet, a.links, a.message);
+    click(&mut a, Hit::Link(0, 0));
+    assert_eq!((a.view.sheet, a.view.cursor), (0, (1, 0)), "{:?}", a.message);
+    a.command("goto B9");
+    let screen = render(&mut a);
+    assert!(a.hits.iter().any(|(_, h)| *h == Hit::Link(8, 1)), "{:?} {:?}\n{screen}", a.view.cursor, a.links);
+    click(&mut a, Hit::Link(8, 1));
+    assert_eq!((a.view.sheet, a.view.cursor), (0, (21, 2)), "{:?}", a.message);
 }

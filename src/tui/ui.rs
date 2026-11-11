@@ -1055,6 +1055,10 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         let avail = (area.width as usize).saturating_sub(gutter);
         // Column views are computed lazily, only for visible rows.
         let mut cache: HashMap<usize, (usize, Vec<CellView>)> = HashMap::new();
+        // A cell with a link needs one column more for its ↗.
+        let marks = app.view.kind == ViewKind::Table && app.view.pivot.is_none() && app.solo.is_none();
+        let (sheet, links) = (app.view.sheet, app.links.clone());
+        let mark = move |r: usize, c: usize| usize::from(marks && links.contains_key(&(sheet, r, c)));
         let mut column = |app: &mut App, c: usize| -> usize {
             if let Some((w, _)) = cache.get(&c) {
                 return *w;
@@ -1064,9 +1068,10 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             let widest = views.iter().filter_map(|v| v.style.wrap).map(wrap_width).fold(MAX_COL, usize::max);
             let w = views
                 .iter()
-                .map(|v| match v.style.wrap {
-                    Some(n) => v.text.width().min(wrap_width(n)),
-                    None => v.text.width().min(MAX_COL),
+                .zip(row_range.clone())
+                .map(|(v, r)| match v.style.wrap {
+                    Some(n) => v.text.width().min(wrap_width(n)) + mark(r, c),
+                    None => v.text.width().min(MAX_COL) + mark(r, c),
                 })
                 .chain([top.width(), name.width()])
                 .max()
@@ -1116,6 +1121,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 .iter()
                 .map(|&(c, w)| {
                     let v = &cache[&c].1[i];
+                    let w = w.saturating_sub(mark(row_range.start + i, c)).max(1);
                     if v.style.wrap.is_some() { crate::text::wrap_plain(&v.text, w).len() } else { 1 }
                 })
                 .max()
@@ -1165,6 +1171,9 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     // Filling tables are banded to the edges.
     let with_placeholders = app.view.pivot.is_none() && app.view.kind == ViewKind::Table && !app.fills();
     let placeholder = |r: usize, c: usize| with_placeholders && (r >= data_rows || c >= data_cols);
+    // Cells with a link carry a ↗ at their right edge; a click on it jumps.
+    let links_on = app.view.kind == ViewKind::Table && app.view.pivot.is_none() && app.solo.is_none();
+    let sheet = app.view.sheet;
     let buf = f.buffer_mut();
 
     // Corner and column headers.
@@ -1274,7 +1283,12 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             } else if (r, c) == app.view.cursor {
                 style = if editing { style.fg(Color::Black).bg(Color::Yellow) } else { style.add_modifier(Modifier::REVERSED) };
             }
-            let wrapped = view.style.wrap.is_some() && !(editing && (r, c) == app.view.cursor && on_header.is_none());
+            let edited = editing && (r, c) == app.view.cursor && on_header.is_none();
+            // A link keeps the last column for its ↗, so the text (also a
+            // right-aligned number) ends before it.
+            let marked = links_on && w >= 2 && !edited && app.links.contains_key(&(sheet, r, c));
+            let tw = if marked { w - 1 } else { w };
+            let wrapped = view.style.wrap.is_some() && !edited;
             let text = match &edit {
                 // While editing, the cell shows the input; if it is too long,
                 // the part around the cursor (normally the end).
@@ -1284,19 +1298,26 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                     edit_cursor = Some((x + (before.width() - skip) as u16, y));
                     fit(&clip(&skip_width(input, skip), w), w, Align::Left)
                 }
-                _ => fit(&view.text, w, view.align),
+                _ => fit(&view.text, tw, view.align) + if marked { " " } else { "" },
             };
             if wrapped {
-                let mut parts = crate::text::wrap_plain(&view.text, w).into_iter();
+                let mut parts = crate::text::wrap_plain(&view.text, tw).into_iter();
                 for extra in 0..lines {
                     let part = parts.next().unwrap_or_default();
-                    buf.set_stringn(x, y + extra, fit(&part, w, view.align), w, style);
+                    let gap = if marked { " " } else { "" };
+                    buf.set_stringn(x, y + extra, fit(&part, tw, view.align) + gap, w, style);
                 }
             } else {
                 buf.set_stringn(x, y, text, w, style);
                 for extra in 1..lines {
                     buf.set_stringn(x, y + extra, " ".repeat(w), w, style);
                 }
+            }
+            if marked {
+                let mx = x + w as u16 - 1;
+                // In the cell's own colours, so it reads like its text.
+                buf.set_string(mx, y, "↗", style);
+                app.hits.push((Rect::new(mx, y, 1, 1), Hit::Link(r, c)));
             }
             app.hits.push((Rect::new(x, y, w as u16, lines), Hit::Cell(r, c)));
             if handle == Some((r, c)) && x + (w as u16) < area.right() {
@@ -1442,6 +1463,9 @@ fn draw_layers(f: &mut Frame, app: &mut App, area: Rect) {
     for (i, name) in app.layer_names.iter().enumerate() {
         let (mark, style) = if app.solo.as_deref() == Some(name.as_str()) {
             ("◉", Style::new().bold().fg(Color::White).bg(Color::Magenta))
+        } else if app.layer_empty(name) {
+            // No rules for this table yet: nothing to show or hide.
+            ("○", Style::new().fg(Color::DarkGray).bg(Color::Black))
         } else if app.layer_visible(name) {
             ("■", Style::new().fg(Color::Black).bg(Color::Green))
         } else {
@@ -1543,7 +1567,16 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect, helper: Option<&str>) {
             Style::new().fg(Color::DarkGray),
         )
     };
-    f.buffer_mut().set_stringn(area.x, area.y, format!(" {text}"), area.width as usize, style);
+    // After a jump, the way back: ← and where it leads.
+    let back = app.back_label().map(|label| format!(" ← {label} "));
+    let room = back.as_ref().map_or(0, |b| b.width() as u16 + 1);
+    let room = if room * 2 <= area.width { room } else { 0 };
+    f.buffer_mut().set_stringn(area.x, area.y, format!(" {text}"), (area.width - room) as usize, style);
+    if let Some(chip) = back.filter(|_| room > 0) {
+        let x = area.right() - room + 1;
+        f.buffer_mut().set_string(x, area.y, &chip, Style::new().fg(Color::White).bg(Color::DarkGray));
+        app.hits.push((Rect::new(x, area.y, room - 1, 1), Hit::Back));
+    }
 }
 
 /// Writes `text` starting at screen column `x` (may be left of `left`),

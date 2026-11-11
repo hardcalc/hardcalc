@@ -15,13 +15,13 @@ context menu (`/`, then the marked letters).
 | Quit | `F10` · `Ctrl+Q` | `click F10` |
 | Command line | `:` | – |
 | Open file | `F3` · `Ctrl+E` · `F9 File Open` | `click F3` |
-| Go to cell | `F4` · `/ E G` | `click F4` |
+| Go to cell / follow link | `F4` | `click F4` · `click ↗` |
 | Edit cell | `Enter` | `double-click` |
 | Clear cells | `Del` · `Backspace` · `/ E L` | – |
 | Copy | `Ctrl+C` · `/ E C` | – |
 | Cut | `Ctrl+X` · `/ E X` | – |
 | Paste | `Ctrl+V` · `/ E P` | – |
-| Undo | `Ctrl+Z` · `/ E U` | – |
+| Undo / jump back | `Ctrl+Z` · `/ E U` · `:back` | `click ← in the status line` |
 | Redo | `Ctrl+Y` · `/ E R` | – |
 | Fill down | `Ctrl+D` · `/ R F` | `drag ▪` |
 | Fill right | `Ctrl+R` · `/ C F` | – |

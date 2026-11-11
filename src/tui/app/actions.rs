@@ -31,7 +31,7 @@ impl App {
             Action::Quit => self.quit_key(),
             Action::CommandLine => self.ask_argument(""),
             Action::OpenFile => self.open_file_dialog(Purpose::Open),
-            Action::Goto => self.ask_argument("goto "),
+            Action::Goto => self.goto_key(),
             Action::EditCell if self.on_header() == Some(Header::Row) && self.cursor_footer().is_none() => self.leave_header(),
             Action::EditCell => self.start_edit(None),
             Action::ClearCells => self.clear_selection(),

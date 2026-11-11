@@ -237,6 +237,9 @@ fn main() -> ExitCode {
             for e in &rule_errors {
                 findings.push(layer_finding(e, &wb));
             }
+            for e in &hardcalc::links::problems(&attached, &mut wb) {
+                findings.push(layer_finding(e, &wb));
+            }
             for v in &violations {
                 let (s, r, c) = v.cell;
                 findings.push(Finding {

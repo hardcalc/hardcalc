@@ -49,7 +49,6 @@ pub static CONTEXT_MENU: &[Group] = &[
             a('L', "Clear", Action::ClearCells),
             a('U', "Undo", Action::Undo),
             a('R', "Redo", Action::Redo),
-            a('G', "Go to cell…", Action::Goto),
         ],
     },
     Group {

@@ -1045,7 +1045,19 @@ pub fn rename_table(doc: &mut Document, sheet: usize, new: &str) {
                     *line = rename_inline(line, &old, new);
                 }
             }
-            Block::Layer(l) if l.target.as_deref() == Some(old.as_str()) => l.target = Some(new.to_string()),
+            Block::Layer(l) => {
+                if l.target.as_deref() == Some(old.as_str()) {
+                    l.target = Some(new.to_string());
+                }
+                // Link destinations are written like references: `old`, `old!B2`, `old[Rent]`.
+                if l.name == crate::links::LAYER {
+                    for rule in &mut l.rules {
+                        if let Rule::Rule { body, .. } = rule {
+                            *body = if is_old(body) { table_ref(new) } else { rename_in_formula(body, &old, new) };
+                        }
+                    }
+                }
+            }
             Block::Chart { lines, .. } => {
                 // `key: Table!Column, …` or `data: Table` (a tensor).
                 for line in lines {

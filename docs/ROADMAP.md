@@ -17,7 +17,10 @@ This page lists open points and ideas. Suggestions are welcome as
   of A1.
 - **Renaming with consequences** for types and functions (tables and columns
   already work).
-- Layers **`links`** (URLs, files, other tables) and **`scenario`** (what if).
+- Layer **`scenario`** (what if).
+- Layer **`links`**: links to URLs and other files (`other.hcmd#Expenses`);
+  links in running text and layouts; links in the PDF and as `HYPERLINK` in
+  the Excel and LibreOffice exports; destinations follow column renames.
 - Remember view settings (hidden layers, theme) in the file (`fill`/`nofill`
   already works).
 - **Playground with several ranges → grid layout**: where `:shape matrix`

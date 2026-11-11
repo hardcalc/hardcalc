@@ -24,6 +24,8 @@ mod calc_view;
 mod data_layers;
 mod file_dialog;
 mod files;
+mod jumps;
+pub use jumps::Step;
 pub mod formatting;
 mod menu;
 pub use file_dialog::{is_document as file_dialog_is_document, FileDialog, Purpose};
@@ -42,6 +44,10 @@ pub const VALIDATE: &str = "validate";
 pub const FORMULAS: &str = "formulas";
 /// Layer with cell comments (`B1: text`), printed as footnotes.
 pub const COMMENTS: &str = "comments";
+/// Layer with links (`A2: Expenses[Rent, Amount]`): ↗ in the cell, a click or F4 jumps.
+pub const LINKS: &str = crate::links::LAYER;
+/// The layers that act; the layer bar always shows them, in this order.
+pub const PREDEFINED_LAYERS: [&str; 5] = [FORMULAS, FORMAT, VALIDATE, COMMENTS, LINKS];
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const UNDO_LIMIT: usize = 200;
 
@@ -142,6 +148,10 @@ pub enum Hit {
     Suggestion(usize),
     /// The fill handle at the corner of the selection.
     FillHandle,
+    /// The ↗ of a cell with a link.
+    Link(usize, usize),
+    /// The way back after a jump, in the status line.
+    Back,
 }
 
 /// What a mouse drag in the layout editor does.
@@ -322,6 +332,8 @@ pub struct App {
     /// (sheet, target, text) of all comments.
     comment_rules: Vec<(usize, layers::Target, String)>,
     pub violations: HashMap<CellId, String>,
+    /// Cells with a link and their destination (shown layers only).
+    pub links: HashMap<CellId, String>,
     /// The evaluated calculation sheet, until the document changes.
     calc_cache: Option<Vec<crate::sheet::Out>>,
     /// How the calculation preview draws formulas (`:formulas`).
@@ -386,8 +398,8 @@ pub struct App {
     /// The separator is being dragged with the mouse.
     pub split_drag: bool,
     clipboard: Vec<Vec<String>>,
-    undo: Vec<Document>,
-    redo: Vec<Document>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
     last_click: Option<(Instant, u16, u16)>,
     dragging: bool,
     /// Reference being picked while editing a formula.
@@ -763,6 +775,7 @@ impl App {
             formula_formats: Formats::default(),
             comment_rules: Vec::new(),
             violations: HashMap::new(),
+            links: HashMap::new(),
             calc_cache: None,
             formula_style: FormulaStyle::default(),
             compression: crate::storage::Compression::None,
@@ -852,9 +865,12 @@ impl App {
                 })
             })
             .collect();
-        self.layer_names = layers::layer_names(&self.doc);
-        if !self.layer_names.iter().any(|n| n == FORMULAS) {
-            self.layer_names.insert(0, FORMULAS.to_string());
+        // The predefined layers first, even without a block; then the own ones.
+        self.layer_names = PREDEFINED_LAYERS.iter().map(|n| n.to_string()).collect();
+        for name in layers::layer_names(&self.doc) {
+            if !self.layer_names.contains(&name) {
+                self.layer_names.push(name);
+            }
         }
         self.revalidate();
         self.clamp_view();
@@ -1383,6 +1399,7 @@ impl App {
                 self.violations.entry(v.cell).or_insert(v.message);
             }
         }
+        self.relink();
     }
 
     /// The table the layer bar refers to: the focused data window's, or the
@@ -1394,6 +1411,17 @@ impl App {
     /// Whether layer `name` is shown in table `sheet`.
     pub fn layer_visible_in(&self, name: &str, sheet: usize) -> bool {
         self.layer_overrides.get(&(sheet, name.to_string())).copied().unwrap_or(!self.hidden_layers.contains(name))
+    }
+
+    /// Whether layer `name` has no rules for the current table yet (the
+    /// built-in `formulas` always acts). The layer bar shows it grey.
+    pub fn layer_empty(&self, name: &str) -> bool {
+        let sheet = self.layer_sheet();
+        name != FORMULAS
+            && !self
+                .attached
+                .iter()
+                .any(|a| a.sheet == sheet && a.layer.name == name && a.layer.rules.iter().any(|r| matches!(r, crate::model::Rule::Rule { .. })))
     }
 
     /// Whether layer `name` is shown in the current table.
@@ -1688,11 +1716,10 @@ impl App {
                 _ => row.cells.get(self.view.cursor.1).cloned().unwrap_or_default(),
             };
         }
-        if let Some(layer) = self.solo_rule_layer()
-            && let Some((s, _, _)) = self.target()
-        {
+        // In the layer view the input is the layer's rule – also beyond the data.
+        if let Some(layer) = self.solo_rule_layer() {
             let target = self.solo_target();
-            return self.layer_rule(&layer, s, &target).unwrap_or_default();
+            return self.layer_rule(&layer, self.view.sheet, &target).unwrap_or_default();
         }
         if let ViewKind::Layout(_) = self.view.kind {
             return self
@@ -1833,6 +1860,20 @@ impl App {
             return self.footer_cell_view(k, c);
         }
         if self.is_placeholder(r, c) {
+            // The layer view shows the rules set on cells beyond the data.
+            if let Some(layer) = self.solo_rule_layer() {
+                let rules = self.literal_rules_for(&layer, (self.view.sheet, r, c));
+                if !rules.is_empty() {
+                    let fg = if layer == COMMENTS { "magenta" } else { "yellow" };
+                    return CellView {
+                        text: rules.join(" · "),
+                        align: Align::Left,
+                        style: CellStyle { fg: Some(Color::Named(fg.into())), ..CellStyle::default() },
+                        error: false,
+                        violation: false,
+                    };
+                }
+            }
             return CellView {
                 text: String::new(),
                 align: Align::Left,
@@ -2151,6 +2192,8 @@ impl App {
         }
         match self.mode {
             Mode::Edit { .. } => return ["Help", "Accept", "", "", "", "", "", "", "", "Cancel"],
+            // In the go-to prompt a second F4 jumps.
+            Mode::Command { ref buf } if buf.starts_with("goto ") => return ["Help", "Run", "", "Jump↗", "", "", "", "", "", "Cancel"],
             Mode::Command { .. } => return ["Help", "Run", "", "", "", "", "", "", "", "Cancel"],
             Mode::Normal => {}
         }
@@ -2172,7 +2215,8 @@ impl App {
                     _ if footer => "DelFoot",
                     _ => "DelRow",
                 };
-                ("Goto", "InsRow", "InsCol", if again { "Sort↓" } else { "Sort" }, delete)
+                let goto = if self.cursor_on_link() { "Link↗" } else { "Goto" };
+                (goto, "InsRow", "InsCol", if again { "Sort↓" } else { "Sort" }, delete)
             }
         };
         ["Help", "Save", "Open", goto, ins_row, ins_col, sort, delete, "Menu", "Quit"]
@@ -3168,8 +3212,8 @@ impl App {
             self.info(format!("layer {name} exists for this table – layer view: typing edits its rules · Esc back"));
         } else if name == FORMULAS {
             // set_solo explained the view already.
-        } else if !matches!(name, FORMAT | VALIDATE | COMMENTS) {
-            self.info(format!("layer {name} added – its rules are kept and shown, but only format, validate and comments act · Esc back"));
+        } else if !matches!(name, FORMAT | VALIDATE | COMMENTS | LINKS) {
+            self.info(format!("layer {name} added – its rules are kept and shown, but only format, validate, comments and links act · Esc back"));
         } else {
             self.info(format!("layer {name} added – type a rule into a cell or selection · Esc back"));
         }
@@ -3211,6 +3255,28 @@ impl App {
             })
             .collect();
         rules.into_iter().filter(|(t, _)| t.matches(&mut self.wb, id)).map(|(_, b)| b).collect()
+    }
+
+    /// Bodies of the cell and range rules of `layer` that cover cell `id`;
+    /// these also reach cells beyond the data.
+    fn literal_rules_for(&self, layer: &str, id: CellId) -> Vec<String> {
+        self.attached
+            .iter()
+            .filter(|a| a.layer.name == layer && a.sheet == id.0)
+            .flat_map(|a| a.layer.rules.iter())
+            .filter_map(|r| match r {
+                crate::model::Rule::Rule { target, body } => match layers::Target::parse(target) {
+                    layers::Target::Cell(r, c) if (r, c) == (id.1, id.2) => Some(body.clone()),
+                    layers::Target::Range((c1, r1), (c2, r2))
+                        if (r1.min(r2)..=r1.max(r2)).contains(&id.1) && (c1.min(c2)..=c1.max(c2)).contains(&id.2) =>
+                    {
+                        Some(body.clone())
+                    }
+                    _ => None,
+                },
+                crate::model::Rule::Raw(_) => None,
+            })
+            .collect()
     }
 
     /// The rule of `layer` for exactly `target` in table `sheet`, if any.
@@ -3469,11 +3535,7 @@ impl App {
     // ------------------------------------------------------------ changes
 
     fn snapshot(&mut self) {
-        self.undo.push(self.doc.clone());
-        if self.undo.len() > UNDO_LIMIT {
-            self.undo.remove(0);
-        }
-        self.redo.clear();
+        self.record(Step::Doc(self.doc.clone()));
     }
 
     /// Keeps `doc` in sync with the workbook's raw cells after an edit.
@@ -3548,25 +3610,39 @@ impl App {
         });
     }
 
+    /// Ctrl+Z: takes back the last change, or goes back from the last jump.
     pub fn undo(&mut self) {
         match self.undo.pop() {
-            Some(doc) => {
-                self.redo.push(std::mem::replace(&mut self.doc, doc));
+            Some(Step::Doc(doc)) => {
+                self.redo.push(Step::Doc(std::mem::replace(&mut self.doc, doc)));
                 self.dirty = true;
                 self.rebuild();
                 self.info("undone");
+            }
+            Some(Step::Jump { left, view }) => {
+                let place = self.place(&view);
+                let view = self.restore_view(left, view);
+                self.redo.push(Step::Jump { left, view });
+                self.info(format!("back to {place}"));
             }
             None => self.error("nothing to undo"),
         }
     }
 
+    /// Ctrl+Y: does the change again, or the jump.
     pub fn redo(&mut self) {
         match self.redo.pop() {
-            Some(doc) => {
-                self.undo.push(std::mem::replace(&mut self.doc, doc));
+            Some(Step::Doc(doc)) => {
+                self.undo.push(Step::Doc(std::mem::replace(&mut self.doc, doc)));
                 self.dirty = true;
                 self.rebuild();
                 self.info("redone");
+            }
+            Some(Step::Jump { left, view }) => {
+                let place = self.place(&view);
+                let view = self.restore_view(left, view);
+                self.undo.push(Step::Jump { left, view });
+                self.info(format!("on to {place}"));
             }
             None => self.error("nothing to redo"),
         }
@@ -3601,9 +3677,8 @@ impl App {
                 _ => self.set_footer_cell(k, self.view.cursor.1, &text),
             };
         }
-        if let Some(layer) = self.solo_rule_layer()
-            && self.target().is_some()
-        {
+        // The layer view never writes data, also not beyond the table's cells.
+        if let Some(layer) = self.solo_rule_layer() {
             let target = self.solo_target();
             return self.set_layer_rule(&layer, self.view.sheet, &target, text.trim());
         }
@@ -4444,6 +4519,10 @@ impl App {
         let key = match key.code {
             KeyCode::F(1) => return self.open_help(),
             KeyCode::F(2) => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            // F4 F4: the go-to prompt that F4 opened jumps at once.
+            KeyCode::F(4) if matches!(&self.mode, Mode::Command { buf } if buf.starts_with("goto ")) => {
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            }
             KeyCode::F(10) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             _ => key,
         };
@@ -4673,6 +4752,16 @@ impl App {
             }
             return;
         }
+        // The ↗ of a link jumps on a plain click; otherwise it is part of its cell.
+        let follows = matches!(m.kind, MouseEventKind::Down(MouseButton::Left))
+            && !m.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+            && matches!(self.mode, Mode::Normal)
+            && !self.can_point();
+        if let Some(Hit::Link(r, c)) = hit
+            && !follows
+        {
+            hit = Some(Hit::Cell(r, c));
+        }
         match m.kind {
             // Right click on a layer: its exclusive view (again: back to normal).
             MouseEventKind::Down(MouseButton::Right) => {
@@ -4767,9 +4856,15 @@ impl App {
                         self.view.cursor = (0, 0);
                     }
                     Some(Hit::Tab(i)) => self.switch_sheet(i),
+                    Some(Hit::Link(r, c)) => self.follow_link(r, c),
+                    Some(Hit::Back) => self.back(),
                     Some(Hit::Layer(i)) => {
                         if let Some(name) = self.layer_names.get(i).cloned() {
-                            self.toggle_layer(&name);
+                            if self.layer_empty(&name) {
+                                self.info(format!("layer {name} has no rules for this table yet – right-click it: layer view, type a rule into a cell"));
+                            } else {
+                                self.toggle_layer(&name);
+                            }
                         }
                     }
                     Some(Hit::DataLayer(z)) => self.set_layer(z),
@@ -5089,10 +5184,8 @@ impl App {
             "keytest" => self.start_key_test(),
             "undo" => self.undo(),
             "redo" => self.redo(),
-            "goto" | "g" => match args.first().and_then(|a| parse_a1(a)) {
-                Some((r, c)) if self.view.pivot.is_none() => self.move_to(r, c),
-                _ => self.error("usage: :goto B5"),
-            },
+            "goto" | "g" => self.goto(&args.join(" ")),
+            "back" => self.back(),
             "slice" | "scenario" if args.is_empty() => self.error(format!("usage: :{cmd} Name – e.g. :slice February, :scenario Optimistisch")),
             "slice" => self.new_data_layer(&args.join(" "), crate::model::LayerKind::Slice),
             "scenario" => self.new_data_layer(&args.join(" "), crate::model::LayerKind::Scenario),
@@ -5573,8 +5666,8 @@ impl App {
                 });
             }
             other => {
-                if let Some((r, c)) = parse_a1(other) {
-                    self.move_to(r, c);
+                if parse_a1(other).is_some() {
+                    self.goto(other);
                 } else {
                     self.error(format!("unknown command :{other} (F1 for help)"));
                 }

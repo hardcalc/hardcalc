@@ -493,7 +493,7 @@ Predefined layers:
 | `validate`  | rules (`>= 0`, `required`, `unique`, `in(…)`)      |
 | `comments`  | notes on cells (footnotes when printed, see 7)     |
 | `formulas`  | built in: highlights formula cells (default: cyan, italic); a block of your own changes the presentation |
-| `links`     | *planned:* links to URLs, files, other tables      |
+| `links`     | jumps to other places of the document (see below)  |
 | `scenario`  | *planned:* “what if” overrides of values           |
 
 A layer whose table does not exist (`@Name` unknown, or no table before
@@ -502,9 +502,57 @@ about a rule whose target meets nothing – a column the table does not
 have, a row or cell beyond it (in a playground or a `fill` table, cells
 beyond the data are fine).
 
+### `links`
+
+Every rule makes its cells a link; the body is the destination, written like
+a reference in a formula (section 4):
+
+````markdown
+```layer links
+A: Details[@Area, Amount]
+B1: Expenses
+B2: "My costs"!B2
+C5: Expenses[Rent, Amount]
+```
+````
+
+| Destination               | Leads to                                            |
+|---------------------------|-----------------------------------------------------|
+| `Expenses`                | the first cell of the table                         |
+| `B5`, `Amount`            | cell / top of the column in the own table           |
+| `Expenses!B5`, `Expenses!Amount` | cell / top of the column of another table    |
+| `Expenses[Rent]`          | the row with this key (1st column)                  |
+| `Expenses[Rent, Amount]`  | the cell by key and column                          |
+| `Expenses[@Amount]`       | the same row of the other table (as in formulas)    |
+| `Expenses[@Item, Amount]` | the row whose key is the value of `Item` in the link's own row |
+
+A cell address (`B5`, `Expenses!B5`) may lie beyond the data: in a playground
+the cursor goes exactly there, in a table that does not fill as near as it can (the `+`
+row or column). Destinations by key, row number or column lie within the data.
+A table name wins over an address it looks like (`Sheet2`).
+A destination by key stays right when rows are sorted or inserted. If
+several rules meet a cell, the last one wins. `hardcalc check` reports
+destinations that lead nowhere (a destination with `@` is tried from every
+cell of its rule). Renaming a table renames it in the destinations.
+
+In the interface, a cell with a link shows `↗` in its last column, in the
+colours of the cell's text; the column is one wider for it, so the text (also a
+right-aligned number) stays whole. A rule for a cell or range (`A5`, `A5:B7`)
+also marks empty cells beyond the data, and the layer view shows it there;
+rules for columns and rows only mark the cells of the table. A click on
+`↗` jumps (a click elsewhere selects the cell as usual); F4 on the cell
+opens the go-to prompt with the destination, Enter or a second F4 jumps. Every jump – also
+F4 with a destination typed by hand – is a step in the undo history: Ctrl+Z
+goes back, Ctrl+Y on again. `:back` and the `← Overview!A2` in the status
+line go back from the last jump and keep the changes made since.
+
 Layer names of your own are allowed; their rules are saved and shown in the
 layer view but have no other effect. Which layers are shown or hidden in the
 interface is a view setting and is not saved in the file.
+The layer bar always lists the predefined layers (`formulas`, `format`,
+`validate`, `comments`, `links`), then the own ones. A layer without rules for
+the shown table is grey (`○`) and cannot be switched; a right-click opens its
+layer view, and the first rule typed there creates the block.
 
 ## 7. Running text, live values and comments
 
