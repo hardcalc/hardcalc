@@ -45,47 +45,15 @@ pub const COMMENTS: &str = "comments";
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const UNDO_LIMIT: usize = 200;
 
-/// Function-key bar, labelled like Midnight Commander.
-pub const FKEYS: [(u8, &str); 10] = [
-    (1, "Help"),
-    (2, "Save"),
-    (3, "Types"),
-    (4, "Edit"),
-    (5, "Copy"),
-    (6, "Paste"),
-    (7, "Sort"),
-    (8, "DelRow"),
-    (9, "Menu"),
-    (10, "Quit"),
-];
+/// Function-key bar, labelled like Midnight Commander: the labels of
+/// F1 … F10. An empty label: the key has no function right now.
+pub type FKeys = [&'static str; 10];
+
+/// Function keys in the layout editor.
+pub const LAYOUT_FKEYS: FKeys = ["Help", "Save", "Move", "Edit", "Dup", "Kind", "Page", "Delete", "Menu", "Quit"];
 
 /// Function keys while the print preview is open.
-/// Function keys in the layout editor.
-pub const LAYOUT_FKEYS: [(u8, &str); 10] = [
-    (1, "Help"),
-    (2, "Save"),
-    (3, "Move"),
-    (4, "Edit"),
-    (5, "Dup"),
-    (6, "Kind"),
-    (7, "Page"),
-    (8, "Delete"),
-    (9, "Menu"),
-    (10, "Quit"),
-];
-
-pub const PREVIEW_FKEYS: [(u8, &str); 10] = [
-    (1, "Help"),
-    (2, "PDF"),
-    (3, "Open"),
-    (4, "Print"),
-    (5, "Orient"),
-    (6, "Paper"),
-    (7, "Font-"),
-    (8, "Font+"),
-    (9, "Scope"),
-    (10, "Close"),
-];
+pub const PREVIEW_FKEYS: FKeys = ["Help", "PDF", "Open", "Print", "Orient", "Paper", "Font-", "Font+", "Scope", "Close"];
 
 /// Open print preview: the page layout and the visible part of it.
 #[derive(Debug, Clone)]
@@ -2147,14 +2115,67 @@ impl App {
 
     // ------------------------------------------------------------ printing
 
-    pub fn fkeys(&self) -> &'static [(u8, &'static str); 10] {
-        if self.preview.is_some() {
-            &PREVIEW_FKEYS
-        } else if matches!(self.main_view().kind, ViewKind::Layout(_)) && (!self.view.is_data() || self.left_focused) {
-            &LAYOUT_FKEYS
-        } else {
-            &FKEYS
+    /// The function-key bar: what F1 … F10 do right now, in the order in
+    /// which the keys are handled (the topmost dialog first).
+    pub fn fkeys(&self) -> [(u8, &'static str); 10] {
+        let labels = self.fkey_labels();
+        std::array::from_fn(|i| (i as u8 + 1, labels[i]))
+    }
+
+    fn fkey_labels(&self) -> FKeys {
+        if self.key_test.is_some() {
+            return [""; 10];
         }
+        if self.context.is_some() {
+            return ["Help", "", "", "", "", "", "", "", "Close", "Close"];
+        }
+        if self.show_help {
+            return ["Close", "", "Prev", "Next", "", "", "", "", "KeyTest", "Close"];
+        }
+        if self.confirm.is_some() {
+            return ["", "Save", "", "", "", "", "", "Discard", "", "Cancel"];
+        }
+        if self.menu.is_some() {
+            return ["Help", "", "", "", "", "", "", "", "Close", "Close"];
+        }
+        if let Some(d) = &self.file_dialog {
+            let mut labels = d.fkeys();
+            labels[0] = "Help";
+            return labels;
+        }
+        if self.paper_menu.is_some() {
+            return ["", "", "", "", "", "", "", "", "", "Close"];
+        }
+        if self.preview.is_some() {
+            return PREVIEW_FKEYS;
+        }
+        match self.mode {
+            Mode::Edit { .. } => return ["Help", "Accept", "", "", "", "", "", "", "", "Cancel"],
+            Mode::Command { .. } => return ["Help", "Run", "", "", "", "", "", "", "", "Cancel"],
+            Mode::Normal => {}
+        }
+        let main = self.main_view();
+        let focused = self.view.is_data();
+        let (goto, ins_row, ins_col, sort, delete) = match main.kind {
+            ViewKind::Layout(_) => return LAYOUT_FKEYS,
+            ViewKind::Types | ViewKind::Functions => ("", "New", "", "", "Delete"),
+            ViewKind::Calc => ("", "InsLine", "", "", "DelLine"),
+            _ if main.pivot.is_some() => ("", "", "", "", ""),
+            _ => {
+                // The cursor decides what F8 deletes and where a second F7 leads.
+                let header = main.header;
+                let footer = focused && self.cursor_footer().is_some();
+                let again = self.last_sort == Some((main.sheet, main.cursor.1, false, false));
+                let delete = match header {
+                    Some(Header::Column) => "DelCol",
+                    Some(Header::Corner) => "",
+                    _ if footer => "DelFoot",
+                    _ => "DelRow",
+                };
+                ("Goto", "InsRow", "InsCol", if again { "Sort↓" } else { "Sort" }, delete)
+            }
+        };
+        ["Help", "Save", "Open", goto, ins_row, ins_col, sort, delete, "Menu", "Quit"]
     }
 
     /// The left (main) window's view.
@@ -2443,10 +2464,11 @@ impl App {
             return self.start_key_test();
         }
         match key.code {
-            KeyCode::Right | KeyCode::PageDown | KeyCode::Down | KeyCode::Tab | KeyCode::Char(' ') => {
+            KeyCode::F(9) => self.start_key_test(),
+            KeyCode::Right | KeyCode::PageDown | KeyCode::Down | KeyCode::Tab | KeyCode::Char(' ') | KeyCode::F(4) => {
                 self.help_page = (self.help_page + 1) % pages;
             }
-            KeyCode::Left | KeyCode::PageUp | KeyCode::Up | KeyCode::BackTab => {
+            KeyCode::Left | KeyCode::PageUp | KeyCode::Up | KeyCode::BackTab | KeyCode::F(3) => {
                 self.help_page = (self.help_page + pages - 1) % pages;
             }
             KeyCode::Home => self.help_page = 0,
@@ -3342,7 +3364,7 @@ impl App {
             return;
         }
         if self.types_view() {
-            return self.error("pivot is not available in the types view (F3 to leave)");
+            return self.error("pivot is not available in the types view (Esc to leave)");
         }
         let Some(n) = self.tensor_axes() else {
             self.error("pivot needs a tensor table (## Name :: tensor[A, B, …] with a value column)");
@@ -3682,6 +3704,17 @@ impl App {
             .map(|(r, c)| (r, c, String::new()))
             .collect();
         self.set_cells(cells);
+    }
+
+    /// Ctrl+X: copies the selection and clears it (one undo step).
+    fn cut(&mut self) {
+        if self.view.pivot.is_some() || self.view.kind != ViewKind::Table {
+            return self.error("cut is only available in tables");
+        }
+        self.copy();
+        self.clear_selection();
+        let n: usize = self.clipboard.iter().map(Vec::len).sum();
+        self.info(format!("cut {n} cell(s)"));
     }
 
     fn copy(&mut self) {
@@ -4355,6 +4388,7 @@ impl App {
             KeyCode::Esc if !self.has_range() && self.solo.is_some() => self.set_solo(None),
             // Out of a data layer back to the table itself.
             KeyCode::Esc if !self.has_range() && self.shown_layer() > 0 => self.set_layer(0),
+            KeyCode::Esc if self.types_view() && !self.has_range() => self.toggle_types(),
             KeyCode::Esc => self.leave_header(),
             KeyCode::F(n) => self.fkey(n),
             KeyCode::Char(ch) if !ctrl && !alt => self.start_edit(Some(ch)),
@@ -4381,7 +4415,9 @@ impl App {
         let len = buf.chars().count();
         let byte_at = |s: &str, i: usize| s.char_indices().nth(i).map(|(b, _)| b).unwrap_or(s.len());
         match key.code {
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::F(1) => self.open_help(),
+            KeyCode::F(2) => self.commit_edit(0, 0),
+            KeyCode::Esc | KeyCode::F(10) => self.mode = Mode::Normal,
             KeyCode::Enter => self.commit_edit(1, 0),
             KeyCode::Tab => self.commit_edit(0, 1),
             KeyCode::BackTab => self.commit_edit(0, -1),
@@ -4404,6 +4440,13 @@ impl App {
     }
 
     fn key_command(&mut self, key: KeyEvent) {
+        // F2 runs the line like Enter, F10 leaves it like Esc.
+        let key = match key.code {
+            KeyCode::F(1) => return self.open_help(),
+            KeyCode::F(2) => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            KeyCode::F(10) => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            _ => key,
+        };
         match key.code {
             KeyCode::Up => return self.choose_suggestion(-1),
             KeyCode::Down => return self.choose_suggestion(1),
@@ -4464,6 +4507,25 @@ impl App {
         }
     }
 
+    /// A menu or dialog is open above the windows.
+    fn overlay_open(&self) -> bool {
+        self.key_test.is_some()
+            || self.context.is_some()
+            || self.show_help
+            || self.confirm.is_some()
+            || self.menu.is_some()
+            || self.file_dialog.is_some()
+            || self.paper_menu.is_some()
+    }
+
+    /// The function key whose label is at `pos` and not hidden by a dialog.
+    fn fkey_at(&self, pos: Position) -> Option<u8> {
+        match self.hits.iter().rev().find(|(r, _)| r.contains(pos)) {
+            Some((_, Hit::FKey(n))) => Some(*n),
+            _ => None,
+        }
+    }
+
     pub fn on_mouse(&mut self, m: MouseEvent) {
         let pos = Position::new(m.column, m.row);
         if self.caps.mouse != Cap::Confirmed && matches!(m.kind, MouseEventKind::Down(_)) {
@@ -4472,6 +4534,14 @@ impl App {
             }
             self.caps.set(Cond::Mouse, Cap::Confirmed);
             self.save_caps();
+        }
+        // A click on the bar is the key it shows, whatever is open.
+        if m.kind == MouseEventKind::Down(MouseButton::Left)
+            && !m.modifiers.contains(KeyModifiers::CONTROL)
+            && (self.overlay_open() || self.mode != Mode::Normal)
+            && let Some(n) = self.fkey_at(pos)
+        {
+            return self.handle_key(KeyEvent::new(KeyCode::F(n), KeyModifiers::NONE));
         }
         if let Some(_ctx) = self.context {
             if let MouseEventKind::Down(_) = m.kind {
@@ -4813,23 +4883,26 @@ impl App {
         {
             return self.layout_fkey(i, n);
         }
-        match n {
-            1 => self.open_help(),
-            2 => self.save(None),
-            3 => self.toggle_types(),
-            4 => self.start_edit(None),
-            5 => self.copy(),
-            6 => {
-                let grid = self.clipboard.clone();
-                self.paste_grid(grid);
-            }
-            7 => self.command("sort"),
-            8 if self.on_header() == Some(Header::Column) => self.command("delcol"),
-            8 if self.on_header() == Some(Header::Corner) => self.error("F8 deletes rows or columns, not the whole table"),
-            8 => self.command("delrow"),
-            9 => self.open_menu(0),
-            10 => self.quit_key(),
-            _ => {}
+        // The same functions as the keys in the KEYMAP.
+        let key = KeyEvent::new(KeyCode::F(n), KeyModifiers::NONE);
+        if let Some(action) = keymap::action_for(&key, &self.caps) {
+            self.handle(action);
+        }
+    }
+
+    /// Opens the command line with a command that needs an argument.
+    pub(super) fn ask_argument(&mut self, command: &str) {
+        self.mode = Mode::Command { buf: command.to_string() };
+        self.cmd_choice = None;
+    }
+
+    /// F6: a new column right of the cursor; the command line asks for its name.
+    pub(super) fn insert_column_key(&mut self) {
+        if self.view.kind == ViewKind::Table && self.view.pivot.is_none() {
+            self.ask_argument("addcol ");
+        } else {
+            // Says why not in this view.
+            self.command("addcol");
         }
     }
 
@@ -4936,7 +5009,7 @@ impl App {
                     return self.start_edit(None);
                 }
                 "addcol" | "delcol" | "sort" | "sortcol" | "pivot" => {
-                    return self.error(format!(":{cmd} is not available in the types view (F3 to leave)"));
+                    return self.error(format!(":{cmd} is not available in the types view (Esc to leave)"));
                 }
                 _ => {}
             }
@@ -5098,6 +5171,7 @@ impl App {
             "split" => self.toggle_split(),
             "swap" => self.swap_windows(),
             "copy" => self.copy(),
+            "cut" => self.cut(),
             "paste" => {
                 let grid = self.clipboard.clone();
                 self.paste_grid(grid);
@@ -5357,6 +5431,22 @@ impl App {
                         }
                         let all: Vec<usize> = (0..cols).collect();
                         crate::refs::update_document(doc, s, &crate::refs::Moves { rows: &moved, cols: &all });
+                    } else {
+                        // Formatting (rules for single cells) follows its cell; formulas stay.
+                        let places: Vec<(usize, usize, Vec<usize>)> = jobs
+                            .iter()
+                            .map(|(ca, cb, order)| {
+                                let mut new_of = vec![0; order.len()];
+                                for (new, &old) in order.iter().enumerate() {
+                                    new_of[old] = new;
+                                }
+                                (*ca, *cb, new_of)
+                            })
+                            .collect();
+                        crate::refs::move_cell_targets(doc, s, &|r, c| {
+                            let (_, _, new_of) = places.iter().find(|(ca, cb, _)| (*ca..=*cb).contains(&c))?;
+                            (r0..=r1).contains(&r).then(|| (r0 + new_of[r - r0], c))
+                        });
                     }
                     if let Some(t) = table_mut(doc, s) {
                         data_layers::pad_layers(t);

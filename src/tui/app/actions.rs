@@ -1,7 +1,7 @@
 //! Program functions reached through the KEYMAP, and what the terminal can
 //! do: observed capabilities and the key test.
 
-use super::{App, Header, Hit, Mode, Purpose};
+use super::{App, Header, Hit, Purpose};
 use crate::tui::keymap::{Action, Cap, Cond};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -18,7 +18,7 @@ impl App {
         // Cell functions act on the main window while a helper is focused.
         let global = matches!(
             action,
-            Action::ContextMenu | Action::Menu | Action::Help | Action::Save | Action::Quit | Action::CommandLine | Action::OpenFile | Action::Split | Action::SwapWindows
+            Action::ContextMenu | Action::Menu | Action::Help | Action::Save | Action::Quit | Action::CommandLine | Action::OpenFile | Action::Goto | Action::Split | Action::SwapWindows
         );
         if !global && !self.view.is_data() {
             return self.with_window(true, |app| app.handle(action));
@@ -29,15 +29,14 @@ impl App {
             Action::Help => self.open_help(),
             Action::Save => self.save(None),
             Action::Quit => self.quit_key(),
-            Action::CommandLine => {
-                self.mode = Mode::Command { buf: String::new() };
-                self.cmd_choice = None;
-            }
+            Action::CommandLine => self.ask_argument(""),
             Action::OpenFile => self.open_file_dialog(Purpose::Open),
+            Action::Goto => self.ask_argument("goto "),
             Action::EditCell if self.on_header() == Some(Header::Row) && self.cursor_footer().is_none() => self.leave_header(),
             Action::EditCell => self.start_edit(None),
             Action::ClearCells => self.clear_selection(),
             Action::Copy => self.copy(),
+            Action::Cut => self.cut(),
             Action::Paste => {
                 let grid = self.clipboard.clone();
                 self.paste_grid(grid);
@@ -47,14 +46,13 @@ impl App {
             Action::FillDown => self.fill_down(),
             Action::FillRight => self.fill_right(),
             Action::InsertRow => self.command("addrow"),
+            Action::InsertColumn => self.insert_column_key(),
             Action::DeleteLines => match self.on_header() {
                 Some(Header::Column) => self.command("delcol"),
                 Some(Header::Corner) => self.error("F8 deletes rows or columns, not the whole table"),
                 _ => self.command("delrow"),
             },
             Action::Sort => self.command("sort"),
-            Action::SortColumn => self.command("sortcol"),
-            Action::Types => self.toggle_types(),
             Action::Pivot => self.toggle_pivot(None),
             Action::Split => self.toggle_split(),
             Action::SwapWindows => self.swap_windows(),

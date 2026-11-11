@@ -682,7 +682,12 @@ fn draw_status(f: &mut Frame, app: &ConfApp, area: Rect) {
 }
 
 fn draw_fkeys(f: &mut Frame, app: &mut ConfApp, area: Rect) {
-    let keys: [(u8, &str); 10] = [
+    // The file dialog has its own keys.
+    let dialog = app.file_dialog.as_ref().map(|d| d.fkeys());
+    let keys: [(u8, &str); 10] = if let Some(labels) = dialog {
+        std::array::from_fn(|i| (i as u8 + 1, labels[i]))
+    } else {
+        [
         (1, "Help"),
         (2, "Save"),
         (3, if app.reveal { "Hide" } else { "Show" }),
@@ -693,7 +698,8 @@ fn draw_fkeys(f: &mut Frame, app: &mut ConfApp, area: Rect) {
         (8, if app.delete_target().is_ok() { "Delete" } else { "" }),
         (9, if app.retype_target().is_ok() { "Type" } else { "" }),
         (10, "Quit"),
-    ];
+        ]
+    };
     let slot = (area.width / keys.len() as u16).max(1);
     for (i, (key, label)) in keys.iter().enumerate() {
         let x = area.x + i as u16 * slot;

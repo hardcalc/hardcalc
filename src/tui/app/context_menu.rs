@@ -44,11 +44,12 @@ pub static CONTEXT_MENU: &[Group] = &[
         label: "Edit",
         entries: &[
             a('C', "Copy", Action::Copy),
+            a('X', "Cut", Action::Cut),
             a('P', "Paste", Action::Paste),
             a('L', "Clear", Action::ClearCells),
             a('U', "Undo", Action::Undo),
             a('R', "Redo", Action::Redo),
-            c('G', "Go to cell…", "goto "),
+            a('G', "Go to cell…", Action::Goto),
         ],
     },
     Group {
@@ -77,11 +78,11 @@ pub static CONTEXT_MENU: &[Group] = &[
         letter: 'C',
         label: "Column",
         entries: &[
-            c('I', "Insert…", "addcol "),
+            a('I', "Insert…", Action::InsertColumn),
             c('D', "Delete", "delcol"),
             c('T', "Type…", "type "),
             a('S', "Sort", Action::Sort),
-            a('O', "Sort columns individually", Action::SortColumn),
+            c('O', "Sort columns individually", "sortcol"),
             a('F', "Fill right", Action::FillRight),
         ],
     },
@@ -104,6 +105,7 @@ pub static CONTEXT_MENU: &[Group] = &[
             a('W', "Swap windows", Action::SwapWindows),
             c('I', "Inspector", "inspector"),
             c('O', "Source", "source"),
+            c('T', "Types", "types"),
             c('F', "Functions", "functions"),
         ],
     },
@@ -159,7 +161,11 @@ impl App {
         let Some(mut m) = self.context else { return };
         let n = m.rows(&self.caps).len();
         match key.code {
-            KeyCode::Esc => self.context = None,
+            KeyCode::Esc | KeyCode::F(9) | KeyCode::F(10) => self.context = None,
+            KeyCode::F(1) => {
+                self.context = None;
+                self.open_help();
+            }
             KeyCode::Left | KeyCode::Backspace if m.group.is_some() => {
                 m.selected = m.group.unwrap_or(0);
                 m.group = None;

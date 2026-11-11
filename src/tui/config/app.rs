@@ -1312,6 +1312,8 @@ impl ConfApp {
                     self.last_click = Some((now, m.column, m.row));
                     d.click_spot(spot, double)
                 }
+                // A click on the bar is the key it shows.
+                (MouseEventKind::Down(MouseButton::Left), Some(Hit::FKey(n))) => d.key(KeyEvent::new(KeyCode::F(n), KeyModifiers::NONE)),
                 (MouseEventKind::ScrollDown, _) => {
                     d.scroll_by(3);
                     Action::None

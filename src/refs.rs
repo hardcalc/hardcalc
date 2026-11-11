@@ -355,6 +355,42 @@ pub fn update_document(doc: &mut Document, sheet: usize, moves: &Moves) {
     }
 }
 
+/// Moves single cells (`B3`) instead of whole lines, for sorting a part of a
+/// table: the targets of the table's layer rules – formatting, comments … –
+/// follow their cell. `to(row, col)`: the new place of a cell, `None`: it
+/// stays. Ranges, rows and columns stay as they are.
+pub fn move_cell_targets(doc: &mut Document, sheet: usize, to: &dyn Fn(usize, usize) -> Option<(usize, usize)>) {
+    let Some(name) = doc.blocks.iter().filter_map(|b| if let Block::Table(t) = b { Some(t) } else { None }).nth(sheet).map(|t| t.name.clone()) else {
+        return;
+    };
+    let mut table = None;
+    for block in &mut doc.blocks {
+        match block {
+            Block::Table(_) => table = Some(table.map_or(0, |i| i + 1)),
+            Block::Layer(l) => {
+                let owner = match &l.target {
+                    Some(target) => name.as_deref() == Some(target.as_str()),
+                    None => table == Some(sheet),
+                };
+                if !owner {
+                    continue;
+                }
+                for rule in &mut l.rules {
+                    let Rule::Rule { target, .. } = rule else { continue };
+                    let Some(mut p) = RefParts::parse(target.trim()) else { continue };
+                    let Some((row, abs)) = p.row else { continue };
+                    if let Some((r, c)) = to(row, p.col) {
+                        p.col = c;
+                        p.row = Some((r, abs));
+                        *target = p.write();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Whether an A1 reference (in a formula anywhere or a rule of the table's
 /// layers) points into the first `rows` rows or `cols` columns of table
 /// `sheet`.

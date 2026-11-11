@@ -258,7 +258,7 @@ fn fkey(app: &mut App, n: u8) {
 #[test]
 fn types_overview() {
     let mut a = app();
-    fkey(&mut a, 3);
+    a.command("types");
     assert!(a.types_view());
     let screen = render(&mut a);
     for s in ["⚙ types", "Definition", "Euro", "decimal(2)", "€", "Expenses.Amount", "enum (3 values)"] {
@@ -279,12 +279,12 @@ fn types_overview() {
     key(&mut a, KeyCode::Enter);
     assert_eq!(a.cursor_problem(), None);
     assert!(hardcalc::write(&a.doc).contains("Euro   = decimal(1) unit \"€\"") || hardcalc::write(&a.doc).contains("Euro = decimal(1) unit \"€\""));
-    fkey(&mut a, 3);
+    a.command("types");
     assert!(!a.types_view());
     assert!(render(&mut a).contains("1200.0 "));
 
     // Add a type through the + row, then its definition.
-    fkey(&mut a, 3);
+    a.command("types");
     a.view.cursor = (2, 0);
     typ(&mut a, "Prozent");
     key(&mut a, KeyCode::Enter);
@@ -318,7 +318,7 @@ fn types_overview() {
 #[test]
 fn type_help_while_editing() {
     let mut a = app();
-    fkey(&mut a, 3);
+    a.command("types");
     a.view.cursor = (0, 1);
     let draw = |a: &mut App| {
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
@@ -342,7 +342,7 @@ fn type_help_while_editing() {
 #[test]
 fn broken_type_definition_is_reported() {
     let mut a = app();
-    fkey(&mut a, 3);
+    a.command("types");
     a.view.cursor = (1, 1); // Status
     key(&mut a, KeyCode::Enter);
     typ(&mut a, "x");
@@ -376,14 +376,15 @@ fn function_key_bar() {
     let mut a = app();
     let screen = render(&mut a);
     let last = screen.lines().last().unwrap();
-    for s in ["1Help", "2Save", "3Types", "7Sort", "10Quit"] {
+    for s in ["1Help", "2Save", "3Open", "4Goto", "5InsRow", "6InsCol", "7Sort", "8DelRow", "9Menu", "10Quit"] {
         assert!(last.contains(s), "{last}");
     }
     // Clicking F7 twice sorts ascending, then descending.
     a.view.cursor = (0, 1);
     click(&mut a, Hit::FKey(7));
     assert_eq!(a.wb.sheets[0].raw[0][0], "Internet");
-    render(&mut a);
+    // The bar says where the next F7 leads.
+    assert!(render(&mut a).lines().last().unwrap().contains("7Sort↓"));
     click(&mut a, Hit::FKey(7));
     assert_eq!(a.wb.sheets[0].raw[0][0], "Rent");
 
@@ -2513,7 +2514,7 @@ fn context_menu_by_key_sequence_mouse_and_shift_f10() {
     // Entries show their keys (only those that work here).
     typ(&mut a, "/e");
     let screen = render(&mut a);
-    assert!(screen.contains("Ctrl+C · F5"), "{screen}");
+    assert!(screen.contains("Ctrl+C") && screen.contains("Ctrl+X") && screen.contains("F4"), "{screen}");
     key(&mut a, KeyCode::Esc);
     assert!(a.context.is_none());
     // Right-click on a cell: the cursor goes there, the menu opens there.
@@ -3042,9 +3043,9 @@ fn sort_column_alone_and_block() {
     let mut a = app();
     let col = |a: &App, c: usize| a.wb.sheets[0].raw.iter().map(|r| r[c].clone()).collect::<Vec<_>>();
     let (names, amounts) = (col(&a, 0), col(&a, 1));
-    // Shift+F7: only the cursor column moves, the others stay.
+    // :sortcol: only the cursor column moves, the others stay.
     a.view.cursor = (0, 0);
-    a.on_key(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    a.command("sortcol");
     let mut sorted = names.clone();
     sorted.sort();
     assert_eq!(col(&a, 0), sorted);
@@ -3056,4 +3057,171 @@ fn sort_column_alone_and_block() {
     typ(&mut a, ":sort Amount desc");
     key(&mut a, KeyCode::Enter);
     assert_eq!(a.wb.sheets[0].raw[2], app().wb.sheets[0].raw[2]);
+}
+
+/// The last screen line: the function-key bar.
+fn bar(app: &mut App) -> String {
+    render(app).lines().last().unwrap().to_string()
+}
+
+#[test]
+fn function_keys_of_the_table() {
+    let mut a = app();
+    let (rows, cols) = (a.table().rows.len(), a.table().columns.len());
+    // F5 inserts a row, F6 asks for the name of a new column.
+    a.view.cursor = (0, 0);
+    fkey(&mut a, 5);
+    assert_eq!(a.table().rows.len(), rows + 1);
+    fkey(&mut a, 6);
+    assert!(bar(&mut a).contains("2Run") && bar(&mut a).contains("10Cancel"), "{}", bar(&mut a));
+    typ(&mut a, "Note");
+    fkey(&mut a, 2);
+    assert_eq!(a.table().columns.len(), cols + 1);
+    assert_eq!(a.table().columns[1].name, "Note");
+    // F4 asks for a cell; F10 leaves the command line without quitting.
+    fkey(&mut a, 4);
+    fkey(&mut a, 10);
+    assert!(!a.quit && a.mode == hardcalc::tui::app::Mode::Normal);
+    fkey(&mut a, 4);
+    typ(&mut a, "C2");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(a.view.cursor, (1, 2));
+    // F8 names what it deletes.
+    assert!(bar(&mut a).contains("8DelRow"));
+    a.view.cursor = (0, 0);
+    key(&mut a, KeyCode::Up);
+    assert!(bar(&mut a).contains("8DelCol"), "{}", bar(&mut a));
+    key(&mut a, KeyCode::Left);
+    assert!(bar(&mut a).contains("8  "), "{}", bar(&mut a));
+    // The keys that left the bar: F3 opens a file, Shift+F7 does not sort a column alone.
+    let mut a = app();
+    fkey(&mut a, 3);
+    assert!(a.file_dialog.is_some() && !a.types_view());
+    // Esc leaves the types view.
+    let mut a = app();
+    a.command("types");
+    assert!(a.types_view() && bar(&mut a).contains("5New") && bar(&mut a).contains("8Delete"));
+    key(&mut a, KeyCode::Esc);
+    assert!(!a.types_view());
+}
+
+#[test]
+fn ctrl_x_cuts_the_selection() {
+    let mut a = app();
+    a.view.cursor = (0, 0);
+    let first = a.wb.sheets[0].raw[0][0].clone();
+    ctrl(&mut a, 'x');
+    assert_eq!(a.wb.sheets[0].raw[0][0], "");
+    a.view.cursor = (1, 3);
+    ctrl(&mut a, 'v');
+    assert_eq!(a.wb.sheets[0].raw[1][3], first);
+    // One step back each: the paste, then the cut.
+    ctrl(&mut a, 'z');
+    ctrl(&mut a, 'z');
+    assert_eq!(a.wb.sheets[0].raw[0][0], first);
+}
+
+#[test]
+fn function_keys_in_menus_and_dialogs() {
+    // The menu and the context menu: F1 help, F9 / F10 close – F10 does not quit.
+    let mut a = app();
+    fkey(&mut a, 9);
+    let line = bar(&mut a);
+    assert!(line.contains("1Help") && line.contains("9Close") && line.contains("10Close") && !line.contains("Save"), "{line}");
+    click(&mut a, Hit::FKey(10));
+    assert!(a.menu.is_none() && !a.quit);
+    typ(&mut a, "/");
+    assert!(bar(&mut a).contains("9Close"));
+    fkey(&mut a, 1);
+    assert!(a.context.is_none() && a.show_help);
+    // The help: F3 / F4 turn the pages, F10 closes.
+    let line = bar(&mut a);
+    assert!(line.contains("1Close") && line.contains("3Prev") && line.contains("4Next") && line.contains("9KeyTest"), "{line}");
+    let page = a.help_page;
+    fkey(&mut a, 4);
+    assert_eq!(a.help_page, page + 1);
+    fkey(&mut a, 3);
+    assert_eq!(a.help_page, page);
+    fkey(&mut a, 10);
+    assert!(!a.show_help && !a.quit);
+    // Editing a cell: F2 accepts and stays, F10 cancels.
+    a.view.cursor = (0, 0);
+    typ(&mut a, "Flat");
+    let line = bar(&mut a);
+    assert!(line.contains("2Accept") && line.contains("10Cancel") && !line.contains("Sort"), "{line}");
+    fkey(&mut a, 2);
+    assert_eq!((a.wb.sheets[0].raw[0][0].as_str(), a.view.cursor), ("Flat", (0, 0)));
+    typ(&mut a, "x");
+    click(&mut a, Hit::FKey(10));
+    assert_eq!(a.wb.sheets[0].raw[0][0], "Flat");
+    assert!(!a.quit);
+    // Unsaved changes: F2 / F8 / F10; F10 cancels.
+    fkey(&mut a, 3);
+    assert!(a.confirm.is_some());
+    let line = bar(&mut a);
+    assert!(line.contains("2Save") && line.contains("8Discard") && line.contains("10Cancel") && !line.contains("Open"), "{line}");
+    fkey(&mut a, 10);
+    assert!(a.confirm.is_none() && a.file_dialog.is_none());
+    // F8 discards: the file dialog opens, with its own bar.
+    fkey(&mut a, 3);
+    fkey(&mut a, 8);
+    assert!(a.file_dialog.is_some());
+    let line = bar(&mut a);
+    assert!(line.contains("2Open") && line.contains("4All") && line.contains("5Name") && line.contains("6Date") && line.contains("10Close"), "{line}");
+    fkey(&mut a, 4);
+    assert!(a.file_dialog.as_ref().unwrap().all_files && bar(&mut a).contains("4Known"));
+    click(&mut a, Hit::FKey(10));
+    assert!(a.file_dialog.is_none() && !a.quit);
+}
+
+#[test]
+fn sorted_block_takes_formatting_slices_and_scenarios_along() {
+    let text = "\
+## T :: matrix[*, 2]
+
+| Item | N |
+|---|--:|
+| c | 3 |
+| a | 1 |
+| b | 2 |
+| z | 9 |
+
+```layer format
+A1: bold
+A2: italic
+B3: fg red
+A4: underline
+```
+
+```slice Jan
+| Item | N |
+|---|--:|
+| c-jan | 30 |
+| a-jan | 10 |
+| b-jan | 20 |
+| z-jan | 90 |
+```
+
+```scenario Opt
+| Item | N |
+|---|--:|
+| | 31 |
+| | 11 |
+| | 21 |
+| | 91 |
+```
+";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(text).unwrap());
+    // Sort the first three rows (not the last one) by the first column.
+    a.view.cursor = (0, 0);
+    a.view.anchor = Some((2, 1));
+    typ(&mut a, ":sort");
+    key(&mut a, KeyCode::Enter);
+    let out = hardcalc::write(&a.doc);
+    assert!(out.contains("| a | 1 |\n| b | 2 |\n| c | 3 |\n| z | 9 |"), "{out}");
+    // c (was row 1) is now row 3, a row 1, b row 2.
+    assert!(out.contains("A3: bold") && out.contains("A1: italic") && out.contains("B2: fg red"), "{out}");
+    assert!(out.contains("A4: underline"), "{out}");
+    assert!(out.contains("| a-jan | 10 |\n| b-jan | 20 |\n| c-jan | 30 |\n| z-jan | 90 |"), "{out}");
+    assert!(out.contains("|  | 11 |\n|  | 21 |\n|  | 31 |\n|  | 91 |") || out.contains("| | 11 |\n| | 21 |\n| | 31 |\n| | 91 |"), "{out}");
 }

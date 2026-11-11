@@ -62,6 +62,9 @@ impl App {
     }
 
     pub(super) fn key_file_dialog(&mut self, key: KeyEvent) {
+        if key.code == ratatui::crossterm::event::KeyCode::F(1) {
+            return self.open_help();
+        }
         let Some(d) = &mut self.file_dialog else { return };
         let action = d.key(key);
         self.dialog_action(action);

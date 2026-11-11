@@ -117,7 +117,7 @@ impl App {
     pub(super) fn key_confirm(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('s' | 'S' | 'w' | 'W') | KeyCode::Enter | KeyCode::F(2) => self.answer_confirm(0),
-            KeyCode::Char('d' | 'D' | 'n' | 'N') => self.answer_confirm(1),
+            KeyCode::Char('d' | 'D' | 'n' | 'N') | KeyCode::F(8) => self.answer_confirm(1),
             KeyCode::Esc | KeyCode::Char('c' | 'C') | KeyCode::F(10) => self.answer_confirm(2),
             _ => {}
         }

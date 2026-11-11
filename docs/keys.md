@@ -14,20 +14,21 @@ context menu (`/`, then the marked letters).
 | Save | `F2` · `Ctrl+S` | `click F2` |
 | Quit | `F10` · `Ctrl+Q` | `click F10` |
 | Command line | `:` | – |
-| Open file | `Ctrl+E` · `F9 File Open` | – |
-| Edit cell | `Enter` · `F4` | `double-click` |
+| Open file | `F3` · `Ctrl+E` · `F9 File Open` | `click F3` |
+| Go to cell | `F4` · `/ E G` | `click F4` |
+| Edit cell | `Enter` | `double-click` |
 | Clear cells | `Del` · `Backspace` · `/ E L` | – |
-| Copy | `Ctrl+C` · `F5` · `/ E C` | – |
-| Paste | `Ctrl+V` · `F6` · `/ E P` | – |
+| Copy | `Ctrl+C` · `/ E C` | – |
+| Cut | `Ctrl+X` · `/ E X` | – |
+| Paste | `Ctrl+V` · `/ E P` | – |
 | Undo | `Ctrl+Z` · `/ E U` | – |
 | Redo | `Ctrl+Y` · `/ E R` | – |
 | Fill down | `Ctrl+D` · `/ R F` | `drag ▪` |
 | Fill right | `Ctrl+R` · `/ C F` | – |
-| Insert row | `Ins` · `/ R I` | `context menu` |
-| Delete rows / columns | `F8` · `/ R D` | `context menu` |
+| Insert row | `F5` · `Ins` · `/ R I` | `click F5` · `context menu` |
+| Insert column | `F6` · `/ C I` | `click F6` |
+| Delete rows / columns | `F8` · `/ R D` | `click F8` · `context menu` |
 | Sort by column | `F7` · `/ C S` | `click F7` |
-| Sort columns individually | `Shift+F7` · `/ C O` | – |
-| Types tab | `F3` | `click ⚙ types` |
 | Pivot view | `Ctrl+P` · `/ T P` | `click ⊞ pivot` |
 | Split window | `Ctrl+O` · `/ V S` | – |
 | Swap windows | `Ctrl+U` · `/ V W` | – |

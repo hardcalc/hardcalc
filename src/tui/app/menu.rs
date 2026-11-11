@@ -39,6 +39,10 @@ impl App {
         let n = commands::items(top).len();
         match key.code {
             KeyCode::Esc | KeyCode::F(9) | KeyCode::F(10) => self.menu = None,
+            KeyCode::F(1) => {
+                self.menu = None;
+                self.open_help();
+            }
             KeyCode::Left => self.menu = Some(((top + MENUS.len() - 1) % MENUS.len(), 0)),
             KeyCode::Right | KeyCode::Tab => self.menu = Some(((top + 1) % MENUS.len(), 0)),
             KeyCode::Up => self.menu = Some((top, (item + n - 1) % n)),

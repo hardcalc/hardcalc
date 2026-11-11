@@ -1401,15 +1401,10 @@ fn clip(s: &str, w: usize) -> String {
 }
 
 fn draw_fkeys(f: &mut Frame, app: &mut App, area: Rect) {
-    let editing = matches!(app.mode, Mode::Edit { .. });
     let keys = app.fkeys();
     let n = keys.len() as u16;
     let slot = (area.width / n).max(1);
-    let (num_style, label_style) = if editing {
-        (Style::new().fg(Color::DarkGray), Style::new().fg(Color::Gray).bg(Color::DarkGray))
-    } else {
-        (Style::new().fg(Color::White), Style::new().fg(Color::Black).bg(Color::Cyan))
-    };
+    let label_style = Style::new().fg(Color::Black).bg(Color::Cyan);
     for (i, (key, label)) in keys.iter().enumerate() {
         let x = area.x + i as u16 * slot;
         if x >= area.right() {
@@ -1418,12 +1413,16 @@ fn draw_fkeys(f: &mut Frame, app: &mut App, area: Rect) {
         let w = if i + 1 == keys.len() { area.right() - x } else { slot.min(area.right() - x) };
         let num = key.to_string();
         let buf = f.buffer_mut();
+        // A key without a function here: its number steps back.
+        let num_style = Style::new().fg(if label.is_empty() { Color::DarkGray } else { Color::White });
         buf.set_stringn(x, area.y, &num, w as usize, num_style);
         let lw = (w as usize).saturating_sub(num.len());
         if lw > 0 {
             buf.set_stringn(x + num.len() as u16, area.y, fit(label, lw, Align::Left), lw, label_style);
         }
-        app.hits.push((Rect::new(x, area.y, w, 1), Hit::FKey(*key)));
+        if !label.is_empty() {
+            app.hits.push((Rect::new(x, area.y, w, 1), Hit::FKey(*key)));
+        }
     }
 }
 
@@ -1537,7 +1536,7 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect, helper: Option<&str>) {
             } else if app.functions_view() {
                 "own functions: name, parameters, definition, description · + row adds one · F8 deletes".into()
             } else if app.types_view() {
-                "your types: edit Type or Definition · + row adds a type · F8 deletes · F3 back".into()
+                "your types: edit Type or Definition · + row adds a type · F8 deletes · Esc back".into()
             } else {
                 "type or double-click to edit · Shift+arrows or drag to select · F9 menu · : command".into()
             },
@@ -1744,7 +1743,9 @@ fn paper_label(app: &App) -> String {
 /// The help as pages; the page titles at the bottom are clickable.
 fn draw_help(f: &mut Frame, app: &mut App) {
     let pages = super::help::pages(&app.caps);
-    let area = f.area();
+    // The function-key bar below stays visible: it shows the keys of the help.
+    let mut area = f.area();
+    area.height = area.height.saturating_sub(1);
     let page = app.help_page.min(pages.len() - 1);
     let (title, entries) = &pages[page];
     // The same size for every page, so paging does not jump around.

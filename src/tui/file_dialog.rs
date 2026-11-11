@@ -171,7 +171,34 @@ impl FileDialog {
         self.dir.as_os_str() == RECENT
     }
 
-    /// Ctrl+R: the list of recent files, and back to the folder.
+    /// The labels of F1 … F10 while the dialog is open (empty: no function).
+    pub fn fkeys(&self) -> [&'static str; 10] {
+        let take = match (self.in_places, self.purpose) {
+            (true, _) => "Go",
+            (false, Purpose::Open) => "Open",
+            (false, Purpose::Append) => "Append",
+        };
+        let recent = match (self.recent.is_empty(), self.in_recent()) {
+            (true, _) => "",
+            (false, true) => "Folder",
+            (false, false) => "Recent",
+        };
+        let all = if self.all_files { "Known" } else { "All" };
+        let places = match (self.places.is_empty(), self.in_places) {
+            (true, _) => "",
+            (false, true) => "List",
+            (false, false) => "Places",
+        };
+        ["", take, recent, all, "Name", "Date", "", "", places, "Close"]
+    }
+
+    /// Ctrl+A / F4: all files, not only the readable ones.
+    fn toggle_all(&mut self) {
+        self.all_files = !self.all_files;
+        self.read();
+    }
+
+    /// Ctrl+R / F3: the list of recent files, and back to the folder.
     fn toggle_recent(&mut self) {
         if self.in_recent() {
             self.dir = std::mem::take(&mut self.before_recent);
@@ -377,6 +404,13 @@ impl FileDialog {
         match key.code {
             KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab | KeyCode::Left => self.in_places = false,
             KeyCode::F(10) => return Action::Close,
+            KeyCode::F(9) => self.in_places = false,
+            KeyCode::F(2) => self.go_place(self.place),
+            // The keys of the list work from here too.
+            KeyCode::F(3..=6) => {
+                self.in_places = false;
+                return self.key(key);
+            }
             KeyCode::Up => self.place = to(sel - 1),
             KeyCode::Down => self.place = to(sel + 1),
             KeyCode::Home | KeyCode::PageUp => self.place = 0,
@@ -441,8 +475,12 @@ impl FileDialog {
             KeyCode::End => self.select(isize::MAX / 2),
             KeyCode::Left => self.up(),
             KeyCode::Right if self.current().is_some_and(|e| e.dir) => return self.choose(),
-            KeyCode::Enter => return self.choose(),
-            KeyCode::Tab | KeyCode::BackTab if !self.places.is_empty() => {
+            KeyCode::Enter | KeyCode::F(2) => return self.choose(),
+            KeyCode::F(3) => self.toggle_recent(),
+            KeyCode::F(4) => self.toggle_all(),
+            KeyCode::F(5) => self.sort_by(SortKey::Name),
+            KeyCode::F(6) => self.sort_by(SortKey::Date),
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::F(9) if !self.places.is_empty() => {
                 self.in_places = true;
                 self.place = self.current_place().unwrap_or(self.place.min(self.places.len() - 1));
             }
@@ -452,10 +490,7 @@ impl FileDialog {
             }
             KeyCode::Backspace => self.up(),
             // Ctrl+A: all files, not only the readable ones.
-            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.all_files = !self.all_files;
-                self.read();
-            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => self.toggle_all(),
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => self.toggle_recent(),
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => self.sort_by(SortKey::Name),
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => self.sort_by(SortKey::Date),
@@ -589,12 +624,12 @@ impl FileDialog {
         let search = if self.filter.is_empty() { String::new() } else { format!(" search: {}▏", self.filter) };
         buf.set_stringn(inner.x, inner.bottom() - 2, &search, full_w, Style::new().fg(Color::Yellow));
         // Right-aligned on the same line: the order and its keys.
-        let order = format!("{} · Ctrl+N name · Ctrl+D date ", self.sort_label());
+        let order = format!("{} · F5 name · F6 date ", self.sort_label());
         if order.width() + search.width() < full_w {
             buf.set_stringn(inner.x + (full_w - order.width()) as u16, inner.bottom() - 2, &order, full_w, Style::new().fg(Color::DarkGray));
         }
-        let all = if self.all_files { format!("Ctrl+A: {filter_label} only") } else { "Ctrl+A: all files".to_string() };
-        let all = if self.recent.is_empty() { all } else { format!("Ctrl+R: recent · {all}") };
+        let all = if self.all_files { format!("F4: {filter_label} only") } else { "F4: all files".to_string() };
+        let all = if self.recent.is_empty() { all } else { format!("F3: recent · {all}") };
         let keys = if self.in_places {
             " ↑↓ Enter: go there · Tab / Esc: back to the list".to_string()
         } else if self.places.is_empty() {

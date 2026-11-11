@@ -120,9 +120,16 @@ are labelled in the bottom line and can be clicked.
 
 ### Tables
 
-| F1   | F2   | F3    | F4   | F5   | F6    | F7   | F8     | F9    | F10  |
-|------|------|-------|------|------|-------|------|--------|-------|------|
-| Help | Save | Types | Edit | Copy | Paste | Sort | DelRow | Menu  | Quit |
+| F1   | F2   | F3   | F4   | F5     | F6     | F7   | F8     | F9   | F10  |
+|------|------|------|------|--------|--------|------|--------|------|------|
+| Help | Save | Open | Goto | InsRow | InsCol | Sort | DelRow | Menu | Quit |
+
+The bar always shows what the keys do right now: F8 reads *DelCol* on a
+column header, F7 reads *Sort↓* when a second press sorts descending, and a
+key without a function has no label. Menus and dialogs bring their own bar –
+the file dialog *Open · Recent · All · Name · Date · Places*, the question
+about unsaved changes *Save · Discard · Cancel*, a cell being edited
+*Accept · Cancel*. Everywhere F1 is the help, F2 confirms and F10 leaves.
 
 **F9** or a click on **≡ hardcalc** at the top left opens the menu
 (*File · Edit · View · Insert · Help*) with all functions and their keys;
@@ -135,7 +142,7 @@ layer and column names.
 
 | Input                            | Effect                                                        |
 |----------------------------------|---------------------------------------------------------------|
-| typing, Enter, F4, double-click  | edit the cell (typing replaces the content; the input appears in the cell) |
+| typing, Enter, double-click      | edit the cell (typing replaces the content; the input appears in the cell) |
 | arrows, click                    | move; Shift+arrows or dragging selects                        |
 | while editing a formula: arrows, click | after `=`, `(`, `,` or an operator a reference is inserted (Shift+arrows, dragging: a range; without Shift: type `:` and point at the second corner), as in Excel |
 | ↑ in the first row, ← in the first column, click on a column/row header | cursor on the header: the whole column / row is selected; Shift+arrows extend |
@@ -148,10 +155,14 @@ layer and column names.
 | Del / Backspace                  | clear the selection                                           |
 | Ctrl+D / Ctrl+R                  | fill the first row / column of the selection into the rest (one cell: from above / the left); formula references follow, `$B$1` stays |
 | drag the handle **▪** of the selection, `:autofill B10` | continue a series: numbers (1, 2 → 3, 4), dates, “Item 1”, month and weekday names; formulas as with Ctrl+D |
-| Ctrl+C / Ctrl+V                  | copy / paste (also tab-separated from Excel and the like)     |
+| Ctrl+C / Ctrl+X / Ctrl+V         | copy / cut / paste (also tab-separated from Excel and the like) |
 | Ctrl+Z / Ctrl+Y                  | undo / redo                                                   |
 | F7, F7 again                     | sort the rows by the current column ascending, then descending; with a selection only its rows |
-| Shift+F7                         | sort the column on its own (a selection: each of its columns) |
+| `:sortcol`, menu *Edit*          | sort the column on its own (a selection: each of its columns) |
+| F3 or Ctrl+E                     | open a file                                                   |
+| F4                               | go to a cell (`B5`)                                           |
+| F5 or Ins / F6                   | insert a row below / a column to the right (asks for `Name` or `Name:Type`) |
+| F8                               | delete the rows; on a column header the columns, on a footer row that row |
 | Ctrl+P or click on ⊞ pivot       | pivot view of a tensor; there Tab rotates the dimensions      |
 | F10 or Ctrl+Q                    | quit; with unsaved changes only on the second press          |
 
@@ -246,7 +257,7 @@ Details of the format: SPEC.md, section 2a.
 
 ### Types and your own functions
 
-The tab **⚙ types** (F3) lists your data types with base, unit, check and
+The tab **⚙ types** (`:types`; Esc returns to the table) lists your data types with base, unit, check and
 the columns that use them; below them the built-in types. While a definition
 is being edited, the bottom of the screen shows a short syntax help (base
 types, `unit`, `range`, `check` …).
