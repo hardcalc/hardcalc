@@ -1646,6 +1646,13 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
             };
             let (r, g, b) = span.style.color.unwrap_or((0, 0, 0));
             style = style.fg(Color::Rgb(r, g, b));
+            // Same fills as on the PDF page: the cell colour, then the gray shade on top.
+            if let Some((r, g, b)) = span.style.bg {
+                style = style.bg(Color::Rgb(r, g, b));
+            }
+            if span.style.shade {
+                style = style.bg(Color::Rgb(230, 230, 230));
+            }
             if span.style.bold {
                 style = style.bold();
             }
