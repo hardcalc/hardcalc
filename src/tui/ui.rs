@@ -39,6 +39,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         super::theme::apply(f.buffer_mut(), app.light(), app.theme != super::theme::ThemeSetting::Auto);
         return;
     }
+    // The status line names the rows of a layout element as they are drawn.
+    app.layout_rows = match app.view.kind {
+        ViewKind::Layout(i) => app.shown_spec(i).elements.iter().map(|e| e.rows).collect(),
+        _ => Vec::new(),
+    };
     // Formula bar and status follow the focused data window (the main window
     // while a helper is focused).
     let data_left = if app.view.is_data() { app.left_focused } else { true };
@@ -474,30 +479,58 @@ fn draw_window(f: &mut Frame, app: &mut App, area: Rect, focused: bool, split: b
     }
 }
 
-/// The layout editor: ruler, rows of all pages with page breaks, elements.
+/// What the overview writes into an element's box.
+fn element_label(e: &crate::layout::Element) -> String {
+    use crate::layout::ElementKind;
+    let mut label = match e.kind {
+        ElementKind::Heading => format!("# {}", e.content),
+        ElementKind::Text => format!("¶ {}", e.content),
+        ElementKind::Note => format!("▒ {}", e.content),
+        ElementKind::Value => format!("= {}", e.label.as_ref().unwrap_or(&e.content)),
+        ElementKind::Chart => format!("▥ {}", e.content),
+        ElementKind::Table => match &e.z {
+            Some(z) => format!("▦ {} · {z}", e.content),
+            None => format!("▦ {}", e.content),
+        },
+    };
+    if let Some(rows) = e.pick.text() {
+        label.push_str(&format!(" · rows: {rows}"));
+    }
+    if e.flows() {
+        label.push_str(" · auto");
+    }
+    label
+}
+
+/// The layout editor: ruler, rows of all pages with page breaks, elements –
+/// as printed, or in the overview as labelled boxes with several rows per line.
 fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
     use super::app::LayoutGeom;
+    use crate::layout::{Element, ElementKind};
     if area.height < 3 {
         return;
     }
-    let spec = app.raster_spec(i);
+    let (spec, placed, layout) = app.layout_parts(i);
     let setup = spec.setup(i);
-    let layout = app.layout(&setup);
     let body = crate::print::layout_rows_per_page(&setup);
     let pages = layout.pages.len();
     let gutter: u16 = 5;
     let canvas = Rect { y: area.y + 1, height: area.height - 1, ..area };
     let x0 = area.x + gutter;
     let paper_w = (layout.cols as u16).min(area.width.saturating_sub(gutter));
-    let total_lines = pages * (body + 1) - 1;
+    // Overview: a whole page (and the break below it) fits the window.
+    let overview = app.layout_overview;
+    let zoom = if overview { body.div_ceil((canvas.height as usize).saturating_sub(1).max(1)).max(2) } else { 1 };
 
     // Keep the selected element (or a running drag) in view.
-    let geom0 = LayoutGeom { area: canvas, x0, cols: layout.cols, grid: spec.grid, body, scroll: app.view.scroll.0 };
+    let (rows, lines) = LayoutGeom::canvas(body, pages, zoom, &spec.elements);
+    let mut geom = LayoutGeom { area: canvas, x0, cols: layout.cols, grid: spec.grid, body, scroll: app.view.scroll.0, rows, lines };
+    let total_lines = geom.lines.len();
     let focus_rows = app.layout_drag.map(|d| d.rows).or_else(|| spec.elements.get(app.view.cursor.0).map(|e| e.rows));
     if app.view.follow
         && let Some((r0, r1)) = focus_rows
     {
-        let (l0, l1) = (geom0.line_of(r0), geom0.line_of(r1));
+        let (l0, l1) = (geom.line_of(r0), geom.line_of(r1));
         let h = canvas.height as usize;
         if l0 < app.view.scroll.0 {
             app.view.scroll.0 = l0;
@@ -506,14 +539,15 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
         }
     }
     app.view.scroll.0 = app.view.scroll.0.min(total_lines.saturating_sub(1));
-    let geom = LayoutGeom { scroll: app.view.scroll.0, ..geom0 };
-    app.layout_geom = Some(geom);
+    geom.scroll = app.view.scroll.0;
+    app.layout_geom = Some(geom.clone());
+    let visible = |line: usize| (line >= geom.scroll && line < geom.scroll + canvas.height as usize).then(|| canvas.y + (line - geom.scroll) as u16);
 
     let buf = f.buffer_mut();
     buf.set_style(area, Style::new().bg(Color::DarkGray));
     // Ruler: grid column numbers at their start.
     for g in 1..=spec.grid {
-        let e = crate::layout::Element { cols: (g, g), rows: (1, 1), kind: crate::layout::ElementKind::Text, content: String::new(), columns: vec![], label: None, z: None };
+        let e = Element { cols: (g, g), rows: (1, 1), ..Default::default() };
         let (x, _) = spec.span(layout.cols, &e);
         if (x as u16) < paper_w {
             buf.set_string(x0 + x as u16, area.y, g.to_string(), Style::new().fg(Color::Gray).bg(Color::DarkGray));
@@ -528,17 +562,20 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
             break;
         }
         let sy = canvas.y + y;
-        let (page, within) = (line / (body + 1), line % (body + 1));
-        if within == body {
+        let (first, _, page_break) = geom.lines[line];
+        let (page, within) = (first / body, first % body);
+        if page_break {
             let label = format!(" page {} ", page + 2);
             let dash = "╌".repeat(paper_w as usize);
             buf.set_stringn(x0, sy, &dash, paper_w as usize, Style::new().fg(Color::Yellow).bg(Color::DarkGray));
             buf.set_string(x0 + 2, sy, label, Style::new().fg(Color::Yellow).bg(Color::DarkGray));
             continue;
         }
-        let row = page * body + within + 1;
-        buf.set_stringn(area.x, sy, format!("{row:>4} "), gutter as usize, Style::new().fg(Color::Gray).bg(Color::DarkGray));
+        buf.set_stringn(area.x, sy, format!("{:>4} ", first + 1), gutter as usize, Style::new().fg(Color::Gray).bg(Color::DarkGray));
         buf.set_stringn(x0, sy, " ".repeat(paper_w as usize), paper_w as usize, paper);
+        if overview {
+            continue;
+        }
         for span in &layout.pages[page][within].spans {
             let mut style = paper;
             if let Some((r, g, b)) = span.style.color {
@@ -557,17 +594,13 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
         }
     }
     // Charts, rendered off-screen and copied row by row.
-    for (page, graphics) in layout.graphics.iter().enumerate() {
+    for (page, graphics) in layout.graphics.iter().enumerate().filter(|_| !overview) {
         for g in graphics {
             let size = Rect::new(0, 0, g.width as u16, g.height as u16);
             let mut tmp = ratatui::buffer::Buffer::empty(size);
             super::chart_view::render(&mut tmp, size, &g.data, true, None);
             for y in 0..size.height {
-                let line = page * (body + 1) + g.line + y as usize;
-                if line < geom.scroll || line >= geom.scroll + canvas.height as usize {
-                    continue;
-                }
-                let sy = canvas.y + (line - geom.scroll) as u16;
+                let Some(sy) = visible(geom.line_of(page * body + g.line + y as usize + 1)) else { continue };
                 for x in 0..size.width {
                     let sx = x0 + g.col as u16 + x;
                     if sx < right {
@@ -579,29 +612,69 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
     }
     // Element areas: light tint, selection, drag rectangle, page-break overflow.
     let tint = |buf: &mut ratatui::buffer::Buffer, cols: (usize, usize), rows: (usize, usize), color: Color| {
-        let e = crate::layout::Element { cols, rows, kind: crate::layout::ElementKind::Text, content: String::new(), columns: vec![], label: None, z: None };
+        let e = Element { cols, rows, ..Default::default() };
         let (x, w) = spec.span(layout.cols, &e);
         for r in rows.0..=rows.1 {
-            let line = geom.line_of(r);
-            if line < geom.scroll || line >= geom.scroll + canvas.height as usize {
-                continue;
-            }
-            let sy = canvas.y + (line - geom.scroll) as u16;
+            let Some(sy) = visible(geom.line_of(r)) else { continue };
             for sx in (x0 + x as u16)..(x0 + (x + w) as u16).min(right) {
                 buf[(sx, sy)].set_bg(color);
             }
         }
     };
     let selected = app.view.cursor.0;
+    let amber = Color::Rgb(255, 214, 150);
     for (n, e) in spec.elements.iter().enumerate() {
-        let crosses = (e.rows.0 - 1) / body != (e.rows.1 - 1) / body;
+        let crosses = !e.flows() && (e.rows.0 - 1) / body != (e.rows.1 - 1) / body;
+        let hidden = placed.get(n).map_or(0, |p| p.hidden);
         let color = match (n == selected, crosses) {
             (_, true) => Color::Rgb(255, 215, 215),
             (true, false) if app.layout_grab => Color::Rgb(200, 240, 200),
             (true, false) => Color::Rgb(210, 228, 255),
+            // The overview tells the kinds apart by colour.
+            (false, false) if overview => match e.kind {
+                ElementKind::Heading => Color::Rgb(255, 240, 190),
+                ElementKind::Text => Color::Rgb(236, 236, 226),
+                ElementKind::Value => Color::Rgb(215, 240, 215),
+                ElementKind::Note => Color::Rgb(222, 222, 222),
+                ElementKind::Table => Color::Rgb(226, 232, 245),
+                ElementKind::Chart => Color::Rgb(250, 226, 205),
+            },
             (false, false) => Color::Rgb(246, 246, 236),
         };
         tint(buf, e.cols, e.rows, color);
+        let (x, w) = spec.span(layout.cols, e);
+        let (left, room) = (x0 + x as u16, (w as u16).min(right.saturating_sub(x0 + x as u16)) as usize);
+        if overview {
+            // First line: what it is; second line: where, or what does not fit.
+            let (l0, l1) = (geom.line_of(e.rows.0), geom.line_of(e.rows.1));
+            let mut label = element_label(e);
+            if hidden > 0 && l1 == l0 {
+                label.push_str(&format!(" · ✂ {hidden} rows hidden"));
+            }
+            if let Some(sy) = visible(l0) {
+                let fg = if hidden > 0 && l1 == l0 { Color::Rgb(170, 60, 0) } else { Color::Black };
+                buf.set_stringn(left, sy, label, room, Style::new().fg(fg).bg(color).bold());
+            }
+            if l1 > l0
+                && geom.lines.get(l0 + 1).is_some_and(|l| !l.2)
+                && let Some(sy) = visible(l0 + 1)
+            {
+                let (info, fg) = if hidden > 0 {
+                    (format!("✂ {hidden} rows hidden"), Color::Rgb(170, 60, 0))
+                } else if crosses {
+                    ("cut at the page break".to_string(), Color::Rgb(170, 0, 0))
+                } else {
+                    (format!("columns {}–{} · rows {}–{}", e.cols.0, e.cols.1, e.rows.0, e.rows.1), Color::Rgb(110, 110, 110))
+                };
+                buf.set_stringn(left, sy, info, room, Style::new().fg(fg).bg(color));
+            }
+        } else if hidden > 0
+            && let Some(crate::print::Placed::Lines(lines)) = placed.get(n).map(|p| &p.content)
+        {
+            // The line that says how many rows do not fit.
+            let at = lines.iter().position(|l| l.plain().starts_with('…')).unwrap_or(e.height() - 1).min(e.height() - 1);
+            tint(buf, e.cols, (e.rows.0 + at, e.rows.0 + at), amber);
+        }
     }
     if let Some(d) = app.layout_drag {
         tint(buf, d.cols, d.rows, Color::Rgb(205, 245, 205));
@@ -609,10 +682,10 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
     // Resize handle at the selected element's bottom-right corner.
     if let Some(e) = spec.elements.get(selected) {
         let (x, w) = spec.span(layout.cols, e);
-        let line = geom.line_of(e.rows.1);
         let sx = x0 + (x + w) as u16 - 1;
-        if line >= geom.scroll && line < geom.scroll + canvas.height as usize && sx < right {
-            let sy = canvas.y + (line - geom.scroll) as u16;
+        if let Some(sy) = visible(geom.line_of(e.rows.1))
+            && sx < right
+        {
             buf[(sx, sy)].set_char('◢').set_fg(Color::Blue);
         }
     }
@@ -1552,9 +1625,9 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect, helper: Option<&str>) {
             if let Some(layer) = &app.solo {
                 format!("layer view: {layer} · type to edit the {layer} rule of the cell · right-click the layer or Esc: back")
             } else if matches!(app.view.kind, ViewKind::Layout(_)) && app.layout_grab {
-                "moving: arrows move · + − taller/shorter (rest follows) · > < wider/narrower · Enter / Esc / F3 put it down".to_string()
+                "moving: arrows move · + − taller/shorter (rest follows) · > < wider/narrower · = fit height · a auto height · Enter / Esc / F3 put it down".to_string()
             } else if matches!(app.view.kind, ViewKind::Layout(_)) {
-                "arrows: select · F3: move and resize · mouse: drag, ◢ resize, draw new".to_string()
+                "arrows: select · F3: move and resize · Space: overview · mouse: drag, ◢ resize, draw new".to_string()
             } else if app.calc_view() {
                 "calculation: f_d = f_tk / γ_M · checks n ≤ f · cells Loads!C12 · ' comment · ## heading · #result/#formula/#full".into()
             } else if app.functions_view() {

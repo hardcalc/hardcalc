@@ -398,14 +398,42 @@ and visible **page breaks**.
 | ↳ arrows                      | move                                                     |
 | ↳ **+** / **−**               | taller / shorter; what lies below in the grid moves along |
 | ↳ **>** / **<**               | wider / narrower                                         |
+| ↳ **=**                       | as tall as the content needs                             |
+| ↳ **a**                       | automatic height on / off (`height: auto`)               |
 | ↳ Enter / Esc / F3            | put down                                                 |
 | mouse                         | drag, handle ◢ for the size, a rectangle on free paper = new element |
 | F5 / F6 / F7 / F8             | duplicate / change kind / choose paper / delete (printing: menu *File → Print preview*) |
+| **Space**, `:overview`        | overview: every element as a labelled box, a whole page per screen |
 
 Element kinds: heading, text (with live values), value with label, note,
-table (also only selected columns and one slice or scenario:
-`Account z: February`), chart. Elements that reach over a page break are
-marked in red. In terminals that send Alt+arrows (iTerm2, Ghostty, Kitty,
+table, chart. Elements that reach over a page break are marked in red.
+
+A table element takes options after the table name, typed in the editor as
+in the file:
+
+| Option                     | Effect                                                    |
+|----------------------------|-----------------------------------------------------------|
+| `columns: Item, Amount`    | only these columns, in this order                         |
+| `z: February`              | one slice or scenario                                     |
+| `rows: 10`                 | the first 10 rows                                         |
+| `rows: last 12`            | the last 12 rows                                          |
+| `rows: top 5 by Amount`    | the 5 rows with the largest amount (`bottom`: smallest)   |
+| `rows: total`              | only the footer rows                                      |
+| `height: auto`             | as tall as the data; what lies below moves along          |
+
+Footer rows (totals) are always shown and always sum the whole table. A
+table that does not fit its element says `… 24 more rows` (marked in the
+editor) and keeps its footer rows. With `height: auto` the element grows and
+shrinks with the data, and a long table runs on to the next pages with its
+header repeated; an element pushed over a page end starts on the next page.
+The file keeps the rows as designed – only when you move or resize something
+in the editor are the rows written down as they are shown. Headings, texts
+and notes take `height: auto` too. `:layout` creates its tables this way.
+
+The **overview** (Space) helps where the page is larger than the window:
+several rows share a line, every element is a box with its name and what it
+shows (`▦ Expenses · rows: top 5 by Amount · auto`, `✂ 24 rows hidden`).
+Selecting, moving, resizing and the mouse work as on the page. In terminals that send Alt+arrows (iTerm2, Ghostty, Kitty,
 WezTerm), these move elements without F3 too.
 
 ### Printing and PDF

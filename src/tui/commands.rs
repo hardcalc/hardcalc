@@ -59,6 +59,7 @@ pub const COMMANDS: &[Command] = &[
     c("playground", "[Name]", "new free sheet that fills the window"),
     choice("chart", "[type]", "chart of the selected columns", &["bar", "line", "area", "scatter", "histogram"]),
     c("layout", "[Name]", "new raster layout"),
+    c("overview", "", "layout editor: overview (elements as boxes) on / off"),
     c("pivot", "[rows cols]", "pivot view of a tensor"),
     c("split", "", "open / close the right window"),
     c("swap", "", "swap the windows"),

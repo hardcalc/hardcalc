@@ -613,6 +613,31 @@ grid: 12
   1-6  / 1-10   table    Account   z: January
   7-12 / 1-10   table    Account   z: February
   ```
+- Options follow the content as `key: value`, in any order; hardcalc writes
+  them as `columns:`, `rows:`, `label:`, `z:`, `height:`. In `heading`,
+  `text` and `note` only a closing `height: auto` is an option; everything
+  else there is text.
+- `rows:` shows a part of a table: `rows: 10` (or `first 10`), `rows: last
+  10`, `rows: top 5 by Column`, `rows: bottom 5 by Column` (ranked by the
+  numbers or dates of that column, largest or smallest first), `rows: total`
+  (no data rows). Footer rows are always shown and are those of the whole
+  table. The title of the element names the excerpt (`Expenses · top 5 by
+  Amount`).
+- A table that does not fit its element ends with `… n more rows`, followed
+  by its footer rows if there is room.
+- `height: auto` (not for charts): the element takes as many rows as its
+  content needs, starting at its first row. The rows written are the
+  designed size: elements below it that share a grid column keep their
+  distance to its real end, elements beside it stay. Such an element is not
+  cut at a page end; it runs on to the next page, a table repeating its
+  title and header there. An element that is pushed across a page end, and
+  fits on a page, starts at the top of the next page.
+
+  ```
+  1-12 / 4-10   table    Expenses   rows: top 5 by Amount
+  1-12 / 12-20  table    Journal    height: auto
+  1-12 / 22-23  note     Follows the journal, however long it gets.
+  ```
 
 ## 9. Canonical form
 

@@ -175,6 +175,8 @@ pub struct PrintTable {
     pub rows: Vec<Vec<PrintCell>>,
     /// Footnotes printed below the table (`¹ text`).
     pub footnotes: Vec<String>,
+    /// How many of the last `rows` are footer rows (totals).
+    pub footer_rows: usize,
 }
 
 /// Something to print, in document order.
@@ -217,6 +219,28 @@ pub struct PlacedElement {
     pub width: usize,
     pub height: usize,
     pub content: Placed,
+    /// `height: auto`: the lines run on over page ends, repeating the first
+    /// `n` of them (a table's title and header) on every further page.
+    pub flow: Option<usize>,
+    /// Table rows that did not fit into the element.
+    pub hidden: usize,
+}
+
+/// Where the `n` lines of a flowing element land when it starts in the
+/// (0-based) row `row`: for every row it takes, the index of the line shown
+/// there. The first `head` lines are repeated at the top of each further page.
+pub fn flow_rows(row: usize, n: usize, head: usize, body: usize) -> Vec<usize> {
+    let head = if head + 1 < body && head < n { head } else { 0 };
+    let mut out = Vec::with_capacity(n);
+    let mut next = 0;
+    while next < n {
+        if !out.is_empty() && (row + out.len()).is_multiple_of(body) {
+            out.extend(0..head);
+        }
+        out.push(next);
+        next += 1;
+    }
+    out
 }
 
 #[derive(Debug, Clone)]
@@ -343,7 +367,11 @@ pub fn compose(setup: &PageSetup, elements: &[PlacedElement], footer: &str) -> L
     let font_size = setup.font_size.unwrap_or(9.0);
     let (cols, rows, width, height) = page_grid(setup, font_size);
     let body = rows.saturating_sub(2).max(4);
-    let n_pages = elements.iter().map(|e| (e.row + e.height).div_ceil(body)).max().unwrap_or(1).max(1);
+    let span = |e: &PlacedElement| match (&e.content, e.flow) {
+        (Placed::Lines(lines), Some(head)) => flow_rows(e.row, lines.len(), head, body).len().max(1),
+        _ => e.height,
+    };
+    let n_pages = elements.iter().map(|e| (e.row + span(e)).div_ceil(body)).max().unwrap_or(1).max(1);
     let blank_page = || (0..body).map(|_| Line::blank()).collect::<Vec<_>>();
     let mut pages: Vec<Vec<Line>> = (0..n_pages).map(|_| blank_page()).collect();
     let mut graphics: Vec<Vec<Graphic>> = vec![Vec::new(); n_pages];
@@ -359,13 +387,18 @@ pub fn compose(setup: &PageSetup, elements: &[PlacedElement], footer: &str) -> L
                 data: data.clone(),
             }),
             Placed::Lines(lines) => {
-                for (i, l) in lines.iter().take(e.height).enumerate() {
+                // A flowing element continues on the next pages; any other is cut.
+                let order: Vec<usize> = match e.flow {
+                    Some(head) => flow_rows(e.row, lines.len(), head, body),
+                    None => (0..lines.len().min(e.height)).collect(),
+                };
+                for (i, l) in order.into_iter().map(|k| &lines[k]).enumerate() {
                     let abs = e.row + i;
                     // Cut at the page end: an element belongs to the page it starts on.
-                    if abs / body != page {
+                    if abs / body != page && e.flow.is_none() {
                         break;
                     }
-                    let target = &mut pages[page][abs % body];
+                    let target = &mut pages[abs / body][abs % body];
                     if l.kind != LineKind::Blank {
                         target.kind = LineKind::Row;
                     }
@@ -637,9 +670,10 @@ fn text_lines(lines: &[String], cols: usize) -> Vec<Line> {
 }
 
 /// A table squeezed into `w` × `h` characters for a raster layout: title,
-/// shaded header, rows (with a "more rows" note if cut) and footnotes.
-/// `columns` selects and orders columns by name (all if empty).
-pub fn table_lines(t: &PrintTable, columns: &[String], w: usize, h: usize) -> Vec<Line> {
+/// shaded header, rows (with a "more rows" note if cut; the footer rows stay)
+/// and footnotes. `columns` selects and orders columns by name (all if
+/// empty). Also returns the number of data rows left out.
+pub fn table_lines(t: &PrintTable, columns: &[String], w: usize, h: usize) -> (Vec<Line>, usize) {
     let picked: Vec<usize> = if columns.is_empty() {
         (0..t.headers.len()).collect()
     } else {
@@ -721,25 +755,35 @@ pub fn table_lines(t: &PrintTable, columns: &[String], w: usize, h: usize) -> Ve
         })
         .collect();
     let fits = groups.iter().map(Vec::len).sum::<usize>() <= room;
+    let (data, footer) = groups.split_at(groups.len() - t.footer_rows.min(groups.len()));
+    // When rows are left out, the totals stay if there is room for them.
+    let footer_lines: usize = footer.iter().map(Vec::len).sum();
+    let keep_footer = !fits && footer_lines > 0 && footer_lines + 2 <= room;
+    let data_room = if fits { room } else { room.saturating_sub(1 + if keep_footer { footer_lines } else { 0 }) };
     let mut shown = 0;
     let mut used = 0;
-    for g in &groups {
-        if !fits && used + g.len() > room.saturating_sub(1) {
+    for g in if fits { &groups[..] } else { data } {
+        if !fits && used + g.len() > data_room {
             break;
         }
         out.extend(g.iter().cloned());
         used += g.len();
         shown += 1;
     }
+    let hidden = if fits { 0 } else { data.len() - shown };
     if !fits {
-        out.push(Line::text(LineKind::Row, format!("… {} more rows", t.rows.len() - shown), gray.clone()));
+        let rows = if hidden == 1 { "row" } else { "rows" };
+        out.push(Line::text(LineKind::Row, format!("… {hidden} more {rows}"), gray.clone()));
+        if keep_footer {
+            out.extend(footer.iter().flatten().cloned());
+        }
     }
     for note in &t.footnotes {
         if out.len() < h {
             out.push(Line::text(LineKind::Row, fit(note, w, Align::Left), gray.clone()));
         }
     }
-    out
+    (out, hidden)
 }
 
 /// Pads every page to `rows - 1` lines and adds the footer line:
@@ -1161,6 +1205,7 @@ mod tests {
                 })
                 .collect(),
             footnotes: Vec::new(),
+            footer_rows: 0,
         }
     }
 
