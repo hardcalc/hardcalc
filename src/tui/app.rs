@@ -5,7 +5,7 @@ use crate::engine::{col_letters, in_layer, layer_letters, split_layer, CellId, W
 use crate::layers::{self, Attached, CellStyle, Color, Formats};
 use crate::chart::{self, ChartData, ChartSpec, ChartType};
 use crate::model::{Align, Block, Column, Dim, Document, FooterRow, Shape, Table};
-use crate::layout::{Element, ElementKind, RasterSpec};
+use crate::layout::{Element, ElementKind, RasterSpec, RowPick};
 use crate::print::{self, Layout, PageSetup, Placed, PlacedElement, PrintCell, PrintItem, PrintTable, Scope, SpanStyle};
 use crate::types::{is_builtin, Base, BUILTINS};
 use crate::value::Value;
@@ -158,7 +158,7 @@ pub enum Hit {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DragMode {
     /// Move element `n`; (column, row) offset of the grab point in the element.
-    Move(usize, (usize, usize)),
+    Move(usize, (usize, i64)),
     /// Resize element `n` at its bottom-right corner.
     Resize(usize),
     /// Draw a new element from this (column, row).
@@ -174,7 +174,7 @@ pub struct LayoutDrag {
 }
 
 /// Screen geometry of the layout editor's canvas, recorded while drawing.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LayoutGeom {
     /// Canvas area on screen (below the ruler).
     pub area: Rect,
@@ -185,25 +185,90 @@ pub struct LayoutGeom {
     pub grid: usize,
     pub body: usize,
     pub scroll: usize,
+    /// Canvas line of every (0-based) row of all pages.
+    pub rows: Vec<usize>,
+    /// For every canvas line the first and last (0-based) row it shows, and
+    /// whether it is a page break (then: the last row of the page above).
+    pub lines: Vec<(usize, usize, bool)>,
 }
 
 impl LayoutGeom {
+    /// Canvas lines for `pages` pages of `body` rows. With `zoom` 1 every row
+    /// is a line. In the overview about `zoom` rows share a line, but every
+    /// element keeps at least one line of its own (the stretches between the
+    /// edges of the elements are scaled one by one), and small gaps vanish.
+    pub fn canvas(body: usize, pages: usize, zoom: usize, elements: &[Element]) -> (Vec<usize>, Vec<(usize, usize, bool)>) {
+        let mut rows = vec![0; pages * body];
+        let mut lines: Vec<(usize, usize, bool)> = Vec::new();
+        for page in 0..pages {
+            let base = page * body;
+            let mut cuts = std::collections::BTreeSet::from([base, base + body]);
+            for e in elements {
+                cuts.extend([e.rows.0 - 1, e.rows.1].into_iter().filter(|c| (base..base + body).contains(c)));
+            }
+            let cuts: Vec<usize> = cuts.into_iter().collect();
+            let page_start = lines.len();
+            // Rows of a gap too small for a line: shown with what follows.
+            let mut pending: Vec<usize> = Vec::new();
+            for w in cuts.windows(2) {
+                let (a, len) = (w[0], w[1] - w[0]);
+                let covered = elements.iter().any(|e| e.rows.0 - 1 <= a && a < e.rows.1);
+                let n = match (zoom, covered) {
+                    (1, _) => len,
+                    (_, true) => ((len + zoom / 2) / zoom).max(1),
+                    (_, false) => len / zoom,
+                };
+                if n == 0 {
+                    pending.extend(a..a + len);
+                    continue;
+                }
+                let first = lines.len();
+                pending.drain(..).for_each(|r| rows[r] = first);
+                lines.extend((0..n).map(|k| (a + (k * len).div_ceil(n), a + ((k + 1) * len).div_ceil(n) - 1, false)));
+                for (k, &(from, to, _)) in lines[first..].iter().enumerate() {
+                    (from..=to).for_each(|r| rows[r] = first + k);
+                }
+            }
+            if lines.len() == page_start {
+                lines.push((base, base + body - 1, false));
+            }
+            // A gap at the end of the page: shown with what comes before.
+            pending.drain(..).for_each(|r| rows[r] = lines.len() - 1);
+            if page + 1 < pages {
+                lines.push((base + body - 1, base + body - 1, true));
+            }
+        }
+        (rows, lines)
+    }
+
     /// Grid (column, row) under a screen position; both 1-based. A click on a
-    /// page break counts as the last row of the page above.
+    /// page break counts as the last row of the page above. In the overview
+    /// it is the first row of the line.
     pub fn cell_at(&self, x: u16, y: u16) -> (usize, usize) {
         let cx = (x as i32 - self.x0 as i32).clamp(0, self.cols as i32 - 1) as usize;
         let unit = self.cols as f64 / self.grid as f64;
         // Same rounding as RasterSpec::span: column g starts at round((g - 1) · unit).
         let col = (1..=self.grid).rev().find(|&g| ((g - 1) as f64 * unit).round() as usize <= cx).unwrap_or(1);
         let line = self.scroll + y.saturating_sub(self.area.y) as usize;
-        let (page, within) = (line / (self.body + 1), line % (self.body + 1));
-        (col, page * self.body + within.min(self.body - 1) + 1)
+        let row = match self.lines.get(line) {
+            Some(&(first, _, _)) => first,
+            // Below the last page: on, row by row.
+            None => self.rows.len() + (line - self.lines.len()),
+        };
+        (col, row + 1)
     }
 
     /// Canvas line of a (1-based) row: pages are separated by a break line.
     pub fn line_of(&self, row: usize) -> usize {
-        let r = row - 1;
-        (r / self.body) * (self.body + 1) + r % self.body
+        match self.rows.get(row - 1) {
+            Some(&line) => line,
+            None => self.lines.len() + (row - 1 - self.rows.len()),
+        }
+    }
+
+    /// The last (1-based) row shown on the same canvas line as `row`.
+    pub fn line_end(&self, row: usize) -> usize {
+        self.lines.get(self.line_of(row)).map_or(row, |&(_, last, _)| (last + 1).max(row))
     }
 }
 
@@ -404,6 +469,10 @@ pub struct App {
     dragging: bool,
     /// Reference being picked while editing a formula.
     point: Option<point::Point>,
+    /// The edit began by typing into the cell (not Enter / F2 / double-click):
+    /// ← and → keep the input and move to the neighbouring cell, as ↑ ↓ do.
+    /// Home / End switch to moving the caret.
+    quick_entry: bool,
     /// Dragging picks a range for the formula being edited.
     point_drag: bool,
     /// Dragging the fill handle: the selection it started from …
@@ -427,6 +496,10 @@ pub struct App {
     /// Layout editor: the selected element is "picked up" – arrows move it (F3).
     pub layout_grab: bool,
     pub layout_geom: Option<LayoutGeom>,
+    /// Layout editor: the overview – elements as labelled boxes, a page per screen.
+    pub layout_overview: bool,
+    /// Layout editor: the rows of the elements as drawn (for the status line).
+    pub layout_rows: Vec<(usize, usize)>,
     /// Open paper menu: the highlighted entry of [`print::paper_choices`].
     pub paper_menu: Option<usize>,
     /// File dialog for opening / appending (Ctrl+E, :e, :append).
@@ -817,6 +890,7 @@ impl App {
             last_click: None,
             dragging: false,
             point: None,
+            quick_entry: false,
             point_drag: false,
             fill_drag: None,
             fill_to: None,
@@ -830,6 +904,8 @@ impl App {
             layout_drag: None,
             layout_grab: false,
             layout_geom: None,
+            layout_overview: false,
+            layout_rows: Vec::new(),
             paper_menu: None,
             file_dialog: None,
             menu: None,
@@ -1722,13 +1798,7 @@ impl App {
             return self.layer_rule(&layer, self.view.sheet, &target).unwrap_or_default();
         }
         if let ViewKind::Layout(_) = self.view.kind {
-            return self
-                .selected_element()
-                .map(|(_, _, e)| match &e.z {
-                    Some(z) => format!("{} z: {z}", e.content),
-                    None => e.content,
-                })
-                .unwrap_or_default();
+            return self.selected_element().map(|(_, _, e)| e.text()).unwrap_or_default();
         }
         if self.functions_view() {
             return self.function_raw();
@@ -1781,7 +1851,12 @@ impl App {
         }
         if let ViewKind::Layout(_) = self.view.kind {
             return match self.selected_element() {
-                Some((_, _, e)) => format!("{} · columns {}–{} · rows {}–{}", e.kind.name(), e.cols.0, e.cols.1, e.rows.0, e.rows.1),
+                Some((_, n, mut e)) => {
+                    // Where it is shown: `height: auto` may have moved it.
+                    e.rows = self.layout_rows.get(n).copied().unwrap_or(e.rows);
+                    let auto = if e.flows() { " · height: auto" } else { "" };
+                    format!("{} · columns {}–{} · rows {}–{}{auto}", e.kind.name(), e.cols.0, e.cols.1, e.rows.0, e.rows.1)
+                }
                 None => "drag a rectangle to place an element".into(),
             };
         }
@@ -1814,10 +1889,16 @@ impl App {
             if let Some(e) = spec.errors.first() {
                 return Some(e.clone());
             }
-            let (_, _, e) = self.selected_element()?;
+            let (shown, placed) = self.resolved_layout(i);
+            let n = self.view.cursor.0;
+            let (e, p) = (shown.elements.get(n)?, placed.get(n)?);
             let body = print::layout_rows_per_page(&spec.setup(i));
-            return ((e.rows.0 - 1) / body != (e.rows.1 - 1) / body)
-                .then(|| format!("rows {}–{} cross a page break (pages hold {body} rows) – the element is cut there", e.rows.0, e.rows.1));
+            if !e.flows() && (e.rows.0 - 1) / body != (e.rows.1 - 1) / body {
+                return Some(format!("rows {}–{} cross a page break (pages hold {body} rows) – the element is cut there", e.rows.0, e.rows.1));
+            }
+            return (p.hidden > 0).then(|| {
+                format!("{} rows do not fit – F3 then = fits the height, a makes it automatic; or show a part: rows: 10 · top 5 by … · total", p.hidden)
+            });
         }
         if self.functions_view() {
             return self.function_problem();
@@ -2387,25 +2468,39 @@ impl App {
             }
             rows.push(line);
         }
-        PrintTable { title, headers, rows, footnotes }
+        let footer_rows = self.wb.sheets[s].footer.len();
+        PrintTable { title, headers, rows, footnotes, footer_rows }
     }
 
     pub fn layout(&mut self, setup: &PageSetup) -> Layout {
+        match setup.scope {
+            Scope::Layout(i) => self.layout_parts(i).2,
+            _ => self.flow_layout(setup),
+        }
+    }
+
+    /// A raster layout as shown and printed: its elements where they end up
+    /// (see [`App::resolved_layout`]), their content, and the pages.
+    pub fn layout_parts(&mut self, i: usize) -> (RasterSpec, Vec<PlacedElement>, Layout) {
+        let (spec, placed) = self.resolved_layout(i);
+        let pages = print::compose(&spec.setup(i), &placed, &self.page_footer());
+        (spec, placed, pages)
+    }
+
+    fn page_footer(&self) -> String {
         let days = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| (d.as_secs() / 86_400) as i64)
             .unwrap_or(0);
         let file = self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let footer = format!("{file} · {}", Value::Date(days).display(None, false));
+        format!("{file} · {}", Value::Date(days).display(None, false))
+    }
+
+    fn flow_layout(&mut self, setup: &PageSetup) -> Layout {
+        let footer = self.page_footer();
         match setup.scope {
-            Scope::Layout(i) => {
-                let spec = self.raster_spec(i);
-                let setup = spec.setup(i);
-                let elements = self.raster_elements(&spec, &setup);
-                print::compose(&setup, &elements, &footer)
-            }
             // The whole document brings its own headings.
-            Scope::Document => {
+            Scope::Document | Scope::Layout(_) => {
                 let items = self.print_items(true);
                 print::paginate("", &items, setup, &footer)
             }
@@ -2744,22 +2839,110 @@ impl App {
         RasterSpec::parse(&self.layout_blocks().get(i).map(|(_, l)| l.clone()).unwrap_or_default())
     }
 
-    /// Renders every element of a layout into its area.
-    pub fn raster_elements(&mut self, spec: &RasterSpec, setup: &PageSetup) -> Vec<PlacedElement> {
-        let (cols, _, _, _) = print::page_grid(setup, spec.font);
+    /// The layout as it is shown and printed, with the content of its elements.
+    ///
+    /// Elements with `height: auto` take the rows their content needs, from
+    /// top to bottom; what lies below keeps its distance (see [`reflow`]). An
+    /// element pushed over a page end this way starts on the next page. Without
+    /// `height: auto` this is the layout as written.
+    pub fn resolved_layout(&mut self, i: usize) -> (RasterSpec, Vec<PlacedElement>) {
+        let mut spec = self.raster_spec(i);
+        let setup = spec.setup(i);
+        let (cols, _, _, _) = print::page_grid(&setup, spec.font);
+        let body = print::layout_rows_per_page(&setup);
+        let mut autos: Vec<usize> = (0..spec.elements.len()).filter(|&n| spec.elements[n].flows()).collect();
+        if !autos.is_empty() {
+            let written = spec.elements.clone();
+            autos.sort_by_key(|&n| written[n].rows.0);
+            for n in autos {
+                let e = spec.elements[n].clone();
+                let height = self.place_element(&spec, &e, cols, body, &mut 0).height;
+                let grown = Element { rows: (e.rows.0, e.rows.0 + height - 1), ..e };
+                spec.elements = reflow(&spec.elements, n, &grown);
+            }
+            // Pushed over a page end: on to the next page (if it fits on one).
+            for _ in 0..spec.elements.len() {
+                let cut = |m: &usize| {
+                    let e = &spec.elements[*m];
+                    !e.flows() && e.rows != written[*m].rows && e.height() <= body && (e.rows.0 - 1) / body != (e.rows.1 - 1) / body
+                };
+                let Some(m) = (0..spec.elements.len()).filter(cut).min_by_key(|&m| spec.elements[m].rows.0) else { break };
+                let e = spec.elements[m].clone();
+                let top = ((e.rows.0 - 1) / body + 1) * body + 1;
+                let moved = Element { rows: (top, top + e.height() - 1), ..e };
+                spec.elements = reflow(&spec.elements, m, &moved);
+            }
+        }
         let mut footnote = 0;
-        spec.elements.iter().map(|e| self.place_element(spec, e, cols, &mut footnote)).collect()
+        let placed: Vec<PlacedElement> = spec.elements.clone().iter().map(|e| self.place_element(&spec, e, cols, body, &mut footnote)).collect();
+        for (e, p) in spec.elements.iter_mut().zip(&placed) {
+            e.rows.1 = e.rows.0 + p.height - 1;
+        }
+        (spec, placed)
     }
 
-    fn place_element(&mut self, spec: &RasterSpec, e: &Element, cols: usize, footnote: &mut usize) -> PlacedElement {
+    /// The elements of layout `i` where they are shown (see [`App::resolved_layout`]).
+    pub fn shown_spec(&mut self, i: usize) -> RasterSpec {
+        let spec = self.raster_spec(i);
+        if spec.elements.iter().any(Element::flows) { self.resolved_layout(i).0 } else { spec }
+    }
+
+    /// Reduces a table to the rows its element asks for (`rows:`).
+    fn pick_rows(&mut self, t: &mut PrintTable, s: usize, z: usize, pick: &RowPick) -> Result<(), String> {
+        let data = t.rows.len() - t.footer_rows;
+        let keep: Vec<usize> = match pick {
+            RowPick::All => return Ok(()),
+            RowPick::First(n) => (0..data.min(*n)).collect(),
+            RowPick::Last(n) => (data.saturating_sub(*n)..data).collect(),
+            RowPick::Total => Vec::new(),
+            RowPick::Ranked { n, by, bottom } => {
+                let c = self.wb.sheets[s].columns.iter().position(|c| c.name == *by).ok_or_else(|| format!("rows: no column '{by}' to rank by"))?;
+                let mut ranked: Vec<(usize, f64)> = (0..data)
+                    .filter_map(|r| match self.wb.value((s, r, in_layer(c, z))) {
+                        Value::Num(x, _) => Some((r, x)),
+                        Value::Date(d) => Some((r, d as f64)),
+                        _ => None,
+                    })
+                    .collect();
+                ranked.sort_by(|a, b| if *bottom { a.1.total_cmp(&b.1) } else { b.1.total_cmp(&a.1) });
+                ranked.into_iter().take(*n).map(|(r, _)| r).collect()
+            }
+        };
+        // The title says that this is an excerpt.
+        match pick {
+            RowPick::First(n) if *n < data => t.title.push_str(&format!(" · first {n} of {data}")),
+            RowPick::Last(n) if *n < data => t.title.push_str(&format!(" · last {n} of {data}")),
+            RowPick::Ranked { .. } => t.title.push_str(&format!(" · {}", pick.text().unwrap_or_default())),
+            _ => {}
+        }
+        let footer = t.rows.split_off(data);
+        let rows = std::mem::take(&mut t.rows);
+        t.rows = keep.iter().map(|&r| rows[r].clone()).chain(footer).collect();
+        // Footnotes of rows that are not shown go with them.
+        let (headers, rows) = (&t.headers, &t.rows);
+        t.footnotes.retain(|note| {
+            let marker = note.split_whitespace().next().unwrap_or_default();
+            headers.iter().any(|h| h.ends_with(marker)) || rows.iter().flatten().any(|c| c.text.ends_with(marker))
+        });
+        Ok(())
+    }
+
+    /// The content of an element in its area. An element with `height: auto`
+    /// gets the height its content needs from its first row on.
+    fn place_element(&mut self, spec: &RasterSpec, e: &Element, cols: usize, body: usize, footnote: &mut usize) -> PlacedElement {
         use crate::text::{inline, live_values, wrap};
         let (x, w) = spec.span(cols, e);
-        let h = e.height();
+        let flows = e.flows();
+        // Unlimited for now; the real height follows from the content.
+        let h = if flows { usize::MAX } else { e.height() };
         let line = |kind, pieces: &[crate::text::Styled], base: Option<&SpanStyle>| print::styled_line(kind, pieces, base);
         let error = |msg: String| {
             let red = SpanStyle { color: Some((190, 0, 0)), ..SpanStyle::default() };
             Placed::Lines(vec![print::Line { kind: print::LineKind::Row, spans: vec![print::Span { col: 0, text: format!("⚠ {msg}"), style: red }], width: 0 }])
         };
+        let mut hidden = 0;
+        // Lines repeated on every page a flowing element runs on to.
+        let mut head = 0;
         let content = match e.kind {
             ElementKind::Heading | ElementKind::Text | ElementKind::Note => {
                 let text = live_values(&e.content, &mut self.wb, 0);
@@ -2769,6 +2952,7 @@ impl App {
                 let mut lines: Vec<print::Line> = wrap(&inline(&text), w, 0).iter().map(|l| line(kind, l, base)).collect();
                 if e.kind == ElementKind::Note {
                     // A note is a shaded box over its whole area.
+                    let h = if flows { lines.len().max(1) } else { h };
                     lines.resize_with(h, || print::Line { kind: print::LineKind::Row, spans: Vec::new(), width: 0 });
                     for l in &mut lines {
                         let used: usize = l.spans.iter().map(|s| s.text.width()).sum();
@@ -2800,8 +2984,25 @@ impl App {
                     };
                     match z {
                         Some(z) => {
-                            let t = self.print_table(sheet, z, footnote);
-                            Placed::Lines(print::table_lines(&t, &e.columns, w, h))
+                            // Bands follow the rows shown, not the rows of the table.
+                            let bands = std::mem::take(&mut self.bands);
+                            let mut t = self.print_table(sheet, z, footnote);
+                            self.bands = bands;
+                            match self.pick_rows(&mut t, sheet, z, &e.pick) {
+                                Ok(()) => {
+                                    let data = t.rows.len() - t.footer_rows;
+                                    for (r, row) in t.rows.iter_mut().take(data).enumerate() {
+                                        if let (true, Some(ratatui::style::Color::Rgb(r, g, b))) = (bands, tui_band(r)) {
+                                            row.iter_mut().filter(|c| c.style.bg.is_none()).for_each(|c| c.style.bg = Some((r, g, b)));
+                                        }
+                                    }
+                                    let (lines, cut) = print::table_lines(&t, &e.columns, w, h);
+                                    hidden = cut;
+                                    head = 2;
+                                    Placed::Lines(lines)
+                                }
+                                Err(msg) => error(msg),
+                            }
                         }
                         None => error(format!("'{}' has no slice or scenario '{}'", e.content, e.z.clone().unwrap_or_default())),
                     }
@@ -2816,11 +3017,17 @@ impl App {
                 None => error(format!("unknown chart '{}'", e.content)),
             },
         };
-        PlacedElement { row: e.rows.0 - 1, col: x, width: w, height: h, content }
+        let row = e.rows.0 - 1;
+        let (height, flow) = match (&content, flows) {
+            (Placed::Lines(lines), true) => (print::flow_rows(row, lines.len(), head, body).len().max(1), Some(head)),
+            _ => (e.height(), None),
+        };
+        PlacedElement { row, col: x, width: w, height, content, flow, hidden }
     }
 
     /// Replaces the lines of layout block `i` (one undoable step).
     fn edit_layout(&mut self, i: usize, f: impl FnOnce(&mut Vec<String>)) {
+        self.layout_rows.clear();
         self.with_doc(|doc| {
             if let Some(Block::Layout { lines, .. }) = doc.blocks.iter_mut().filter(|b| matches!(b, Block::Layout { .. })).nth(i) {
                 f(lines);
@@ -2828,12 +3035,35 @@ impl App {
         });
     }
 
-    /// Changes element `n` of layout `i`.
-    fn update_element(&mut self, i: usize, n: usize, f: impl FnOnce(&mut Element)) {
+    /// Writes the elements of layout `i` back (in the order of its block),
+    /// with `extra` as a new last element: one undoable step.
+    fn write_elements(&mut self, i: usize, elements: &[Element], extra: Option<&Element>) {
         let spec = self.raster_spec(i);
-        let (Some(mut e), Some(&line)) = (spec.elements.get(n).cloned(), spec.element_lines.get(n)) else { return };
-        f(&mut e);
-        self.edit_layout(i, |lines| lines[line] = e.to_line());
+        let changes: Vec<(usize, String)> = elements
+            .iter()
+            .enumerate()
+            .filter(|(m, e)| spec.elements.get(*m) != Some(*e))
+            .filter_map(|(m, e)| Some((*spec.element_lines.get(m)?, e.to_line())))
+            .collect();
+        if changes.is_empty() && extra.is_none() {
+            return;
+        }
+        self.edit_layout(i, |lines| {
+            for (line, text) in changes {
+                lines[line] = text;
+            }
+            lines.extend(extra.map(Element::to_line));
+        });
+    }
+
+    /// Changes element `n` of layout `i`. The change starts from the layout
+    /// as shown: where `height: auto` moved elements, their rows are written
+    /// down first, so that the editor changes what is on screen.
+    fn update_element(&mut self, i: usize, n: usize, f: impl FnOnce(&mut Element)) {
+        let mut elements = self.shown_spec(i).elements;
+        let Some(e) = elements.get_mut(n) else { return };
+        f(e);
+        self.write_elements(i, &elements, None);
     }
 
     /// Sets `key: value` among the layout's settings (inserted at the top if missing).
@@ -2869,6 +3099,13 @@ impl App {
         self.raster_spec(i).elements.get(n).cloned().map(|e| (i, n, e))
     }
 
+    /// The selected element where it is shown (see [`App::resolved_layout`]).
+    fn shown_element(&mut self) -> Option<(usize, usize, Element)> {
+        let ViewKind::Layout(i) = self.view.kind else { return None };
+        let n = self.view.cursor.0;
+        self.shown_spec(i).elements.get(n).cloned().map(|e| (i, n, e))
+    }
+
     /// `:import file`: adds the sheets of a spreadsheet as tables (with their
     /// comments layers) at the end of the document.
     fn import_sheets(&mut self, path: &Path) {
@@ -2896,14 +3133,15 @@ impl App {
             return self.error(format!("layout {name} already exists"));
         }
         let mut lines = vec!["page: A4 portrait".to_string(), "font: 9".to_string(), "grid: 12".to_string()];
-        let el = |cols, rows, kind, content: String| Element { cols, rows, kind, content, columns: Vec::new(), label: None, z: None }.to_line();
+        // Tables are as tall as their data: what follows moves along when they grow.
+        let el = |cols, rows, kind, content: String| Element { cols, rows, kind, content, auto: kind == ElementKind::Table, ..Element::default() }.to_line();
         lines.push(el((1, 12), (1, 2), ElementKind::Heading, self.doc_title()));
         let mut row = 4;
         let charts: Vec<(String, Option<usize>)> =
             (0..self.chart_blocks().len()).map(|c| (self.chart_blocks()[c].0.clone(), self.chart_data(c).ok().map(|d| d.sheet))).collect();
         for s in 0..self.wb.sheets.len() {
             let Some(table) = self.wb.sheets[s].name.clone() else { continue };
-            let h = (self.wb.sheets[s].cells.len() + 3).clamp(4, 20);
+            let h = (self.wb.sheets[s].cells.len() + self.wb.sheets[s].footer.len() + 2).clamp(4, 20);
             let chart = charts.iter().find(|(_, sheet)| *sheet == Some(s)).map(|(n, _)| n.clone());
             match chart {
                 Some(chart) => {
@@ -2921,19 +3159,24 @@ impl App {
         let index = existing.len();
         self.with_doc(|doc| doc.blocks.push(Block::Layout { name: name.clone(), lines }));
         self.show_helper(ViewKind::Layout(index));
-        self.info(format!("layout '{name}' created – drag elements with the mouse, F9 previews"));
+        self.info(format!("layout '{name}' created – drag elements with the mouse, Space shows the overview"));
     }
 
     /// Adds an element below all others (or in `rect`) and selects it.
     fn add_element(&mut self, i: usize, kind: ElementKind, content: String, rect: Option<((usize, usize), (usize, usize))>) {
-        let spec = self.raster_spec(i);
+        let spec = self.shown_spec(i);
         let ((c1, c2), (r1, r2)) = rect.unwrap_or_else(|| {
             let row = spec.last_row() + 2;
             ((1, spec.grid), (row, row + 1))
         });
-        let e = Element { cols: (c1, c2), rows: (r1, r2), kind, content, columns: Vec::new(), label: None, z: None };
+        self.push_element(i, Element { cols: (c1, c2), rows: (r1, r2), kind, content, ..Element::default() });
+    }
+
+    /// Adds `e` as the last element of layout `i` and selects it.
+    fn push_element(&mut self, i: usize, e: Element) {
+        let spec = self.shown_spec(i);
         let n = spec.elements.len();
-        self.edit_layout(i, |lines| lines.push(e.to_line()));
+        self.write_elements(i, &spec.elements, Some(&e));
         self.view.cursor = (n, 0);
         self.view.follow = true;
     }
@@ -2975,6 +3218,20 @@ impl App {
                     self.drop_element();
                     return true;
                 }
+                KeyCode::Char('=') => {
+                    self.fit_element(i, self.view.cursor.0);
+                    self.view.follow = true;
+                    return true;
+                }
+                KeyCode::Char('a') => {
+                    self.toggle_auto(i, self.view.cursor.0);
+                    self.view.follow = true;
+                    return true;
+                }
+                KeyCode::Char(' ') => {
+                    self.toggle_overview();
+                    return true;
+                }
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                     self.move_element(i, self.view.cursor.0, step(code));
                     return true;
@@ -2993,7 +3250,7 @@ impl App {
             }
             // Arrows (also with Shift) jump to the nearest element in that direction.
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
-                let spec = self.raster_spec(i);
+                let spec = self.shown_spec(i);
                 if let Some(n) = neighbour(&spec, self.view.cursor.0, step(code)) {
                     self.view.cursor.0 = n;
                 }
@@ -3007,6 +3264,7 @@ impl App {
                 self.add_element(i, ElementKind::Text, String::new(), None);
                 self.start_edit(None);
             }
+            KeyCode::Char(' ') => self.toggle_overview(),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => self.start_edit(Some(c)),
             _ => return false,
         }
@@ -3030,22 +3288,58 @@ impl App {
     /// Resizes element `n` at its bottom-right corner. When it gets taller or
     /// shorter, the elements below it in the grid move along (one undoable step).
     fn resize_element(&mut self, i: usize, n: usize, dc: i32, dr: i32) {
-        let spec = self.raster_spec(i);
+        let spec = self.shown_spec(i);
         let Some(old) = spec.elements.get(n).cloned() else { return };
         let mut resized = old.clone();
         resized.cols.1 = ((resized.cols.1 as i32 + dc).max(resized.cols.0 as i32) as usize).min(spec.grid);
         resized.rows.1 = (resized.rows.1 as i32 + dr).max(resized.rows.0 as i32) as usize;
-        let moved = reflow(&spec.elements, n, &resized);
-        let changes: Vec<(usize, String)> = moved
-            .iter()
-            .enumerate()
-            .filter(|(m, e)| **e != spec.elements[*m])
-            .map(|(m, e)| (spec.element_lines[m], e.to_line()))
-            .collect();
-        self.edit_layout(i, |lines| {
-            for (line, text) in changes {
-                lines[line] = text;
-            }
+        // A height set by hand is a fixed height again.
+        if dr != 0 && std::mem::take(&mut resized.auto) {
+            self.info("height is fixed now – a makes it automatic again");
+        }
+        self.write_elements(i, &reflow(&spec.elements, n, &resized), None);
+    }
+
+    /// `=` while moving: the element becomes as tall as its content needs
+    /// (what lies below moves along).
+    fn fit_element(&mut self, i: usize, n: usize) {
+        let spec = self.shown_spec(i);
+        let Some(old) = spec.elements.get(n).cloned() else { return };
+        if old.kind == ElementKind::Chart {
+            return self.error("a chart has no height of its own – resize it with + and −");
+        }
+        let setup = spec.setup(i);
+        let (cols, _, _, _) = print::page_grid(&setup, spec.font);
+        let body = print::layout_rows_per_page(&setup);
+        let probe = Element { auto: true, ..old.clone() };
+        let height = self.place_element(&spec, &probe, cols, body, &mut 0).height;
+        let fitted = Element { rows: (old.rows.0, old.rows.0 + height - 1), ..old };
+        self.write_elements(i, &reflow(&spec.elements, n, &fitted), None);
+        self.info(format!("{height} rows – as tall as the content"));
+    }
+
+    /// `a` while moving: `height: auto` on / off.
+    fn toggle_auto(&mut self, i: usize, n: usize) {
+        let Some(e) = self.shown_spec(i).elements.get(n).cloned() else { return };
+        if e.kind == ElementKind::Chart {
+            return self.error("a chart has no height of its own");
+        }
+        self.update_element(i, n, |e| e.auto = !e.auto);
+        self.info(if e.auto {
+            "height is fixed now".to_string()
+        } else {
+            format!("height: auto – the {} grows and shrinks with its content, what lies below moves along", e.kind.name())
+        });
+    }
+
+    /// Space or `:overview`: the layout editor's overview on / off.
+    pub fn toggle_overview(&mut self) {
+        self.layout_overview = !self.layout_overview;
+        self.view.follow = true;
+        self.info(if self.layout_overview {
+            "overview: every element as a box, a page per screen – Space returns to the page as printed"
+        } else {
+            "the page as printed – Space shows the overview"
         });
     }
 
@@ -3070,16 +3364,17 @@ impl App {
             3 => match self.selected_element() {
                 Some((_, _, e)) => {
                     self.layout_grab = true;
-                    self.info(format!("moving the {} – arrows move, + − > < (or Shift+arrows) resize, Enter/Esc/F3 put it down", e.kind.name()));
+                    self.info(format!("moving the {} – arrows move, + − > < (or Shift+arrows) resize, = fits the height, a automatic height, Enter/Esc/F3 put it down", e.kind.name()));
                 }
                 None => self.error("no element selected"),
             },
             4 => self.start_edit(None),
             5 => {
-                let Some((_, _, e)) = self.selected_element() else { return self.error("no element selected") };
-                let row = self.raster_spec(i).last_row() + 2;
+                let Some((_, _, e)) = self.shown_element() else { return self.error("no element selected") };
+                let row = self.shown_spec(i).last_row() + 2;
                 let h = e.height();
-                self.add_element(i, e.kind, e.content.clone(), Some((e.cols, (row, row + h - 1))));
+                // The copy shows the same columns, rows and slice.
+                self.push_element(i, Element { rows: (row, row + h - 1), ..e });
             }
             6 => {
                 let Some((_, n, e)) = self.selected_element() else { return self.error("no element selected") };
@@ -3106,11 +3401,16 @@ impl App {
 
     fn layout_mouse(&mut self, i: usize, m: MouseEvent, geom: LayoutGeom) {
         let (col, row) = geom.cell_at(m.column, m.row);
-        let spec = self.raster_spec(i);
+        let spec = self.shown_spec(i);
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.layout_grab = false;
-                let hit = spec.elements.iter().rposition(|e| (e.cols.0..=e.cols.1).contains(&col) && (e.rows.0..=e.rows.1).contains(&row));
+                // By canvas line: in the overview a line stands for several rows.
+                let line = geom.line_of(row);
+                let hit = spec
+                    .elements
+                    .iter()
+                    .rposition(|e| (e.cols.0..=e.cols.1).contains(&col) && (geom.line_of(e.rows.0)..=geom.line_of(e.rows.1)).contains(&line));
                 let now = Instant::now();
                 let double = self.last_click.is_some_and(|(t, x, y)| now.duration_since(t) < DOUBLE_CLICK && (x, y) == (m.column, m.row));
                 self.last_click = Some((now, m.column, m.row));
@@ -3121,10 +3421,10 @@ impl App {
                             self.start_edit(None);
                         }
                         let e = &spec.elements[n];
-                        let mode = if (col, row) == (e.cols.1, e.rows.1) {
+                        let mode = if (col, line) == (e.cols.1, geom.line_of(e.rows.1)) {
                             DragMode::Resize(n)
                         } else {
-                            DragMode::Move(n, (col - e.cols.0, row - e.rows.0))
+                            DragMode::Move(n, (col - e.cols.0, row as i64 - e.rows.0 as i64))
                         };
                         LayoutDrag { mode, cols: e.cols, rows: e.rows }
                     }
@@ -3137,17 +3437,17 @@ impl App {
                     DragMode::Move(_, (dc, dr)) => {
                         let (w, h) = (d.cols.1 - d.cols.0, d.rows.1 - d.rows.0);
                         let c0 = col.saturating_sub(dc).max(1).min(spec.grid - w);
-                        let r0 = row.saturating_sub(dr).max(1);
+                        let r0 = (row as i64 - dr).max(1) as usize;
                         d.cols = (c0, c0 + w);
                         d.rows = (r0, r0 + h);
                     }
                     DragMode::Resize(_) => {
                         d.cols.1 = col.max(d.cols.0);
-                        d.rows.1 = row.max(d.rows.0);
+                        d.rows.1 = geom.line_end(row).max(d.rows.0);
                     }
                     DragMode::Create((c, r)) => {
                         d.cols = (c.min(col), c.max(col));
-                        d.rows = (r.min(row), r.max(row));
+                        d.rows = (r.min(row), geom.line_end(r.max(row)));
                     }
                 }
             }
@@ -3156,9 +3456,12 @@ impl App {
                 match d.mode {
                     DragMode::Move(n, _) | DragMode::Resize(n) => {
                         if (d.cols, d.rows) != (spec.elements[n].cols, spec.elements[n].rows) {
+                            // A height dragged by hand is a fixed height again.
+                            let fixed = d.rows.1 - d.rows.0 != spec.elements[n].rows.1 - spec.elements[n].rows.0;
                             self.update_element(i, n, |e| {
                                 e.cols = d.cols;
                                 e.rows = d.rows;
+                                e.auto &= !fixed;
                             });
                         }
                     }
@@ -3683,18 +3986,17 @@ impl App {
             return self.set_layer_rule(&layer, self.view.sheet, &target, text.trim());
         }
         if let ViewKind::Layout(_) = self.view.kind {
-            if let Some((i, n, _)) = self.selected_element() {
-                self.update_element(i, n, |e| {
-                    // A table element may name its slice / scenario: `Account z: February`.
-                    let text = text.trim();
-                    match text.split_once(" z:").filter(|_| e.kind == ElementKind::Table) {
-                        Some((table, z)) => {
-                            e.content = table.trim().to_string();
-                            e.z = Some(z.trim().to_string()).filter(|z| !z.is_empty() && z != "a");
-                        }
-                        None => e.content = text.to_string(),
+            if let Some((i, n, mut e)) = self.selected_element() {
+                // Content and options as in the file: `Account z: February rows: last 12`.
+                match e.set_text(&text) {
+                    Ok(()) => {
+                        e.z = e.z.filter(|z| z != "a");
+                        self.update_element(i, n, |old| {
+                            (old.content, old.columns, old.label, old.z, old.pick, old.auto) = (e.content, e.columns, e.label, e.z, e.pick, e.auto)
+                        });
                     }
-                });
+                    Err(msg) => self.error(msg),
+                }
             }
             return;
         }
@@ -4271,6 +4573,7 @@ impl App {
         };
         let cursor = buf.chars().count();
         self.mode = Mode::Edit { buf, cursor };
+        self.quick_entry = initial.is_some() && !matches!(self.view.kind, ViewKind::Layout(_));
         self.point = None;
         self.message = None;
     }
@@ -4486,6 +4789,16 @@ impl App {
         }
         // Any other key ends pointing.
         self.point = None;
+        // Typed straight into the cell: ← → move on like ↑ ↓ (formulas keep the caret).
+        if self.quick_entry
+            && let Some((0, dc)) = arrow
+            && matches!(&self.mode, Mode::Edit { buf, .. } if !buf.trim_start().starts_with('='))
+        {
+            return self.commit_edit(0, dc);
+        }
+        if matches!(key.code, KeyCode::Home | KeyCode::End) {
+            self.quick_entry = false;
+        }
         let Mode::Edit { buf, cursor } = &mut self.mode else { return };
         let len = buf.chars().count();
         let byte_at = |s: &str, i: usize| s.char_indices().nth(i).map(|(b, _)| b).unwrap_or(s.len());
@@ -4726,7 +5039,7 @@ impl App {
         }
         if self.preview.is_none()
             && let ViewKind::Layout(i) = self.view.kind
-            && let Some(g) = self.layout_geom
+            && let Some(g) = self.layout_geom.clone()
             && (g.area.contains(pos) || self.layout_drag.is_some())
         {
             if matches!(m.kind, MouseEventKind::Down(_)) && matches!(self.mode, Mode::Edit { .. }) {
@@ -5152,6 +5465,8 @@ impl App {
             "import" if args.is_empty() => self.error("usage: :import <file.xlsx|.xls|.ods>"),
             // The file name may contain spaces.
             "import" => self.import_sheets(Path::new(&args.join(" "))),
+            "overview" if matches!(self.view.kind, ViewKind::Layout(_)) => self.toggle_overview(),
+            "overview" => self.error("the overview belongs to the layout editor – open a ▤ tab first"),
             "layout" => {
                 let name = args.join(" ");
                 self.create_layout((!name.is_empty()).then_some(name.as_str()));

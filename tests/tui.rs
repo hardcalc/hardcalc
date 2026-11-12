@@ -95,6 +95,41 @@ fn edit_recalculates_and_undo_restores() {
 }
 
 #[test]
+fn typed_input_moves_on_with_left_and_right() {
+    let mut a = app();
+    key(&mut a, KeyCode::Down);
+    key(&mut a, KeyCode::Right);
+    // Typed straight in: → keeps the input and moves to the next cell.
+    typ(&mut a, "100");
+    key(&mut a, KeyCode::Right);
+    assert_eq!(a.mode, Mode::Normal);
+    assert_eq!(a.view.cursor, (1, 2));
+    assert_eq!(a.wb.sheets[0].raw[1][1], "100");
+    typ(&mut a, "x");
+    key(&mut a, KeyCode::Left);
+    assert_eq!(a.view.cursor, (1, 1));
+    assert_eq!(a.wb.sheets[0].raw[1][2], "x");
+
+    // Edited with Enter: ← → move the caret inside the input.
+    key(&mut a, KeyCode::Enter);
+    key(&mut a, KeyCode::Left);
+    assert!(matches!(a.mode, Mode::Edit { cursor: 2, .. }));
+    key(&mut a, KeyCode::Esc);
+
+    // Home / End switch a typed input to the caret.
+    typ(&mut a, "12");
+    key(&mut a, KeyCode::Home);
+    key(&mut a, KeyCode::Right);
+    assert!(matches!(a.mode, Mode::Edit { cursor: 1, .. }));
+    key(&mut a, KeyCode::Esc);
+
+    // Formulas keep the caret (or pick references).
+    typ(&mut a, "=1+2");
+    key(&mut a, KeyCode::Left);
+    assert!(matches!(a.mode, Mode::Edit { cursor: 3, .. }));
+}
+
+#[test]
 fn validation_flags_cells() {
     let mut a = app();
     typ(&mut a, ":goto B1");
@@ -695,10 +730,10 @@ fn render_big(app: &mut App) -> String {
 
 /// Mouse event at grid (column, row) of the layout editor.
 fn grid_mouse(a: &mut App, kind: MouseEventKind, col: usize, row: usize) {
-    use hardcalc::layout::{Element, ElementKind};
-    let g = a.layout_geom.expect("layout drawn");
+    use hardcalc::layout::Element;
+    let g = a.layout_geom.clone().expect("layout drawn");
     let spec = a.raster_spec(0);
-    let e = Element { cols: (col, col), rows: (row, row), kind: ElementKind::Text, content: String::new(), columns: vec![], label: None, z: None };
+    let e = Element { cols: (col, col), rows: (row, row), ..Default::default() };
     let (x, _) = spec.span(g.cols, &e);
     let y = g.area.y + (g.line_of(row) - g.scroll) as u16;
     a.on_mouse(MouseEvent { kind, column: g.x0 + x as u16, row: y, modifiers: KeyModifiers::NONE });
@@ -1268,8 +1303,8 @@ fn resizing_pushes_the_elements_below() {
 
 #[test]
 fn reflow_cascades_through_the_grid() {
-    use hardcalc::layout::{Element, ElementKind};
-    let el = |c: (usize, usize), r: (usize, usize)| Element { cols: c, rows: r, kind: ElementKind::Text, content: String::new(), columns: vec![], label: None, z: None };
+    use hardcalc::layout::Element;
+    let el = |c: (usize, usize), r: (usize, usize)| Element { cols: c, rows: r, ..Default::default() };
     // A column of three stacked elements on the left, one on the right.
     let mut a = App::new("x.hcmd".into(), hardcalc::parse("```layout L
 ```
@@ -2398,15 +2433,14 @@ fn calculated_columns_in_slices() {
 
 #[test]
 fn moving_printing_and_laying_out_slices() {
-    use hardcalc::print::{PageSetup, Placed, PrintItem};
+    use hardcalc::print::{Placed, PrintItem};
     let src = format!(
         "{LAYERED}\n```scenario Plan\n| Inflow |\n|---|\n| 80 |\n```\n\nTarget {{=Account!B1c}}\n\n```layout L\n1-6 / 1-4  table Account   z: Plan\n7-12 / 1-4  table Account\n1-6 / 6-8  table Account   z: May\n```\n"
     );
     let mut a = App::new(PathBuf::from("k.hcmd"), hardcalc::parse(&src).unwrap());
     // Layout: one slice or scenario per element.
     let i = a.layout_blocks().iter().position(|(n, _)| n == "L").unwrap();
-    let spec = a.raster_spec(i);
-    let placed = a.raster_elements(&spec, &PageSetup::default());
+    let placed = a.resolved_layout(i).1;
     let text = |p: &hardcalc::print::PlacedElement| match &p.content {
         Placed::Lines(lines) => lines.iter().flat_map(|l| l.spans.iter().map(|s| s.text.clone())).collect::<Vec<_>>().join(" "),
         _ => String::new(),
@@ -3423,4 +3457,203 @@ fn a_link_may_lead_to_an_empty_cell_of_a_playground() {
     assert!(a.hits.iter().any(|(_, h)| *h == Hit::Link(8, 1)), "{:?} {:?}\n{screen}", a.view.cursor, a.links);
     click(&mut a, Hit::Link(8, 1));
     assert_eq!((a.view.sheet, a.view.cursor), (0, (21, 2)), "{:?}", a.message);
+}
+
+/// A table of `n` rows (Item k, Amount k·10) with a Total footer, and a layout block.
+fn long_table(n: usize, layout: &str) -> App {
+    let rows: String = (1..=n).map(|k| format!("| Item {k} | {} |\n", (k * 37) % 100 + k)).collect();
+    let src = format!(
+        "<!-- hardcalc 1 -->\n\n## Data :: matrix\n\n| Item | Amount |\n|---|--:|\n{rows}\n```footer Data\n| | Amount |\n|---|---|\n| Total | =sum |\n```\n\n```layout L\n{layout}\n```\n"
+    );
+    let mut a = App::new(PathBuf::from("long.hcmd"), hardcalc::parse(&src).unwrap());
+    a.set_view(hardcalc::tui::app::ViewKind::Layout(0), 0);
+    a
+}
+
+/// The lines of element `n` as plain text.
+fn element_text(a: &mut App, n: usize) -> Vec<String> {
+    match &a.resolved_layout(0).1[n].content {
+        hardcalc::print::Placed::Lines(lines) => lines.iter().map(|l| l.plain().trim_end().to_string()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+#[test]
+fn layout_tables_show_a_part_of_their_rows() {
+    let mut a = long_table(
+        30,
+        "1-6 / 1-20 table Data rows: 3\n7-12 / 1-20 table Data rows: last 2\n1-6 / 22-40 table Data rows: top 2 by Amount\n\
+         7-12 / 22-40 table Data rows: total\n1-6 / 42-50 table Data rows: bottom 1 by Amount\n7-12 / 42-50 table Data rows: top 2 by Nothing",
+    );
+    assert!(a.raster_spec(0).errors.is_empty(), "{:?}", a.raster_spec(0).errors);
+    let first = element_text(&mut a, 0);
+    assert_eq!(first[0], "Data · first 3 of 30");
+    assert_eq!(first.len(), 6, "title, header, 3 rows, total: {first:?}");
+    assert!(first[2].starts_with("Item 1 ") && first[4].starts_with("Item 3 ") && first[5].starts_with("Total"), "{first:?}");
+    let last = element_text(&mut a, 1);
+    assert!(last[0].ends_with("last 2 of 30") && last[2].starts_with("Item 29") && last[3].starts_with("Item 30"), "{last:?}");
+    // The largest amounts first; the total stays the total of the whole table.
+    let amount = |k: usize| (k * 37) % 100 + k;
+    let mut ranked: Vec<usize> = (1..=30).collect();
+    ranked.sort_by_key(|&k| std::cmp::Reverse(amount(k)));
+    let top = element_text(&mut a, 2);
+    assert_eq!(top[0], "Data · top 2 by Amount");
+    assert!(top[2].starts_with(&format!("Item {} ", ranked[0])) && top[3].starts_with(&format!("Item {} ", ranked[1])), "{top:?}");
+    let sum: usize = (1..=30).map(amount).sum();
+    assert!(top[4].starts_with("Total") && top[4].ends_with(&sum.to_string()), "{top:?}");
+    let total = element_text(&mut a, 3);
+    assert_eq!(total.len(), 3, "title, header, total: {total:?}");
+    assert!(total[0] == "Data" && total[2].starts_with("Total"));
+    let bottom = element_text(&mut a, 4);
+    assert!(bottom[2].starts_with(&format!("Item {} ", ranked.iter().rev().min_by_key(|&&k| amount(k)).unwrap())), "{bottom:?}");
+    assert!(element_text(&mut a, 5)[0].contains("no column 'Nothing'"));
+
+    // The options are typed after the table name, in any order.
+    a.view.cursor.0 = 0;
+    key(&mut a, KeyCode::Enter);
+    assert!(render(&mut a).contains("Data rows: 3"));
+    key(&mut a, KeyCode::Esc);
+    typ(&mut a, "Data rows: last 5 columns: Amount");
+    key(&mut a, KeyCode::Enter);
+    let e = element(&a, 0);
+    assert_eq!((e.content.as_str(), e.pick.clone(), e.columns.clone()), ("Data", hardcalc::layout::RowPick::Last(5), vec!["Amount".to_string()]));
+    // A wrong option is refused and nothing changes.
+    typ(&mut a, "Data rows: some");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(element(&a, 0), e);
+}
+
+#[test]
+fn layout_cut_tables_keep_their_total_and_are_marked() {
+    let mut a = long_table(30, "1-6 / 1-10 table Data\n1-6 / 12-13 note below");
+    let lines = element_text(&mut a, 0);
+    assert_eq!(lines.len(), 10, "{lines:?}");
+    assert_eq!(lines[8], "… 24 more rows");
+    assert!(lines[7].starts_with("Item 6 ") && lines[9].starts_with("Total"), "{lines:?}");
+    assert_eq!(a.resolved_layout(0).1[0].hidden, 24);
+    assert!(a.cursor_problem().is_some_and(|p| p.starts_with("24 rows do not fit")));
+
+    // F3 then = makes the table as tall as its content; the note keeps its distance.
+    fkey(&mut a, 3);
+    key(&mut a, KeyCode::Char('='));
+    assert_eq!((element(&a, 0).rows, element(&a, 1).rows), ((1, 33), (35, 36)));
+    assert!(a.cursor_problem().is_none());
+    ctrl(&mut a, 'z');
+    assert_eq!((element(&a, 0).rows, element(&a, 1).rows), ((1, 10), (12, 13)));
+}
+
+#[test]
+fn layout_auto_height_follows_the_data() {
+    let mut a = long_table(5, "1-6 / 1-4 table Data height: auto\n1-6 / 6-7 note below\n7-12 / 6-7 note beside");
+    // 5 rows + title, header and total: 8 rows; the note below keeps one free row.
+    let shown = a.shown_spec(0);
+    // What stands beside the table stays where it is.
+    assert_eq!((shown.elements[0].rows, shown.elements[1].rows, shown.elements[2].rows), ((1, 8), (10, 11), (6, 7)));
+    // The file still says what was written.
+    assert_eq!((element(&a, 0).rows, element(&a, 1).rows), ((1, 4), (6, 7)));
+    render_big(&mut a);
+    assert_eq!(a.cursor_column_info(), "table · columns 1–6 · rows 1–8 · height: auto");
+
+    // Moving an element writes the rows down as they are shown.
+    a.view.cursor.0 = 1;
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    assert_eq!((element(&a, 0).rows, element(&a, 1).rows, element(&a, 2).rows), ((1, 8), (11, 12), (6, 7)));
+    assert!(element(&a, 0).auto);
+    assert_eq!(a.shown_spec(0).elements, a.raster_spec(0).elements, "what is written is what is shown");
+    ctrl(&mut a, 'z');
+    assert_eq!(element(&a, 1).rows, (6, 7), "one step back");
+
+    // + in the move mode sets a fixed height again; a makes it automatic.
+    a.view.cursor.0 = 0;
+    fkey(&mut a, 3);
+    key(&mut a, KeyCode::Char('-'));
+    assert_eq!((element(&a, 0).rows, element(&a, 0).auto), ((1, 7), false));
+    assert_eq!(a.resolved_layout(0).1[0].hidden, 2, "6 rows of room: 3 rows, the note and the total");
+    key(&mut a, KeyCode::Char('a'));
+    assert!(element(&a, 0).auto);
+    assert_eq!(a.shown_spec(0).elements[0].rows, (1, 8));
+}
+
+#[test]
+fn layout_auto_tables_run_on_to_the_next_page() {
+    let mut a = long_table(100, "1-12 / 1-2 heading Report\n1-6 / 4-10 table Data height: auto\n7-12 / 4-10 note beside\n1-6 / 12-20 note below");
+    let body = hardcalc::print::layout_rows_per_page(&a.raster_spec(0).setup(0));
+    let (spec, placed, layout) = a.layout_parts(0);
+    // 103 lines from row 4 on: the first page holds body − 3 of them, title and header repeat.
+    assert_eq!(placed[1].hidden, 0);
+    assert_eq!(layout.pages.len(), 2);
+    let page2: Vec<String> = layout.pages[1].iter().map(|l| l.plain().trim_end().to_string()).collect();
+    assert!(page2[0] == "Data" && page2[1].starts_with("Item ") && page2[1].ends_with("Amount"), "{page2:?}");
+    assert!(page2[2].starts_with(&format!("Item {} ", body - 3 - 2 + 1)), "{page2:?}");
+    let end = 3 + 103 + 2;
+    assert_eq!(spec.elements[1].rows, (4, end));
+    assert!(page2[end - body - 1].starts_with("Total"), "{page2:?}");
+    // What stood below follows; the note beside stays.
+    assert_eq!((spec.elements[2].rows, spec.elements[3].rows), ((4, 10), (end + 2, end + 10)));
+    assert!(a.cursor_problem().is_none());
+
+    // An element pushed over a page end starts on the next page.
+    let mut a = long_table(body - 12, "1-6 / 1-4 table Data height: auto\n1-6 / 6-15 note below");
+    let spec = a.shown_spec(0);
+    assert_eq!(spec.elements[0].rows, (1, body - 9));
+    assert_eq!(spec.elements[1].rows, (body + 1, body + 10));
+}
+
+#[test]
+fn layout_overview_shows_a_page_per_screen() {
+    use hardcalc::tui::app::ViewKind;
+    let mut a = app();
+    a.show_helper(ViewKind::Layout(0));
+    let body = hardcalc::print::layout_rows_per_page(&a.raster_spec(0).setup(0));
+    // As printed, a 20-line window shows the first rows only.
+    let page = render(&mut a);
+    assert!(!page.contains("note"), "{page}");
+    key(&mut a, KeyCode::Char(' '));
+    assert!(a.layout_overview);
+    let screen = render(&mut a);
+    for label in ["# Budget 2026", "▦ Expenses", "▥ Spending", "= Total expenses", "▒ All figures"] {
+        assert!(screen.contains(label), "{label} in\n{screen}");
+    }
+    let g = a.layout_geom.clone().unwrap();
+    assert!(g.lines.len() <= g.area.height as usize, "the page fits the window: {} lines", g.lines.len());
+    assert_eq!(g.rows.len(), body);
+    // Every element has a line of its own, the rows in between share lines.
+    let tops: Vec<usize> = a.raster_spec(0).elements.iter().map(|e| g.line_of(e.rows.0)).collect();
+    assert_eq!(tops, [0, 1, 1, 3, 3, 4], "{:?}", g.lines);
+    assert_eq!((g.line_end(4), g.line_end(12)), (8, 12), "the table takes two lines: {:?}", g.lines);
+
+    // The mouse works on the boxes: drag the note down into the free paper.
+    let note = element(&a, 5).rows;
+    let free = g.lines[g.line_of(note.1) + 2].0 + 1;
+    grid_mouse(&mut a, MouseEventKind::Down(MouseButton::Left), 2, note.0);
+    assert_eq!(a.view.cursor.0, 5);
+    grid_mouse(&mut a, MouseEventKind::Drag(MouseButton::Left), 2, free);
+    grid_mouse(&mut a, MouseEventKind::Up(MouseButton::Left), 2, free);
+    assert_eq!(element(&a, 5).rows, (free, free + 1));
+    // A click on a box that shares its line with a gap selects the box.
+    render(&mut a);
+    grid_mouse(&mut a, MouseEventKind::Down(MouseButton::Left), 2, 4);
+    grid_mouse(&mut a, MouseEventKind::Up(MouseButton::Left), 2, 4);
+    assert_eq!((a.view.cursor.0, element(&a, 1).rows), (1, (4, 12)));
+    // Arrows and the move mode work as on the page.
+    key(&mut a, KeyCode::Up);
+    assert_ne!(a.view.cursor.0, 5);
+    // A cut table says so in its box.
+    let mut a = long_table(30, "1-6 / 1-10 table Data\n1-6 / 12-13 note below");
+    command(&mut a, "overview");
+    let screen = render(&mut a);
+    assert!(screen.contains("▦ Data") && screen.contains("✂ 24 rows hidden"), "{screen}");
+    key(&mut a, KeyCode::Char(' '));
+    assert!(!a.layout_overview);
+}
+
+#[test]
+fn new_layouts_let_their_tables_grow() {
+    let mut a = long_table(100, "1 / 1 text x");
+    command(&mut a, "layout Auto");
+    let spec = a.raster_spec(1);
+    let table = spec.elements.iter().find(|e| e.kind == hardcalc::layout::ElementKind::Table).unwrap();
+    assert!(table.auto);
+    assert!(a.layout_blocks()[1].1.iter().any(|l| l.ends_with("table    Data   height: auto")), "{:?}", a.layout_blocks()[1].1);
+    assert_eq!(a.resolved_layout(1).1.iter().map(|p| p.hidden).sum::<usize>(), 0);
 }
