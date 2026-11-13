@@ -1834,11 +1834,14 @@ fn file_dialog_opens_and_appends() {
     if a.file_dialog.as_ref().unwrap().dir.as_os_str().to_string_lossy().contains("recent") {
         ctrl(&mut a, 'r');
     }
-    assert_eq!(names(&a), ["..", "archiv", "budget.hcmd", "zweit.hcmd"], "folders first, documents only");
+    assert_eq!(names(&a), ["..", "archiv", "budget.hcmd", "notiz.txt", "zweit.hcmd"], "folders first, other files grey");
     let screen = render(&mut a);
     assert!(screen.contains("open file") && screen.contains("▸ archiv/"), "{screen}");
+    // Ctrl+A: all files offered, then documents only, then back.
     ctrl(&mut a, 'a');
     assert!(names(&a).contains(&"notiz.txt".to_string()));
+    ctrl(&mut a, 'a');
+    assert_eq!(names(&a), ["..", "archiv", "budget.hcmd", "zweit.hcmd"], "documents only");
     ctrl(&mut a, 'a');
 
     // Into a folder and back up: the folder stays selected.
@@ -3212,7 +3215,7 @@ fn function_keys_in_menus_and_dialogs() {
     let line = bar(&mut a);
     assert!(line.contains("2Open") && line.contains("4All") && line.contains("5Name") && line.contains("6Date") && line.contains("10Close"), "{line}");
     fkey(&mut a, 4);
-    assert!(a.file_dialog.as_ref().unwrap().all_files && bar(&mut a).contains("4Known"));
+    assert!(a.file_dialog.as_ref().unwrap().files == hardcalc::tui::file_dialog::Files::All && bar(&mut a).contains("4Only"));
     click(&mut a, Hit::FKey(10));
     assert!(a.file_dialog.is_none() && !a.quit);
 }

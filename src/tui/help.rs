@@ -144,7 +144,7 @@ pub const PAGES: &[Page] = &[
             ("  type, ↑ ↓, Tab", "narrow the list · choose · complete (also values like :theme dark)"),
             ("  Tab after a file command", "completes file names (:e :append :w :import :export :pdf)"),
             ("", ""),
-            ("F3, Ctrl+E, :e, :append", "file dialog: Enter / F2 opens / appends, ← up, Tab / F9 places, type to search, F4 all files, F5 / F6 sort by name / date, F3 / :recent recent files"),
+            ("F3, Ctrl+E, :e, :append", "file dialog: Enter / F2 opens / appends, ← up, Tab / F9 places, type to search, F4 others grey → all files → documents only, F5 / F6 sort by name / date, F3 / :recent recent files"),
             ("", "unsaved changes? first: [S]ave · [D]iscard · [Esc] cancel"),
             (":e file  :e! file  :new", "open another file (! discards changes) · new document"),
             (": Enter", "the command line with nothing typed runs the last command again"),

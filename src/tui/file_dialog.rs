@@ -67,6 +67,28 @@ enum SortKey {
     Date,
 }
 
+/// Which files the list shows and offers (F4 steps through them).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Files {
+    /// All files; only those the program reads can be taken, the others are grey.
+    #[default]
+    Known,
+    /// All files, and any of them can be taken.
+    All,
+    /// Only the files the program reads.
+    Only,
+}
+
+impl Files {
+    fn next(self) -> Files {
+        match self {
+            Files::Known => Files::All,
+            Files::All => Files::Only,
+            Files::Only => Files::Known,
+        }
+    }
+}
+
 /// What a screen area of the dialog stands for.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Spot {
@@ -97,9 +119,9 @@ pub struct FileDialog {
     pub scroll: usize,
     /// Visible list rows (set while drawing).
     pub rows: usize,
-    /// Also files the program cannot read.
-    pub all_files: bool,
-    /// Files the program can read; the others show with Ctrl+A.
+    /// Which files are shown and can be taken.
+    pub files: Files,
+    /// Files the program can read.
     accept: fn(&str) -> bool,
     /// Optional label per readable file, shown next to its name.
     tag: Option<fn(&std::path::Path) -> Option<&'static str>>,
@@ -132,7 +154,7 @@ impl FileDialog {
             selected: 0,
             scroll: 0,
             rows: 10,
-            all_files: false,
+            files: Files::default(),
             accept,
             tag: None,
             places: Vec::new(),
@@ -183,7 +205,11 @@ impl FileDialog {
             (false, true) => "Folder",
             (false, false) => "Recent",
         };
-        let all = if self.all_files { "Known" } else { "All" };
+        let all = match self.files {
+            Files::Known => "All",
+            Files::All => "Only",
+            Files::Only => "Grey",
+        };
         let places = match (self.places.is_empty(), self.in_places) {
             (true, _) => "",
             (false, true) => "List",
@@ -192,10 +218,20 @@ impl FileDialog {
         ["", take, recent, all, "Name", "Date", "", "", places, "Close"]
     }
 
-    /// Ctrl+A / F4: all files, not only the readable ones.
+    /// Ctrl+A / F4: the next of [`Files`]. The selected entry stays
+    /// selected (where it is still shown), the list stays where it was.
     fn toggle_all(&mut self) {
-        self.all_files = !self.all_files;
+        self.files = self.files.next();
+        let (keep, at, scroll) = (self.current().map(|e| e.name), self.selected, self.scroll);
         self.read();
+        self.scroll = scroll;
+        let i = keep.and_then(|n| self.shown().iter().position(|e| e.name == n)).unwrap_or(at);
+        self.select(i as isize);
+    }
+
+    /// Whether `e` can be taken: a folder, or a file the setting offers.
+    fn takes(&self, e: &Entry) -> bool {
+        e.dir || self.files == Files::All || (self.accept)(&e.name)
     }
 
     /// Ctrl+R / F3: the list of recent files, and back to the folder.
@@ -284,7 +320,7 @@ impl FileDialog {
                         let dir = e.path().is_dir() && crate::bundle::Kind::from_path(&e.path()).is_none();
                         let readable = !dir && (self.accept)(&name);
                         let tag = self.tag.filter(|_| readable).and_then(|t| t(&e.path()));
-                        (!name.starts_with('.') && (dir || self.all_files || readable))
+                        (!name.starts_with('.') && (dir || readable || self.files != Files::Only))
                             .then(|| Entry { name, dir, size: meta.len(), modified: meta.modified().ok(), tag, path: None })
                     })
                     .collect()
@@ -447,7 +483,7 @@ impl FileDialog {
 
     /// Takes the selected file, or enters the selected folder.
     pub fn choose(&mut self) -> Action {
-        let Some(entry) = self.current() else { return Action::None };
+        let Some(entry) = self.current().filter(|e| self.takes(e)) else { return Action::None };
         if entry.dir {
             self.enter_dir(&entry.name);
             return Action::None;
@@ -611,7 +647,7 @@ impl FileDialog {
                 (true, _) if self.in_places => Style::new().underlined(),
                 (true, _) => Style::new().reversed(),
                 (false, true) => Style::new().bold(),
-                (false, false) if (self.accept)(&e.name) => Style::new(),
+                (false, false) if self.takes(e) => Style::new(),
                 (false, false) => Style::new().fg(Color::DarkGray),
             };
             let row = Rect::new(list_x, y, iw as u16, 1);
@@ -621,14 +657,22 @@ impl FileDialog {
         if shown.is_empty() && iw > 0 {
             buf.set_stringn(list_x, list_y, "  (no matching files)", iw, Style::new().fg(Color::DarkGray));
         }
-        let search = if self.filter.is_empty() { String::new() } else { format!(" search: {}▏", self.filter) };
+        let search = match self.current() {
+            _ if !self.filter.is_empty() => format!(" search: {}▏", self.filter),
+            Some(e) if !self.in_places && !self.takes(&e) => format!(" not one of the {filter_label} – F4 offers all files"),
+            _ => String::new(),
+        };
         buf.set_stringn(inner.x, inner.bottom() - 2, &search, full_w, Style::new().fg(Color::Yellow));
         // Right-aligned on the same line: the order and its keys.
         let order = format!("{} · F5 name · F6 date ", self.sort_label());
         if order.width() + search.width() < full_w {
             buf.set_stringn(inner.x + (full_w - order.width()) as u16, inner.bottom() - 2, &order, full_w, Style::new().fg(Color::DarkGray));
         }
-        let all = if self.all_files { format!("F4: {filter_label} only") } else { "F4: all files".to_string() };
+        let all = match self.files {
+            Files::Known => "F4: all files".to_string(),
+            Files::All => format!("F4: {filter_label} only"),
+            Files::Only => "F4: others grey".to_string(),
+        };
         let all = if self.recent.is_empty() { all } else { format!("F3: recent · {all}") };
         let keys = if self.in_places {
             " ↑↓ Enter: go there · Tab / Esc: back to the list".to_string()
@@ -1094,11 +1138,41 @@ mod tests {
         // In the sidebar, Ctrl+A and Backspace act as in the list instead of doing nothing.
         key(&mut d, KeyCode::Tab);
         d.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
-        assert!(d.all_files && !d.in_places);
+        assert!(d.files == Files::All && !d.in_places);
         // The wheel scrolls the list, also while the sidebar has the keys.
         key(&mut d, KeyCode::Tab);
         d.scroll_by(1);
         assert!(!d.in_places);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn f4_steps_through_the_three_file_settings() {
+        let root = std::env::temp_dir().join(format!("hardcalc-files-f4-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        for name in ["a.md", "b.txt", "c.md", "d.md"] {
+            std::fs::write(root.join(name), "").unwrap();
+        }
+        let mut d = dialog(&root);
+        let at = |d: &FileDialog, name: &str| d.shown().iter().position(|e| e.name == name);
+        // Default: every file shown, only readable ones taken.
+        let b = at(&d, "b.txt").expect("other files are shown");
+        d.select(b as isize);
+        assert_eq!(key(&mut d, KeyCode::Enter), Action::None, "a grey file is not taken");
+        // All: the selection stays on the file, which can now be taken.
+        key(&mut d, KeyCode::F(4));
+        assert_eq!(d.files, Files::All);
+        assert_eq!(d.current().unwrap().name, "b.txt");
+        assert_eq!(key(&mut d, KeyCode::Enter), Action::Chosen(root.join("b.txt")));
+        // Only: other files are hidden; the selected file stays where it is shown.
+        d.select(at(&d, "c.md").unwrap() as isize);
+        key(&mut d, KeyCode::F(4));
+        assert_eq!(d.files, Files::Only);
+        assert!(at(&d, "b.txt").is_none());
+        assert_eq!(d.current().unwrap().name, "c.md");
+        key(&mut d, KeyCode::F(4));
+        assert_eq!(d.files, Files::Known);
+        assert_eq!(d.current().unwrap().name, "c.md");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -434,7 +434,12 @@ fn open_another_file_after_settling_changes() {
     assert_eq!(a.mode, Mode::Confirm(Confirm::Unsaved(Then::Open)));
     key(&mut a, KeyCode::Char('d'));
     let names: Vec<String> = a.file_dialog.as_ref().unwrap().shown().iter().map(|e| e.name.clone()).collect();
-    assert_eq!(names, ["..", "sub", "a.toml", "b.toml"], "folders and TOML files");
+    assert_eq!(names, ["..", "sub", "a.toml", "b.toml", "notes.txt"], "folders, TOML files and, grey, the others");
+    // A grey file is not taken.
+    typ(&mut a, "notes");
+    key(&mut a, KeyCode::Enter);
+    assert!(a.file_dialog.is_some() && a.path.ends_with("a.toml"));
+    key(&mut a, KeyCode::Esc);
     assert!(render(&mut a).contains("open file"));
     typ(&mut a, "b.t");
     key(&mut a, KeyCode::Enter);
