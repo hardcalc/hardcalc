@@ -267,3 +267,21 @@ fn view_layer_hides_columns_in_exports() {
     let content = zipped(&ods, "content.xml");
     assert!(content.contains("<table:table-column/><table:table-column/><table:table-column/><table:table-column table:visibility=\"collapse\"/>"), "{content}");
 }
+
+#[test]
+fn coloured_cells_are_filled_to_their_edge() {
+    // Status is as wide as "Status"; "open" is shorter, "x" in Note much shorter.
+    let src = "## T :: matrix\n\n| Item | Status | Note |\n|---|---|---|\n| Rent | open | x |\n| Power | paid | a longer note |\n\n\
+               ```layer format\nB1: bg yellow\nC: bg lightblue\nC2: align center\n```\n";
+    let doc = hardcalc::parse(src).unwrap();
+    let mut app = hardcalc::tui::app::App::new(std::path::PathBuf::from("t.hcmd"), doc);
+    app.bands = false;
+    let layout = app.layout(&hardcalc::print::PageSetup { scope: hardcalc::print::Scope::Document, ..Default::default() });
+    let spans: Vec<&hardcalc::print::Span> = layout.pages[0].iter().flat_map(|l| &l.spans).filter(|s| s.style.bg.is_some()).collect();
+    assert_eq!(spans.len(), 3, "{spans:#?}");
+    // Each coloured span is as wide as its column, whatever its text.
+    assert_eq!(spans[0].text, "open  ", "B1 as wide as the column Status");
+    assert_eq!(spans[1].text.chars().count(), "a longer note".len(), "{:?}", spans[1].text);
+    assert_eq!(spans[1].text.trim(), "x");
+    assert_eq!(spans[2].text, "a longer note");
+}

@@ -571,7 +571,13 @@ pub fn paginate(title: &str, items: &[PrintItem], setup: &PageSetup, footer: &st
                         if let Some(cell) = row.get(c) {
                             let part = cell_lines[i].get(k).map_or("", String::as_str);
                             if !part.is_empty() || cell.style.bg.is_some() {
-                                spans.push(Span { col: x, text: fit(part, w.min(cols - x), cell.align), style: cell.style.clone() });
+                                let cw = w.min(cols - x);
+                                let mut text = fit(part, cw, cell.align);
+                                // A coloured cell is coloured to its edge, not only under its text.
+                                if cell.style.bg.is_some() {
+                                    text = format!("{text:<cw$}");
+                                }
+                                spans.push(Span { col: x, text, style: cell.style.clone() });
                             }
                         }
                         x += w + COL_GAP;
