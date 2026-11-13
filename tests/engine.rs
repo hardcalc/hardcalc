@@ -295,3 +295,30 @@ Status: = open
     let names = vec!["Journal".to_string(), "Summary".to_string()];
     assert_eq!(hardcalc::export::formula_to_excel(&wb, &names, 1, 0, "subtotal(sum; Journal!Amount)").unwrap(), "=SUBTOTAL(109,'Journal'!$B$2:$B$4)");
 }
+
+#[test]
+fn subtotal_filters_by_the_rules_the_view_filters_by() {
+    // `Q1` reads as a cell, so the view rejects the rule and shows every
+    // row; subtotal counts every row too.
+    let src = "\
+## T :: matrix
+
+| Item | Q1 |
+|---|--:|
+| a | 1 |
+| b | 10 |
+
+```footer
+| | Item | Q1 |
+|---|---|---|
+| Shown | | =subtotal(sum) |
+```
+
+```layer filter
+Q1: > 5
+```
+";
+    let doc = parse(src).unwrap();
+    let (mut wb, _) = Workbook::from_document(&doc);
+    assert_eq!(wb.value((0, hardcalc::engine::FOOTER_ROW, 1)), Value::num(11.0));
+}

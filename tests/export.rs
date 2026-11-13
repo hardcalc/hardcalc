@@ -285,3 +285,15 @@ fn coloured_cells_are_filled_to_their_edge() {
     assert_eq!(spans[1].text.trim(), "x");
     assert_eq!(spans[2].text, "a longer note");
 }
+
+#[test]
+fn coloured_wide_characters_fill_their_column_exactly() {
+    // 日本 is two characters but four columns wide; the column is "Status", six wide.
+    let src = "## T :: matrix\n\n| Item | Status |\n|---|---|\n| Rent | 日本 |\n\n```layer format\nB1: bg yellow\n```\n";
+    let doc = hardcalc::parse(src).unwrap();
+    let mut app = hardcalc::tui::app::App::new(std::path::PathBuf::from("t.hcmd"), doc);
+    app.bands = false;
+    let layout = app.layout(&hardcalc::print::PageSetup { scope: hardcalc::print::Scope::Document, ..Default::default() });
+    let span = layout.pages[0].iter().flat_map(|l| &l.spans).find(|s| s.style.bg.is_some()).unwrap();
+    assert_eq!(span.text, "日本  ");
+}

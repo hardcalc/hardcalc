@@ -553,7 +553,10 @@ impl Check {
     pub fn parse_all(body: &str) -> Result<Vec<Check>, String> {
         let mut checks = Vec::new();
         let mut rest = body.trim();
-        let word = |rest: &str, w: &str| rest.strip_prefix(w).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace)).map(|r| r.trim_start().to_string());
+        /// `rest` behind the word `w` (not only a beginning of a longer one).
+        fn word<'a>(rest: &'a str, w: &str) -> Option<&'a str> {
+            rest.strip_prefix(w).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace)).map(str::trim_start)
+        }
         while !rest.is_empty() {
             if let Some(r) = rest.strip_prefix("required") {
                 checks.push(Check::Required);
@@ -561,9 +564,9 @@ impl Check {
             } else if let Some(r) = rest.strip_prefix("unique") {
                 checks.push(Check::Unique);
                 rest = r.trim_start();
-            } else if word(rest, "empty").is_some() {
+            } else if let Some(r) = word(rest, "empty") {
                 checks.push(Check::Empty);
-                rest = rest["empty".len()..].trim_start();
+                rest = r;
             } else if let Some(r) = rest.strip_prefix("in(") {
                 let (values, after) = take_list(r).ok_or("in(…) missing ')'")?;
                 checks.push(Check::OneOf(values));
@@ -755,6 +758,12 @@ impl Filters {
         out
     }
 
+    /// Every rule bound to its table and column: (sheet, column, checks).
+    /// A rule for a column the table does not have is left out.
+    pub fn bound(&self, wb: &Workbook) -> Vec<(usize, usize, Vec<Check>)> {
+        self.rules.iter().filter_map(|(s, name, checks)| Some((*s, column_index(wb, *s, name)?, checks.clone()))).collect()
+    }
+
     /// Per data row of `sheet`, whether the filter hides it – judged by the
     /// values of data layer `z` (0: the table itself). Empty without rules.
     /// A rule for a column the table does not have hides nothing.
@@ -792,16 +801,22 @@ pub fn normalize_condition(body: &str) -> Result<String, String> {
 }
 
 
+/// `Status = open`, `Amount>=100`: the column `find` names and what follows
+/// it – the column is the longest beginning that names one, else what
+/// stands before a comparison.
+pub fn split_column(text: &str, find: impl Fn(&str) -> Option<usize>) -> Option<(usize, String)> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let named = (1..=words.len()).rev().find_map(|k| find(&words[..k].join(" ")).map(|c| (c, words[k..].join(" "))));
+    named.or_else(|| {
+        let i = text.find(['<', '>', '=', '!'])?;
+        find(text[..i].trim()).map(|c| (c, text[i..].to_string()))
+    })
+}
+
 /// `Status = open`, `Amount >= 100`: a column of `sheet` and the conditions
 /// behind it (the longest beginning that names a column is the column).
 pub fn row_condition(wb: &Workbook, sheet: usize, text: &str) -> Result<(usize, Vec<Check>), String> {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    let named = (1..=words.len()).rev().find_map(|k| column_index(wb, sheet, &words[..k].join(" ")).map(|c| (c, words[k..].join(" "))));
-    let split = || {
-        let i = text.find(['<', '>', '=', '!'])?;
-        column_index(wb, sheet, text[..i].trim()).map(|c| (c, text[i..].to_string()))
-    };
-    let (c, body) = named.or_else(split).ok_or_else(|| format!("'{text}' does not start with a column of the table"))?;
+    let (c, body) = split_column(text, |name| column_index(wb, sheet, name)).ok_or_else(|| format!("'{text}' does not start with a column of the table"))?;
     if body.trim().is_empty() {
         return Err(format!("'{text}': a condition is missing, e.g. = open, >= 100"));
     }

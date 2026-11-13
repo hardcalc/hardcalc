@@ -340,10 +340,16 @@ pub fn update_document(doc: &mut Document, sheet: usize, moves: &Moves) {
                     None => table == Some(sheet),
                 };
                 if owner {
+                    let views = l.name == VIEWS;
                     let rules = std::mem::take(&mut l.rules);
                     l.rules = rules
                         .into_iter()
                         .filter_map(|rule| match rule {
+                            // A view keeps its name; the rules it holds move.
+                            Rule::Rule { target, body } if views => {
+                                let body = map_view_targets(&body, |t| rewrite_target(t, &names, moves));
+                                (!body.is_empty()).then_some(Rule::Rule { target, body })
+                            }
                             Rule::Rule { target, body } => rewrite_target(&target, &names, moves).map(|target| Rule::Rule { target, body }),
                             raw => Some(raw),
                         })
@@ -372,7 +378,8 @@ pub fn move_cell_targets(doc: &mut Document, sheet: usize, to: &dyn Fn(usize, us
                     Some(target) => name.as_deref() == Some(target.as_str()),
                     None => table == Some(sheet),
                 };
-                if !owner {
+                // View names are no cells.
+                if !owner || l.name == VIEWS {
                     continue;
                 }
                 for rule in &mut l.rules {
@@ -471,6 +478,48 @@ fn rename_column_in_formula(src: &str, here: bool, table: Option<&str>, old: &st
 /// Renames column `old` of table `sheet` to `new` wherever it is referred to
 /// by name: formulas, `{=…}` in text, layer rules, charts and layouts.
 /// The column header itself is changed by the caller.
+/// A layer rule target after column `old` was renamed to `new`; `None` if
+/// it does not name the column.
+fn rename_target(target: &str, old: &str, new: &str) -> Option<String> {
+    let t = target.trim();
+    if t == old {
+        Some(new.to_string())
+    } else if let Some(cond) = t.strip_prefix("row[")
+        && cond.starts_with(old)
+        && cond[old.len()..].trim_start().starts_with(['=', '<', '>', '!'])
+    {
+        Some(format!("row[{new}{}", &cond[old.len()..]))
+    } else if let Some(cond) = t.strip_prefix(old)
+        && cond.starts_with('[')
+        && cond.ends_with(']')
+    {
+        // `Amount[> 1000]`: the cells of the column that meet a condition.
+        Some(format!("{new}{cond}"))
+    } else {
+        None
+    }
+}
+
+/// The layer that keeps the named views of a table: its targets are view
+/// names, its bodies the rules a view holds,
+/// `filter Status: = open | view Note: hide`.
+pub const VIEWS: &str = "views";
+
+/// The body of a saved view with the target of each rule it holds mapped
+/// by `f`; a rule whose target goes (`None`) is left out.
+fn map_view_targets(body: &str, f: impl Fn(&str) -> Option<String>) -> String {
+    body.split(" | ")
+        .filter_map(|part| {
+            let part = part.trim();
+            let Some((layer, target, rest)) = part.split_once(':').and_then(|(head, rest)| head.split_once(' ').map(|(l, t)| (l, t, rest))) else {
+                return Some(part.to_string());
+            };
+            f(target.trim()).map(|t| format!("{layer} {t}:{rest}"))
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
 pub fn rename_column(doc: &mut Document, sheet: usize, old: &str, new: &str) {
     let Some(t) = doc.blocks.iter().filter_map(|b| if let Block::Table(t) = b { Some(t) } else { None }).nth(sheet) else {
         return;
@@ -501,21 +550,14 @@ pub fn rename_column(doc: &mut Document, sheet: usize, old: &str, new: &str) {
                 if !owner {
                     continue;
                 }
+                let views = l.name == VIEWS;
                 for rule in &mut l.rules {
-                    let Rule::Rule { target, .. } = rule else { continue };
-                    if target.trim() == old {
-                        *target = new.to_string();
-                    } else if let Some(cond) = target.trim().strip_prefix("row[")
-                        && cond.starts_with(old)
-                        && cond[old.len()..].trim_start().starts_with(['=', '<', '>', '!'])
-                    {
-                        *target = format!("row[{new}{}", &cond[old.len()..]);
-                    } else if let Some(cond) = target.trim().strip_prefix(old)
-                        && cond.starts_with('[')
-                        && cond.ends_with(']')
-                    {
-                        // `Amount[> 1000]`: the cells of the column that meet a condition.
-                        *target = format!("{new}{cond}");
+                    let Rule::Rule { target, body } = rule else { continue };
+                    if views {
+                        // A view keeps its name; the rules it holds follow the column.
+                        *body = map_view_targets(body, |t| Some(rename_target(t, old, new).unwrap_or_else(|| t.to_string())));
+                    } else if let Some(renamed) = rename_target(target, old, new) {
+                        *target = renamed;
                     }
                 }
             }
@@ -1241,6 +1283,21 @@ mod tests {
         assert_eq!(rewrite_target("2", &n, &gone), None);
         assert_eq!(rewrite_target("B1:B3", &n, &gone).as_deref(), Some("B1:B2"));
         assert_eq!(rewrite_target("B2:C2", &n, &gone), None);
+    }
+
+    #[test]
+    fn saved_views_keep_their_names_and_their_rules_follow() {
+        let src = "## T\n\n| Item | Amount | Status |\n|---|---|---|\n| a | 1 | x |\n| b | 2 | y |\n| c | 3 | z |\n\n\
+                   ```layer views\nQ1: filter Status: = x | view Item: hide\n3: filter Amount: > 1\n```\n";
+        let mut doc = crate::parse(src).unwrap();
+        // Column Item and row 3 deleted.
+        update_document(&mut doc, 0, &Moves { rows: &[0, 1, GONE], cols: &[GONE, 0, 1] });
+        let out = crate::write(&doc);
+        assert!(out.contains("Q1: filter Status: = x\n"), "{out}");
+        assert!(out.contains("3: filter Amount: > 1"), "{out}");
+        rename_column(&mut doc, 0, "Status", "State");
+        let out = crate::write(&doc);
+        assert!(out.contains("Q1: filter State: = x\n"), "{out}");
     }
 
     #[test]

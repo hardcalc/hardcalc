@@ -163,14 +163,19 @@ impl App {
 }
 
 impl App {
-    /// Deletes the data rows `doomed` (ascending) as one step: references
-    /// and rules follow the rows below, those of the deleted rows go.
+    /// Deletes the data rows `doomed` as one step: references and rules
+    /// follow the rows below, those of the deleted rows go.
     pub(super) fn delete_rows(&mut self, doomed: &[usize]) {
         let (rows, cols) = self.dims();
+        let mut gone = vec![false; rows];
+        for &r in doomed.iter().filter(|&&r| r < rows) {
+            gone[r] = true;
+        }
         let mut kept = 0;
-        let moved: Vec<usize> = (0..rows)
-            .map(|r| {
-                if doomed.contains(&r) {
+        let moved: Vec<usize> = gone
+            .iter()
+            .map(|&g| {
+                if g {
                     crate::refs::GONE
                 } else {
                     kept += 1;
@@ -180,17 +185,16 @@ impl App {
             .collect();
         let same: Vec<usize> = (0..cols).collect();
         let sheet = self.view.sheet;
-        let doomed = doomed.to_vec();
         self.with_doc(|doc| {
             crate::refs::update_document(doc, sheet, &crate::refs::Moves { rows: &moved, cols: &same });
             if let Some(t) = super::table_mut(doc, sheet) {
                 super::data_layers::pad_layers(t);
                 for grid in t.grids_mut() {
-                    for &r in doomed.iter().rev() {
-                        if r < grid.len() {
-                            grid.remove(r);
-                        }
-                    }
+                    let mut r = 0;
+                    grid.retain(|_| {
+                        r += 1;
+                        !gone.get(r - 1).copied().unwrap_or(false)
+                    });
                 }
             }
         });
@@ -256,7 +260,8 @@ impl App {
     }
 
     /// `:dedupe [Column …]`: deletes the rows that repeat an earlier one –
-    /// in the named columns, else in all of them. The first one stays.
+    /// in the named columns, else in all of them. The first one stays; rows
+    /// the filter hides are left alone, like with every other edit.
     pub(super) fn dedupe(&mut self, args: &[&str]) {
         if self.view.kind != ViewKind::Table || self.view.pivot.is_some() {
             return self.error(":dedupe works in tables");
@@ -268,7 +273,12 @@ impl App {
         };
         let keys = self.row_keys(&columns);
         let mut seen = std::collections::HashSet::new();
-        let doomed: Vec<usize> = keys.into_iter().enumerate().filter_map(|(r, key)| key.filter(|k| !seen.insert(k.clone())).map(|_| r)).collect();
+        let doomed: Vec<usize> = keys
+            .into_iter()
+            .enumerate()
+            .filter(|&(r, _)| !self.row_hidden(r))
+            .filter_map(|(r, key)| key.filter(|k| !seen.insert(k.clone())).map(|_| r))
+            .collect();
         if doomed.is_empty() {
             return self.info("no row repeats another");
         }

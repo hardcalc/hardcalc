@@ -4266,11 +4266,10 @@ impl App {
                 _ => self.error("footer cells are pasted one by one"),
             };
         }
-        // Row by row into the shown rows: those the filter hides are skipped.
-        let targets: Vec<usize> = std::iter::successors(Some(r0), |&r| Some(self.step_row(r, 1)).filter(|&next| next > r)).take(grid.len()).collect();
-        if targets.len() < grid.len() {
-            return self.error("not enough rows below to paste into");
-        }
+        // Row by row into the shown rows: those the filter hides are skipped;
+        // rows beyond the data grow the table.
+        let rows = self.dims().0;
+        let targets: Vec<usize> = (r0..rows).filter(|&r| self.row_shown(r)).chain(rows.max(r0)..).take(grid.len()).collect();
         let cells: Vec<(usize, usize, String)> = grid
             .into_iter()
             .zip(targets)
@@ -5979,7 +5978,9 @@ impl App {
                 let mut more_keys: Vec<(usize, bool)> = Vec::new();
                 if !single && text.contains(',') {
                     for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                        // A column named as a whole wins over a direction (`Job description`).
                         let (name, down) = match (part.strip_prefix('-'), part.rsplit_once(' ')) {
+                            _ if self.find_column(part).is_some() => (part, false),
                             (Some(name), _) => (name.trim(), true),
                             (None, Some((name, dir))) if dir.starts_with("desc") => (name.trim(), true),
                             (None, Some((name, dir))) if dir.starts_with("asc") => (name.trim(), false),

@@ -185,38 +185,6 @@ pub struct Workbook {
     state: EvalState,
 }
 
-/// The rules of the `filter` layers of `doc`, each bound to its table (the
-/// one named with `@`, else the nearest above) and column.
-fn filter_rules(doc: &Document, sheets: &[Sheet]) -> Vec<(usize, usize, Vec<crate::layers::Check>)> {
-    let mut out = Vec::new();
-    let mut last = None;
-    for block in &doc.blocks {
-        match block {
-            Block::Table(_) => last = Some(last.map_or(0, |i: usize| i + 1)),
-            Block::Layer(l) if l.name == crate::layers::FILTER => {
-                let sheet = match &l.target {
-                    Some(name) => sheets.iter().position(|s| s.name.as_deref() == Some(name.as_str())),
-                    None => last,
-                };
-                let Some(sheet) = sheet else { continue };
-                for rule in &l.rules {
-                    let crate::model::Rule::Rule { target, body } = rule else { continue };
-                    let cols = &sheets[sheet].columns;
-                    let col = cols.iter().position(|c| c.name == *target).or_else(|| letters_to_col(target).filter(|&c| c < cols.len() && target.chars().all(|ch| ch.is_ascii_uppercase())));
-                    if let (Some(col), Ok(checks)) = (col, crate::layers::Check::parse_all(body))
-                        && !checks.is_empty()
-                        && !checks.contains(&crate::layers::Check::Unique)
-                    {
-                        out.push((sheet, col, checks));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 impl Workbook {
     pub fn from_document(doc: &Document) -> (Workbook, Vec<Diagnostic>) {
         let mut diags = Vec::new();
@@ -371,8 +339,10 @@ impl Workbook {
                 }
             }
         }
-        let filters = filter_rules(doc, &sheets);
-        let wb = Workbook { types, sheets, functions, decimal_comma: crate::locale::decimal_comma(), filters, filter_off: HashSet::new(), state: EvalState::default() };
+        let mut wb = Workbook { types, sheets, functions, decimal_comma: crate::locale::decimal_comma(), filters: Vec::new(), filter_off: HashSet::new(), state: EvalState::default() };
+        // The same rules the view filters by (the errors are reported there).
+        let attached = crate::layers::attach(doc, &wb);
+        wb.filters = crate::layers::Filters::new(&attached, crate::layers::FILTER).bound(&wb);
         (wb, diags)
     }
 

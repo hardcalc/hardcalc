@@ -575,7 +575,7 @@ pub fn paginate(title: &str, items: &[PrintItem], setup: &PageSetup, footer: &st
                                 let mut text = fit(part, cw, cell.align);
                                 // A coloured cell is coloured to its edge, not only under its text.
                                 if cell.style.bg.is_some() {
-                                    text = format!("{text:<cw$}");
+                                    text.push_str(&" ".repeat(cw.saturating_sub(text.width())));
                                 }
                                 spans.push(Span { col: x, text, style: cell.style.clone() });
                             }

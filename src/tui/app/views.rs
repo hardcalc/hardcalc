@@ -8,7 +8,7 @@ use super::{App, ViewKind, FILTER, VIEW};
 use crate::model::Rule;
 
 /// The layer that keeps the named views of a table.
-pub const VIEWS: &str = "views";
+pub use crate::refs::VIEWS;
 
 /// The rules a saved view holds: (layer, target, body).
 fn parse_view(body: &str) -> Vec<(String, String, String)> {

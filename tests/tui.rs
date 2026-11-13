@@ -258,6 +258,15 @@ fn paste_beyond_the_edge_grows() {
 }
 
 #[test]
+fn paste_of_more_rows_than_the_table_has_grows_it() {
+    let mut a = app();
+    a.view.cursor = (1, 0);
+    a.on_paste("a\nb\nc\nd\ne\n");
+    assert_eq!(a.dims().0, 6);
+    assert_eq!(a.wb.sheets[0].raw[5][0], "e");
+}
+
+#[test]
 fn sort_toggles_on_repeat() {
     let mut a = app();
     let col0 = |a: &App| a.wb.sheets[0].raw.iter().map(|r| r[0].clone()).collect::<Vec<_>>();
@@ -4034,6 +4043,15 @@ fn sort_by_several_columns() {
 }
 
 #[test]
+fn sort_key_whose_name_ends_like_a_direction() {
+    let src = "## T :: matrix\n\n| Item | Job description |\n|---|---|\n| a | z |\n| b | y |\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    a.command("sort Job description, Item");
+    assert_eq!(a.message.as_ref().unwrap().text, "sorted by Job description ↑, then Item ↑");
+    assert_eq!(journal_rows(&a), ["b", "a"]);
+}
+
+#[test]
 fn cells_are_formatted_by_condition() {
     let mut a = journal("");
     a.command("when Amount > 100 fg red bold");
@@ -4052,6 +4070,11 @@ fn cells_are_formatted_by_condition() {
     assert!(!hardcalc::write(&a.doc).contains("Amount[> 100]"));
     a.command("when Amount > 100 fg nocolour");
     assert!(a.message.as_ref().unwrap().error);
+    // A value that reads like a format word stays in the condition.
+    a.command("when Status = none bg red");
+    assert!(hardcalc::write(&a.doc).contains("Status[= none]: bg red"), "{}", hardcalc::write(&a.doc));
+    a.command("when Status normal fg red");
+    assert!(hardcalc::write(&a.doc).contains("Status[= normal]: fg red"), "{}", hardcalc::write(&a.doc));
 }
 
 #[test]
@@ -4071,6 +4094,12 @@ fn duplicates_are_shown_and_removed() {
     assert_eq!(journal_rows(&a).len(), 6);
     a.command("dedupe");
     assert_eq!(a.message.as_ref().unwrap().text, "no row repeats another");
+    // Rows the filter hides are left alone.
+    ctrl(&mut a, 'z');
+    a.command("filter Status = open");
+    a.command("dedupe Status");
+    assert_eq!(a.message.as_ref().unwrap().text, "deleted 1 row(s) that repeated an earlier one · Ctrl+Z takes it back");
+    assert_eq!(a.dims().0, 5);
 }
 
 #[test]

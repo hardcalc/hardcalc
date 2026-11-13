@@ -160,15 +160,8 @@ impl App {
             self.set_layer_rules(FILTER, sheet, &changes);
             return self.info(if rest.is_empty() { "filter removed – all rows shown".to_string() } else { format!("filter on {} removed", rest.join(" ")) });
         }
-        // The column: the longest beginning that names one, or what stands
-        // before a comparison (`Amount>=100`).
         let text = args.join(" ");
-        let named = (1..=args.len()).rev().find_map(|k| self.find_column(&args[..k].join(" ")).map(|c| (c, args[k..].join(" "))));
-        let split = || {
-            let i = text.find(['<', '>', '=', '!'])?;
-            self.find_column(text[..i].trim()).map(|c| (c, text[i..].to_string()))
-        };
-        let (c, body) = match named.or_else(split) {
+        let (c, body) = match layers::split_column(&text, |name| self.find_column(name)) {
             Some(found) => found,
             None if args.is_empty() && cursor.1 < cols => (cursor.1, String::new()),
             None if args.is_empty() => return self.error("usage: :filter Column condition – e.g. :filter Status = open, :filter Amount >= 100, :filter off"),
@@ -199,12 +192,18 @@ impl App {
         if self.view.kind != ViewKind::Table || self.view.pivot.is_some() {
             return self.error(":when works in tables");
         }
-        let Some((c, rest)) = (1..=args.len()).rev().find_map(|k| self.find_column(&args[..k].join(" ")).map(|c| (c, &args[k..]))) else {
+        let Some((c, rest)) = layers::split_column(&args.join(" "), |name| self.find_column(name)) else {
             return self.error(USAGE);
         };
-        // The format begins with the first word that names one.
-        let is_format = |w: &str| matches!(w, "fg" | "bg" | "bold" | "italic" | "underline" | "align" | "wrap" | "off" | "none") || w.starts_with("percent") || w.starts_with("decimals") || w.starts_with("no");
-        let Some(k) = rest.iter().position(|w| is_format(w)).filter(|&k| k > 0) else { return self.error(USAGE) };
+        let rest: Vec<&str> = rest.split_whitespace().collect();
+        // The format begins where a condition stands before it (more than a
+        // comparison) and the rest reads as a format: `= none bg red`.
+        let complete = |k: usize| rest[..k].iter().any(|w| w.chars().any(|ch| !matches!(ch, '<' | '>' | '=' | '!')));
+        let fits = |k: usize| matches!(rest[k..], ["off"] | ["none"]) || layers::CellStyle::parse(&rest[k..].join(" ")).1.is_empty();
+        // Else the first word that starts a format, so that its error is shown.
+        let starts_format = |k: usize| matches!(rest[k], "fg" | "bg" | "bold" | "italic" | "underline" | "align" | "wrap") || ["percent", "decimals", "no"].iter().any(|p| rest[k].starts_with(p));
+        let candidates = || (1..rest.len()).filter(|&k| complete(k));
+        let Some(k) = candidates().find(|&k| fits(k)).or_else(|| candidates().find(|&k| starts_format(k))) else { return self.error(USAGE) };
         let condition = match normalize(&rest[..k].join(" ")) {
             Ok(c) => c,
             Err(e) => return self.error(e),
