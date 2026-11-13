@@ -520,6 +520,11 @@ histogram; for tensors with `x`, `series` and `filter` as in the pivot view.
 The chart highlights the row under the cursor, a click on a bar jumps to the
 row, **t** changes the type. `:chart [type]` creates a chart from the
 selected columns. `=spark(B1:B12)` draws a sparkline into a cell.
+In terminals with a graphics protocol (Kitty, Ghostty, iTerm2, WezTerm) line,
+area and scatter charts are drawn as images – in the chart window and in
+layouts – with their labels as text; elsewhere, and while a menu or dialog is
+open, in braille. Bar charts stay text. `HARDCALC_GRAPHICS=none` keeps
+everything text.
 
 ### Grid layouts
 

@@ -34,8 +34,15 @@ fn truncate(s: &str, w: usize) -> String {
 /// Draws `data` into `area`. `highlight` marks a category (linked to the table
 /// cursor). Returns clickable regions per category (bar charts).
 pub fn render(buf: &mut Buffer, area: Rect, data: &ChartData, paper: bool, highlight: Option<usize>) -> Vec<(Rect, usize)> {
+    render_with(buf, area, data, paper, highlight, false).0
+}
+
+/// As [`render`]; with `image` a line, area or scatter chart gets only its
+/// title and axis labels, and the plot area left empty is returned – for a
+/// pixel image ([`super::chart_image`]) to fill.
+pub fn render_with(buf: &mut Buffer, area: Rect, data: &ChartData, paper: bool, highlight: Option<usize>, image: bool) -> (Vec<(Rect, usize)>, Option<Rect>) {
     if area.height < 3 || area.width < 10 {
-        return Vec::new();
+        return (Vec::new(), None);
     }
     let base = if paper { Style::new().fg(Color::Black).bg(Color::White) } else { Style::new() };
     buf.set_style(area, base);
@@ -58,15 +65,75 @@ pub fn render(buf: &mut Buffer, area: Rect, data: &ChartData, paper: bool, highl
     let plot = Rect { y: area.y + 1, height: area.height - 1, ..area };
     if data.categories.is_empty() || data.series.iter().all(|s| s.values.iter().all(Option::is_none)) {
         buf.set_string(plot.x, plot.y, "(no numeric data)", base.italic());
-        return Vec::new();
+        return (Vec::new(), None);
     }
     match data.kind {
-        ChartType::Bar | ChartType::Histogram => bars(buf, plot, data, paper, highlight, base),
+        ChartType::Bar | ChartType::Histogram => (bars(buf, plot, data, paper, highlight, base), None),
+        ChartType::Line | ChartType::Area | ChartType::Scatter if image && plot.height >= 3 => (Vec::new(), xy_labels(buf, plot, data, paper, base)),
         ChartType::Line | ChartType::Area | ChartType::Scatter => {
             xy(buf, plot, data, paper, base);
-            Vec::new()
+            (Vec::new(), None)
         }
     }
+}
+
+/// The value and x ranges of a line, area or scatter chart.
+pub struct Bounds {
+    pub lo: f64,
+    pub hi: f64,
+    pub x_lo: f64,
+    pub x_hi: f64,
+}
+
+pub fn bounds(data: &ChartData) -> Bounds {
+    let (lo, hi) = data.value_range();
+    let (x_lo, x_hi) = match &data.xs {
+        Some(xs) => {
+            let f = xs.iter().filter(|x| x.is_finite());
+            let lo = f.clone().fold(f64::INFINITY, |a, &b| a.min(b));
+            let hi = f.fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            if lo < hi { (lo, hi) } else { (lo - 1.0, lo + 1.0) }
+        }
+        None => (0.0, (data.categories.len().max(2) - 1) as f64),
+    };
+    Bounds { lo, hi, x_lo, x_hi }
+}
+
+/// The text around a plot drawn as an image: the values at the top, middle
+/// and bottom row on the left, the x values below. Returns the plot area.
+fn xy_labels(buf: &mut Buffer, area: Rect, data: &ChartData, paper: bool, base: Style) -> Option<Rect> {
+    let b = bounds(data);
+    let y_labels = [data.fmt(b.hi, true), data.fmt((b.lo + b.hi) / 2.0, false), data.fmt(b.lo, false)];
+    let label_w = y_labels.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
+    if area.width <= label_w + 4 {
+        return None;
+    }
+    let plot = Rect { x: area.x + label_w + 1, y: area.y, width: area.width - label_w - 1, height: area.height - 1 };
+    let style = if paper { base } else { Style::new().fg(Color::Gray) };
+    for (label, y) in y_labels.iter().zip([plot.y, plot.y + (plot.height - 1) / 2, plot.bottom() - 1]) {
+        let w = label.width() as u16;
+        buf.set_stringn(area.x + label_w - w, y, label, w as usize, style);
+    }
+    let n = data.categories.len();
+    let x_labels: Vec<String> = match &data.xs {
+        Some(_) => vec![data.fmt(b.x_lo, false), data.fmt(b.x_hi, false)],
+        None if n > 2 => vec![data.categories[0].clone(), data.categories[n / 2].clone(), data.categories[n - 1].clone()],
+        None => data.categories.clone(),
+    };
+    let y = plot.bottom();
+    let k = x_labels.len().max(2) - 1;
+    for (i, label) in x_labels.iter().enumerate() {
+        let w = label.width() as u16;
+        // First at the left edge, last at the right edge, the others centred.
+        let at = plot.x as i32 + (i as i32 * (plot.width as i32 - 1)) / k as i32;
+        let x = match i {
+            0 => plot.x,
+            _ if i == x_labels.len() - 1 => plot.right().saturating_sub(w),
+            _ => (at - w as i32 / 2).max(plot.x as i32) as u16,
+        };
+        buf.set_stringn(x, y, label, (plot.right().saturating_sub(x)) as usize, style);
+    }
+    Some(plot)
 }
 
 /// Horizontal bars: one line per series and category, eighth blocks for precision.

@@ -2639,6 +2639,31 @@ fn plots_are_charts_with_a_settings_dialog() {
 }
 
 #[test]
+fn charts_become_images_where_the_terminal_shows_them() {
+    use hardcalc::tui::app::ViewKind;
+    let src = "```hardcalc\nx = {0, 1,,, 4} m\nM = 2 kN·x\n[Moments] plot(M)\n```\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    a.command("calc");
+    a.show_helper(ViewKind::Chart(0));
+    // Without a graphics protocol: braille, as before.
+    let screen = render(&mut a);
+    assert!(a.images.is_empty() && screen.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)), "{screen}");
+    // Kitty: the plot is left to an image, the labels stay text.
+    a.graphics = Some(hardcalc::tui::graphics::Protocol::Kitty);
+    let screen = render(&mut a);
+    assert_eq!(a.images.len(), 1);
+    assert!(!screen.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)), "{screen}");
+    assert!(screen.contains("Moments (line)") && screen.contains("8 kN*m"), "{screen}");
+    let img = &a.images[0];
+    let canvas = hardcalc::tui::chart_image::plot(&img.data, img.rect.width, img.rect.height, (10, 20), img.paper);
+    assert_eq!((canvas.width, canvas.height), (img.rect.width as usize * 10, img.rect.height as usize * 20));
+    // A dialog over the windows: no image, the braille comes back.
+    a.with_window(true, |a| a.on_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)));
+    render(&mut a);
+    assert!(a.images.is_empty());
+}
+
+#[test]
 fn calc_preview_typesets_formulas() {
     let src = include_str!("../examples/beam.hcmd");
     let mut a = App::new(PathBuf::from("beam.hcmd"), hardcalc::parse(src).unwrap());

@@ -2,6 +2,7 @@
 
 pub mod anim;
 pub mod app;
+pub mod chart_image;
 pub mod chart_view;
 pub mod config;
 pub mod file_dialog;
@@ -173,59 +174,106 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     result
 }
 
-/// The page image currently on screen, so it is only sent when it changes.
+/// The images on screen – the page of the print preview, charts – so they
+/// are only sent when something changes.
 #[derive(Default)]
 struct ImageState {
-    /// Hash of (page PDF, slot) of the image on screen.
+    /// Hash of everything shown (page PDF, charts, their places).
     shown: Option<u64>,
+    /// Where images are on screen.
+    rects: Vec<ratatui::layout::Rect>,
     /// Last rasterized page: hash of its PDF and the PNG.
     cache: Option<(u64, Vec<u8>)>,
+    /// The PNGs of the charts on screen, by what they show.
+    charts: std::collections::HashMap<u64, Vec<u8>>,
+}
+
+/// Pixels of a terminal cell; a usual size where the terminal does not say.
+fn cell_pixels() -> (u16, u16) {
+    match ratatui::crossterm::terminal::window_size() {
+        Ok(w) if w.width > 0 && w.height > 0 && w.columns > 0 && w.rows > 0 => ((w.width / w.columns).max(1), (w.height / w.rows).max(1)),
+        _ => (10, 20),
+    }
 }
 
 impl ImageState {
-    /// Shows, replaces or removes the preview image after a frame was drawn.
+    /// Shows, replaces or removes the images after a frame was drawn.
     /// Returns true when the frame must be redrawn.
     fn update(&mut self, app: &mut App, terminal: &mut Term) -> std::io::Result<bool> {
         use std::hash::{Hash, Hasher};
-        let (Some(protocol), Some(slot), Some(pdf)) = (app.graphics, app.image_slot, app.preview_page_pdf()) else {
+        let Some(protocol) = app.graphics else { return Ok(false) };
+        let page = match (app.image_slot, app.preview_page_pdf()) {
+            (Some(slot), Some(pdf)) => Some((slot, pdf)),
+            _ => None,
+        };
+        if page.is_none() && app.images.is_empty() {
             if self.shown.take().is_some() {
-                if let Some(p) = app.graphics {
-                    write!(stdout(), "{}", graphics::clear(p))?;
-                }
+                write!(stdout(), "{}", graphics::clear(protocol))?;
+                self.rects.clear();
                 // Repaint everything so no image remains under the new content.
                 terminal.clear()?;
                 return Ok(true);
             }
             return Ok(false);
-        };
+        }
+        let cell = cell_pixels();
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        pdf.hash(&mut h);
-        let pdf_hash = h.finish();
-        (slot.x, slot.y, slot.width, slot.height).hash(&mut h);
+        let mut pdf_hash = 0;
+        if let Some((slot, pdf)) = &page {
+            pdf.hash(&mut h);
+            pdf_hash = h.finish();
+            (slot.x, slot.y, slot.width, slot.height).hash(&mut h);
+        }
+        let charts: Vec<(u64, &chart_image::ChartImage)> = app.images.iter().map(|i| (i.key() ^ ((cell.0 as u64) << 48 | (cell.1 as u64) << 32), i)).collect();
+        for (k, _) in &charts {
+            k.hash(&mut h);
+        }
         let key = h.finish();
         if self.shown == Some(key) {
             return Ok(false);
         }
-        let png = match &self.cache {
-            Some((k, png)) if *k == pdf_hash => png.clone(),
-            _ => match graphics::rasterize(&pdf, 1600) {
-                Ok(png) => {
-                    self.cache = Some((pdf_hash, png.clone()));
-                    png
-                }
-                Err(e) => {
-                    app.image_mode = false;
-                    app.message = Some(app::Message { text: e, error: true });
-                    return Ok(true);
-                }
-            },
-        };
+        let rects: Vec<ratatui::layout::Rect> = page.iter().map(|(s, _)| *s).chain(charts.iter().map(|(_, i)| i.rect)).collect();
+        // iTerm2 images are part of the cells: one that moved away is only
+        // gone once its cells are written again.
+        if protocol == graphics::Protocol::Iterm && self.rects.iter().any(|r| !rects.contains(r)) {
+            self.shown = None;
+            self.rects.clear();
+            terminal.clear()?;
+            return Ok(true);
+        }
+        let mut pngs: Vec<(ratatui::layout::Rect, Vec<u8>)> = Vec::new();
+        if let Some((slot, pdf)) = &page {
+            let png = match &self.cache {
+                Some((k, png)) if *k == pdf_hash => png.clone(),
+                _ => match graphics::rasterize(pdf, 1600) {
+                    Ok(png) => {
+                        self.cache = Some((pdf_hash, png.clone()));
+                        png
+                    }
+                    Err(e) => {
+                        app.image_mode = false;
+                        app.message = Some(app::Message { text: e, error: true });
+                        return Ok(true);
+                    }
+                },
+            };
+            pngs.push((*slot, png));
+        }
+        let wanted: Vec<u64> = charts.iter().map(|(k, _)| *k).collect();
+        self.charts.retain(|k, _| wanted.contains(k));
+        for (k, img) in &charts {
+            let png = self.charts.entry(*k).or_insert_with(|| chart_image::plot(&img.data, img.rect.width, img.rect.height, cell, img.paper).png());
+            pngs.push((img.rect, png.clone()));
+        }
         let mut out = stdout();
         write!(out, "{}", graphics::clear(protocol))?;
-        execute!(out, ratatui::crossterm::cursor::MoveTo(slot.x, slot.y))?;
-        write!(out, "{}", graphics::escape(protocol, &png, slot.width, slot.height))?;
+        for (rect, png) in &pngs {
+            execute!(out, ratatui::crossterm::cursor::MoveTo(rect.x, rect.y))?;
+            write!(out, "{}", graphics::escape(protocol, png, rect.width, rect.height))?;
+        }
         out.flush()?;
         self.shown = Some(key);
+        self.rects = rects;
         Ok(false)
     }
 }

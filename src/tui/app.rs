@@ -553,6 +553,11 @@ pub struct App {
     pub image_mode: bool,
     /// Where the preview image goes on screen (set while drawing).
     pub image_slot: Option<Rect>,
+    /// Charts drawn as pixel images in this frame (set while drawing).
+    pub images: Vec<super::chart_image::ChartImage>,
+    /// Charts may be images in this frame: the terminal shows images and no
+    /// menu or dialog lies over them.
+    pub images_allowed: bool,
     /// The terminal shows 24-bit colour (else the 256-colour palette is used).
     pub truecolor: bool,
     /// Soft animations (sliding menus and dialogs, cube turns, flowing formula sources).
@@ -959,6 +964,8 @@ impl App {
             graphics: None,
             image_mode: false,
             image_slot: None,
+            images: Vec::new(),
+            images_allowed: false,
             truecolor: false,
             anim: Default::default(),
             thumbnail: None,

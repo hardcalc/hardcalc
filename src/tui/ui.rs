@@ -21,6 +21,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.anim.begin_frame();
     app.hits.clear();
     app.image_slot = None;
+    app.images.clear();
+    // Kitty puts images over the text: none while something lies over the windows.
+    // The commands shown above the command line may cover a chart too.
+    app.images_allowed = app.graphics.is_some() && !app.overlay_open() && !matches!(app.mode, Mode::Command { .. });
     app.other_hits.clear();
     app.window_areas.clear();
     if app.preview.is_some() {
@@ -738,14 +742,18 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
             put_clipped(buf, x0 as i32 + span.col as i32, sy, &span.text, style, x0, right);
         }
     }
-    // Charts, rendered off-screen and copied row by row.
+    // Charts, rendered off-screen and copied row by row; one wholly in view
+    // gets its plot as an image where the terminal can show one.
+    let mut images = Vec::new();
     for (page, graphics) in layout.graphics.iter().enumerate().filter(|_| !overview) {
         for g in graphics {
             let size = Rect::new(0, 0, g.width as u16, g.height as u16);
+            let rows: Vec<Option<u16>> = (0..size.height).map(|y| visible(geom.line_of(page * body + g.line + y as usize + 1))).collect();
+            let whole = rows.iter().all(Option::is_some) && rows.windows(2).all(|w| w[1] == w[0].map(|y| y + 1)) && x0 + g.col as u16 + size.width <= right;
             let mut tmp = ratatui::buffer::Buffer::empty(size);
-            super::chart_view::render(&mut tmp, size, &g.data, true, None);
+            let (_, plot) = super::chart_view::render_with(&mut tmp, size, &g.data, true, None, app.images_allowed && whole);
             for y in 0..size.height {
-                let Some(sy) = visible(geom.line_of(page * body + g.line + y as usize + 1)) else { continue };
+                let Some(sy) = rows[y as usize] else { continue };
                 for x in 0..size.width {
                     let sx = x0 + g.col as u16 + x;
                     if sx < right {
@@ -753,8 +761,13 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
                     }
                 }
             }
+            if let (Some(p), Some(Some(top))) = (plot, rows.first()) {
+                let rect = Rect { x: x0 + g.col as u16 + p.x, y: top + p.y, ..p };
+                images.push(super::chart_image::ChartImage { rect, data: g.data.clone(), paper: true });
+            }
         }
     }
+    app.images.extend(images);
     // Element areas: light tint, selection, drag rectangle, page-break overflow.
     let tint = |buf: &mut ratatui::buffer::Buffer, cols: (usize, usize), rows: (usize, usize), color: Color| {
         let e = Element { cols, rows, ..Default::default() };
@@ -841,8 +854,11 @@ fn draw_chart(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
     match app.chart_data(i) {
         Ok(data) => {
             let highlight = app.chart_highlight(&data);
-            let hits = super::chart_view::render(f.buffer_mut(), area, &data, false, highlight);
+            let (hits, plot) = super::chart_view::render_with(f.buffer_mut(), area, &data, false, highlight, app.images_allowed);
             app.hits.extend(hits.into_iter().map(|(r, k)| (r, Hit::ChartItem(k))));
+            if let Some(rect) = plot {
+                app.images.push(super::chart_image::ChartImage { rect, data, paper: false });
+            }
         }
         Err(e) => {
             f.buffer_mut().set_stringn(area.x, area.y, format!("⚠ chart: {e}"), area.width as usize, Style::new().fg(Color::LightRed));
