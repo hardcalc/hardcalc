@@ -197,6 +197,14 @@ pub fn target_problem(wb: &Workbook, sheet: usize, target: &str, open: bool) -> 
     }
 }
 
+/// The column of `sheet` a rule target names, if it names a column that is there.
+pub fn column_of(wb: &Workbook, sheet: usize, target: &str) -> Option<usize> {
+    match Target::parse(target) {
+        Target::Column(name) => column_index(wb, sheet, &name),
+        _ => None,
+    }
+}
+
 fn column_index(wb: &Workbook, sheet: usize, name: &str) -> Option<usize> {
     let cols = &wb.sheets[sheet].columns;
     cols.iter().position(|c| c.name == name).or_else(|| {
@@ -461,9 +469,66 @@ impl Formats {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Check {
     Required,
+    /// The cell is empty (`empty`).
+    Empty,
     Unique,
     Compare(CmpOp, String),
     OneOf(Vec<String>),
+    /// The text contains this, upper and lower case alike (`contains(rent)`).
+    Contains(String),
+}
+
+/// A value at the start of `s` – a word, or `"several words"` (`""` for a
+/// quote inside) – and the rest behind it. `stop`: characters that end a word.
+fn take_value<'a>(s: &'a str, stop: &[char]) -> Option<(String, &'a str)> {
+    let Some(quoted) = s.strip_prefix('"') else {
+        let end = s.find(|c: char| c.is_whitespace() || stop.contains(&c)).unwrap_or(s.len());
+        return Some((s[..end].to_string(), &s[end..]));
+    };
+    let mut out = String::new();
+    let mut chars = quoted.char_indices();
+    while let Some((i, ch)) = chars.next() {
+        match ch {
+            '"' if quoted[i + 1..].starts_with('"') => {
+                out.push('"');
+                chars.next();
+            }
+            '"' => return Some((out, &quoted[i + 1..])),
+            _ => out.push(ch),
+        }
+    }
+    None
+}
+
+/// The values of `a, "b, c", d)` up to the closing bracket, and the rest.
+fn take_list(s: &str) -> Option<(Vec<String>, &str)> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    loop {
+        rest = rest.trim_start();
+        let (value, after) = if rest.starts_with('"') {
+            take_value(rest, &[])?
+        } else {
+            let end = rest.find([',', ')'])?;
+            (rest[..end].trim().to_string(), &rest[end..])
+        };
+        out.push(value);
+        let after = after.trim_start();
+        if let Some(r) = after.strip_prefix(')') {
+            return Some((out, r));
+        }
+        rest = after.strip_prefix(',')?;
+    }
+}
+
+/// Writes a value so that [`Check::parse_all`] reads it back: quoted where
+/// a space, comma, bracket or quote would end it early.
+pub fn quote_value(v: &str) -> String {
+    if v.is_empty() || v.contains(|c: char| c.is_whitespace() || matches!(c, ',' | '(' | ')' | '"')) {
+        format!("\"{}\"", v.replace('"', "\"\""))
+    } else {
+        v.to_string()
+    }
 }
 
 impl Check {
@@ -471,6 +536,7 @@ impl Check {
     pub fn parse_all(body: &str) -> Result<Vec<Check>, String> {
         let mut checks = Vec::new();
         let mut rest = body.trim();
+        let word = |rest: &str, w: &str| rest.strip_prefix(w).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace)).map(|r| r.trim_start().to_string());
         while !rest.is_empty() {
             if let Some(r) = rest.strip_prefix("required") {
                 checks.push(Check::Required);
@@ -478,23 +544,54 @@ impl Check {
             } else if let Some(r) = rest.strip_prefix("unique") {
                 checks.push(Check::Unique);
                 rest = r.trim_start();
+            } else if word(rest, "empty").is_some() {
+                checks.push(Check::Empty);
+                rest = rest["empty".len()..].trim_start();
             } else if let Some(r) = rest.strip_prefix("in(") {
-                let end = r.find(')').ok_or("in(…) missing ')'")?;
-                checks.push(Check::OneOf(r[..end].split(',').map(|s| s.trim().to_string()).collect()));
-                rest = r[end + 1..].trim_start();
+                let (values, after) = take_list(r).ok_or("in(…) missing ')'")?;
+                checks.push(Check::OneOf(values));
+                rest = after.trim_start();
+            } else if let Some(r) = rest.strip_prefix("contains(") {
+                let (values, after) = take_list(r).ok_or("contains(…) missing ')'")?;
+                let [value] = values.as_slice() else { return Err("contains(…) takes one text".to_string()) };
+                checks.push(Check::Contains(value.clone()));
+                rest = after.trim_start();
             } else if let Some((_, op, after)) = split_comparison(rest).filter(|(lhs, ..)| lhs.is_empty()) {
-                let end = after.find(char::is_whitespace).unwrap_or(after.len());
-                if end == 0 {
+                let quoted = after.starts_with('"');
+                let (value, after) = take_value(after, &[]).ok_or("missing closing quote")?;
+                if value.is_empty() && !quoted {
                     return Err(format!("missing value after {}", op.symbol()));
                 }
-                checks.push(Check::Compare(op, after[..end].to_string()));
-                rest = after[end..].trim_start();
+                checks.push(Check::Compare(op, value));
+                rest = after.trim_start();
             } else {
                 return Err(format!("unknown check '{rest}'"));
             }
         }
         Ok(checks)
     }
+
+    /// Whether a value passes – for the checks that look at one cell
+    /// (`unique` looks at all and passes here).
+    pub fn holds(&self, v: &Value) -> bool {
+        let empty = is_empty(v);
+        match self {
+            Check::Required => !empty,
+            Check::Empty => empty,
+            Check::Unique => true,
+            // An empty cell is neither smaller nor larger than anything: it
+            // only differs from a value (and equals the empty text).
+            Check::Compare(op, rhs) if empty => rhs.is_empty() != (*op == CmpOp::Ne) && !matches!(op, CmpOp::Lt | CmpOp::Gt),
+            Check::Compare(op, rhs) => compare_value(v, *op, rhs),
+            Check::OneOf(options) if empty => options.iter().any(|o| o.is_empty()),
+            Check::OneOf(options) => options.iter().any(|o| compare_value(v, CmpOp::Eq, o)),
+            Check::Contains(text) => v.display(None, false).to_lowercase().contains(&text.to_lowercase()),
+        }
+    }
+}
+
+fn is_empty(v: &Value) -> bool {
+    matches!(v, Value::Null) || matches!(v, Value::Text(s) if s.trim().is_empty())
 }
 
 /// A rule that cannot be read, with where it is.
@@ -554,9 +651,11 @@ fn check_cells(wb: &mut Workbook, check: &Check, cells: &[CellId], out: &mut Vec
     let mut seen: Vec<(String, CellId)> = Vec::new();
     for &id in cells {
         let v = wb.value(id);
-        let empty = matches!(&v, Value::Null) || matches!(&v, Value::Text(s) if s.trim().is_empty());
+        let empty = is_empty(&v);
         let message = match check {
             Check::Required if empty => Some("required".to_string()),
+            Check::Empty if !empty => Some("must be empty".to_string()),
+            Check::Contains(text) if !empty && !check.holds(&v) => Some(format!("must contain {text}")),
             Check::Unique if !empty => {
                 let key = v.display(None, false);
                 let dup = seen.iter().find(|(k, _)| *k == key).map(|(_, first)| *first);
@@ -574,6 +673,89 @@ fn check_cells(wb: &mut Workbook, check: &Check, cells: &[CellId], out: &mut Vec
         if let Some(message) = message {
             out.push(Violation { cell: id, message });
         }
+    }
+}
+
+// ---------------------------------------------------------------- filter
+
+/// Name of the layer whose rules hide rows.
+pub const FILTER: &str = "filter";
+
+/// The rules of all `filter` layers: `Status: in(open, paid)`, `Amount: >= 100`.
+/// A row is shown when it meets every rule of its table.
+#[derive(Debug, Default)]
+pub struct Filters {
+    /// (sheet, column as written, checks)
+    rules: Vec<(usize, String, Vec<Check>)>,
+    pub errors: Vec<LayerError>,
+}
+
+impl Filters {
+    pub fn new(attached: &[Attached], layer: &str) -> Filters {
+        let mut f = Filters::default();
+        for a in attached.iter().filter(|a| a.layer.name == layer) {
+            for (i, rule) in a.layer.rules.iter().enumerate() {
+                let Rule::Rule { target, body } = rule else { continue };
+                let mut error = |message: String| {
+                    f.errors.push(LayerError { line: a.layer.line.0 + 1 + i, sheet: a.sheet, layer: layer.to_string(), message: format!("{target}: {message}") })
+                };
+                let Target::Column(column) = Target::parse(target) else {
+                    error("a filter rule names a column, e.g. `Status: = open`".to_string());
+                    continue;
+                };
+                match Check::parse_all(body) {
+                    Ok(checks) if checks.contains(&Check::Unique) => error("unique is a check, not a filter".to_string()),
+                    Ok(checks) if checks.is_empty() => error("missing condition, e.g. `= open`, `>= 100`, `in(a, b)`".to_string()),
+                    Ok(checks) => f.rules.push((a.sheet, column, checks)),
+                    Err(e) => error(e),
+                }
+            }
+        }
+        f
+    }
+
+    /// Whether table `sheet` has filter rules.
+    pub fn applies(&self, sheet: usize) -> bool {
+        self.rules.iter().any(|(s, ..)| *s == sheet)
+    }
+
+    /// The columns of `sheet` that are filtered.
+    pub fn columns(&self, wb: &Workbook, sheet: usize) -> Vec<usize> {
+        self.rules.iter().filter(|(s, ..)| *s == sheet).filter_map(|(_, name, _)| column_index(wb, sheet, name)).collect()
+    }
+
+    /// The filtered columns of `sheet`, each with all its conditions (rules
+    /// for the same column joined), in the order of the rules.
+    pub fn conditions(&self, wb: &Workbook, sheet: usize) -> Vec<(usize, Vec<Check>)> {
+        let mut out: Vec<(usize, Vec<Check>)> = Vec::new();
+        for (_, name, checks) in self.rules.iter().filter(|(s, ..)| *s == sheet) {
+            let Some(c) = column_index(wb, sheet, name) else { continue };
+            match out.iter_mut().find(|(col, _)| *col == c) {
+                Some((_, all)) => all.extend(checks.iter().cloned()),
+                None => out.push((c, checks.clone())),
+            }
+        }
+        out
+    }
+
+    /// Per data row of `sheet`, whether the filter hides it – judged by the
+    /// values of data layer `z` (0: the table itself). Empty without rules.
+    /// A rule for a column the table does not have hides nothing.
+    pub fn hidden(&self, wb: &mut Workbook, sheet: usize, z: usize) -> Vec<bool> {
+        if !self.applies(sheet) {
+            return Vec::new();
+        }
+        let mut hidden = vec![false; wb.sheets[sheet].cells.len()];
+        for (_, name, checks) in self.rules.iter().filter(|(s, ..)| *s == sheet) {
+            let Some(c) = column_index(wb, sheet, name) else { continue };
+            for (r, h) in hidden.iter_mut().enumerate() {
+                if !*h {
+                    let v = wb.value((sheet, r, crate::engine::in_layer(c, z)));
+                    *h = !checks.iter().all(|check| check.holds(&v));
+                }
+            }
+        }
+        hidden
     }
 }
 
@@ -680,5 +862,64 @@ Status: in(open, zu)
     fn bad_checks() {
         assert!(Check::parse_all("positive").is_err());
         assert_eq!(Check::parse_all(">=0").unwrap(), vec![Check::Compare(CmpOp::Ge, "0".into())]);
+    }
+
+    #[test]
+    fn quoted_values() {
+        assert_eq!(Check::parse_all("= \"New York\"").unwrap(), vec![Check::Compare(CmpOp::Eq, "New York".into())]);
+        assert_eq!(
+            Check::parse_all("in(open, \"a, b\", \"say \"\"hi\"\"\") required").unwrap(),
+            vec![Check::OneOf(vec!["open".into(), "a, b".into(), "say \"hi\"".into()]), Check::Required]
+        );
+        assert_eq!(Check::parse_all("contains(rent) empty").unwrap(), vec![Check::Contains("rent".into()), Check::Empty]);
+        assert!(Check::parse_all("in(a, b").is_err());
+        assert!(Check::parse_all("= \"open").is_err());
+        assert!(Check::parse_all(">=").is_err());
+        for v in ["open", "New York", "a, b", "say \"hi\"", ""] {
+            assert_eq!(Check::parse_all(&format!("= {}", quote_value(v))).unwrap(), vec![Check::Compare(CmpOp::Eq, v.into())], "{v}");
+            assert_eq!(Check::parse_all(&format!("in({})", quote_value(v))).unwrap(), vec![Check::OneOf(vec![v.into()])], "{v}");
+        }
+    }
+
+    #[test]
+    fn filters_hide_rows() {
+        let src = "\
+| Name | Value | Status |
+|------|------|--------|
+| Rent | 1200 | open |
+| Power | 85.5 | paid |
+| Phone |  | open |
+| Car | 300 | due soon |
+
+```layer filter
+Status: in(open, \"due soon\")
+B: >= 100
+```
+";
+        let doc = parse(src).unwrap();
+        let (mut wb, _) = Workbook::from_document(&doc);
+        let f = Filters::new(&attach(&doc, &wb), FILTER);
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
+        // Power is paid, Phone has no value.
+        assert_eq!(f.hidden(&mut wb, 0, 0), [false, true, true, false]);
+        assert_eq!(f.columns(&wb, 0), [2, 1]);
+
+        let hidden = |rules: &str| {
+            let doc = parse(&src.replace("Status: in(open, \"due soon\")\nB: >= 100", rules)).unwrap();
+            let (mut wb, _) = Workbook::from_document(&doc);
+            let f = Filters::new(&attach(&doc, &wb), FILTER);
+            (f.hidden(&mut wb, 0, 0), f.errors.len())
+        };
+        assert_eq!(hidden("Value: empty"), (vec![true, true, false, true], 0));
+        // An empty cell is not "less than 100"; it differs from a value and equals "".
+        assert_eq!(hidden("Value: < 100"), (vec![true, false, true, true], 0));
+        assert_eq!(hidden("Value: <> 300"), (vec![false, false, false, true], 0));
+        assert_eq!(hidden("Value: = \"\""), (vec![true, true, false, true], 0));
+        assert_eq!(hidden("Value: in(300, \"\")"), (vec![true, true, false, false], 0));
+        assert_eq!(hidden("Name: contains(R)"), (vec![false, false, true, false], 0));
+        assert_eq!(hidden("Status: <> open"), (vec![true, false, true, false], 0));
+        // Rules that cannot be read hide nothing and are reported.
+        assert_eq!(hidden("B2: = 1\nName: unique\nName: big\nStatus:"), (vec![], 4));
+        assert_eq!(hidden("Nowhere: = 1"), (vec![false; 4], 0));
     }
 }

@@ -25,6 +25,9 @@ impl App {
     /// reaches further out). `smart`: continue series, else repeat.
     pub(super) fn autofill(&mut self, src: Rect, to: (usize, usize), smart: bool) {
         let ((r0, c0), (r1, c1)) = src;
+        if self.hides_between(r0.min(to.0), r1.max(to.0)) {
+            return self.error("the filter hides rows in between – filling works with all rows shown (switch the filter layer off)");
+        }
         let down = to.0.saturating_sub(r1);
         let up = r0.saturating_sub(to.0);
         let right = to.1.saturating_sub(c1);

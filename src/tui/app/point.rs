@@ -74,11 +74,11 @@ impl App {
 
     /// Arrow key while pointing: from the edited cell (or the picked one).
     pub(super) fn point_move(&mut self, dr: isize, dc: isize, extend: bool) {
-        let (rows, cols) = self.view_dims();
+        let (_, cols) = self.view_dims();
         let active = self.active_point();
         // After `B1:` the second corner starts at B1 (as in Excel).
         let from = active.map_or_else(|| self.range_start().unwrap_or(self.view.cursor), |p| p.cell);
-        let r = (from.0 as isize + dr).clamp(0, rows.saturating_sub(1) as isize) as usize;
+        let r = self.step_row(from.0, dr);
         let c = (from.1 as isize + dc).clamp(0, cols.saturating_sub(1) as isize) as usize;
         let anchor = if extend { Some(active.and_then(|p| p.anchor).unwrap_or(from)) } else { None };
         self.point_at((r, c), anchor);

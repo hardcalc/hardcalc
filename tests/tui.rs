@@ -3657,3 +3657,245 @@ fn new_layouts_let_their_tables_grow() {
     assert!(a.layout_blocks()[1].1.iter().any(|l| l.ends_with("table    Data   height: auto")), "{:?}", a.layout_blocks()[1].1);
     assert_eq!(a.resolved_layout(1).1.iter().map(|p| p.hidden).sum::<usize>(), 0);
 }
+
+const JOURNAL: &str = "\
+## Journal :: matrix
+
+| Item | Amount | Status |
+|---|--:|---|
+| Rent | 1200 | paid |
+| Power | 85.5 | open |
+| Internet | 39.99 | paid |
+| Phone | 20 | open |
+| Car | 300 | due soon |
+| Books | 45 | paid |
+
+```footer
+| | Amount |
+|---|---|
+| Total | =sum |
+```
+";
+
+fn journal(filter: &str) -> App {
+    let src = if filter.is_empty() { JOURNAL.to_string() } else { format!("{JOURNAL}\n```layer filter\n{filter}\n```\n") };
+    App::new(PathBuf::from("journal.hcmd"), hardcalc::parse(&src).unwrap())
+}
+
+fn journal_rows(a: &App) -> Vec<String> {
+    a.table().rows.iter().map(|r| r[0].clone()).collect()
+}
+
+#[test]
+fn filter_hides_rows_and_keeps_the_file() {
+    let mut a = journal("Status: = open");
+    let screen = render(&mut a);
+    assert!(screen.contains("Power") && screen.contains("Phone"), "{screen}");
+    assert!(!screen.contains("Rent") && !screen.contains("Internet") && !screen.contains("Books"), "{screen}");
+    assert!(screen.contains("■ filter 2/6") && screen.contains("✂ filter: 2 of 6 rows shown"), "{screen}");
+    assert!(screen.contains("C ▼"), "the filtered column is marked: {screen}");
+    // The sum is that of all rows.
+    assert!(screen.contains("1690.49"), "{screen}");
+    // The cursor starts on the first shown row and steps over hidden ones.
+    assert_eq!(a.view.cursor.0, 1);
+    key(&mut a, KeyCode::Down);
+    assert_eq!(a.view.cursor.0, 3);
+    key(&mut a, KeyCode::Down);
+    assert_eq!(a.view.cursor.0, 6, "the + row");
+    key(&mut a, KeyCode::Up);
+    key(&mut a, KeyCode::Up);
+    key(&mut a, KeyCode::Up);
+    assert_eq!(a.on_header(), Some(Header::Column), "↑ from the first shown row: the column header");
+    assert!(!render(&mut a).contains("Rent"), "the hidden first row stays hidden");
+    key(&mut a, KeyCode::Down);
+    assert_eq!((a.on_header(), a.view.cursor.0), (None, 1), "and back into the first shown row");
+    // Nothing but the rule is in the file: every row stays.
+    assert!(!a.dirty);
+    assert_eq!(journal_rows(&a).len(), 6);
+    // Switching the layer off shows all rows.
+    let i = a.layer_names.iter().position(|n| n == "filter").unwrap();
+    click(&mut a, Hit::Layer(i));
+    let screen = render(&mut a);
+    assert!(screen.contains("Rent") && screen.contains("Books") && !screen.contains('✂'), "{screen}");
+    assert!(!a.dirty, "showing and hiding a layer is a view setting");
+}
+
+#[test]
+fn filter_command_writes_the_rule() {
+    let mut a = journal("");
+    // By the value at the cursor.
+    a.view.cursor = (4, 2);
+    a.command("filter");
+    assert_eq!(a.message.as_ref().unwrap().text, "filter Status: = \"due soon\" – 1 of 6 rows shown · :filter off shows all");
+    let saved = hardcalc::write(&a.doc);
+    assert!(saved.contains("```layer filter\nStatus: = \"due soon\"\n```"), "{saved}");
+    assert!(saved.contains("| Rent | 1200 | paid |"), "the rows stay in the file: {saved}");
+    // A second column narrows further; a rule for a column replaces its old one.
+    a.command("filter Status in(open, paid)");
+    a.command("filter Amount>=50");
+    let saved = hardcalc::write(&a.doc);
+    assert!(saved.contains("```layer filter\nStatus: in(open, paid)\nAmount: >=50\n```"), "{saved}");
+    let screen = render(&mut a);
+    assert!(screen.contains("Rent") && screen.contains("Power") && !screen.contains("Phone") && !screen.contains("Car"), "{screen}");
+    assert!(screen.contains("■ filter 2/6"), "{screen}");
+    a.command("filter B 1000");
+    assert!(hardcalc::write(&a.doc).contains("Amount: = 1000"), "the letter names the column of the existing rule");
+    a.command("filter off Amount");
+    assert!(hardcalc::write(&a.doc).contains("```layer filter\nStatus: in(open, paid)\n```"));
+    a.command("filter off");
+    assert!(!hardcalc::write(&a.doc).contains("Status: in"));
+    assert!(render(&mut a).contains("Car"));
+    // Undo brings the filter back.
+    ctrl(&mut a, 'z');
+    assert!(!render(&mut a).contains("Car"));
+    // What cannot be read is refused.
+    a.command("filter Nothing = 1");
+    assert!(a.message.as_ref().unwrap().error);
+    a.command("filter Status unique");
+    assert!(hardcalc::write(&a.doc).contains("Status: = unique"), "a word is a value");
+}
+
+#[test]
+fn editing_leaves_hidden_rows_alone() {
+    let mut a = journal("Status: = open");
+    // Select Power … Phone (Internet between them is hidden) and clear.
+    a.view.cursor = (1, 1);
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    assert_eq!(a.selection(), ((1, 1), (3, 1)));
+    ctrl(&mut a, 'c');
+    key(&mut a, KeyCode::Delete);
+    let amounts: Vec<String> = a.table().rows.iter().map(|r| r[1].clone()).collect();
+    assert_eq!(amounts, ["1200", "", "39.99", "", "300", "45"]);
+    // Pasting goes into the shown rows too.
+    key(&mut a, KeyCode::Esc);
+    a.view.cursor = (1, 1);
+    a.view.anchor = None;
+    ctrl(&mut a, 'v');
+    let amounts: Vec<String> = a.table().rows.iter().map(|r| r[1].clone()).collect();
+    assert_eq!(amounts, ["1200", "85.5", "39.99", "20", "300", "45"]);
+    // Deleting the selected rows keeps the hidden one between them.
+    a.view.cursor = (1, 0);
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    a.command("delrow");
+    assert_eq!(journal_rows(&a), ["Rent", "Internet", "Car", "Books"]);
+    assert_eq!(a.message.as_ref().unwrap().text, "deleted 2 row(s)");
+}
+
+#[test]
+fn a_row_being_typed_stays_until_the_cursor_leaves() {
+    let mut a = journal("Status: = open");
+    a.view.cursor = (6, 0);
+    typ(&mut a, "Water");
+    key(&mut a, KeyCode::Right);
+    assert_eq!(a.view.cursor, (6, 1));
+    assert!(render(&mut a).contains("Water"), "the new row does not meet the filter yet, but holds the cursor");
+    typ(&mut a, "30");
+    key(&mut a, KeyCode::Right);
+    typ(&mut a, "open");
+    key(&mut a, KeyCode::Enter);
+    assert!(render(&mut a).contains("Water"));
+    // A row that stops meeting the filter is hidden once the cursor moves on.
+    a.view.cursor = (1, 2);
+    typ(&mut a, "paid");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(a.view.cursor.0, 3);
+    assert_eq!(a.message.as_ref().unwrap().text, "row 2 does not meet the filter and is hidden – the filter layer (or :filter off) shows all rows");
+    assert!(!render(&mut a).contains("Power"));
+}
+
+#[test]
+fn filter_layer_view_edits_column_rules() {
+    let mut a = journal("");
+    a.command("layer new filter");
+    a.view.cursor = (2, 1);
+    typ(&mut a, "< 100");
+    key(&mut a, KeyCode::Enter);
+    assert!(hardcalc::write(&a.doc).contains("```layer filter\nAmount: < 100\n```"));
+    // The layer view shows every row, with the rule in its column.
+    let screen = render(&mut a);
+    assert!(screen.contains("Rent") && screen.contains("< 100"), "{screen}");
+    key(&mut a, KeyCode::Esc);
+    let screen = render(&mut a);
+    assert!(!screen.contains("Rent") && screen.contains("Power") && screen.contains("■ filter 4/6"), "{screen}");
+}
+
+#[test]
+fn printing_follows_the_filter() {
+    let mut a = journal("Status: = open");
+    let items = a.print_items(true);
+    let hardcalc::print::PrintItem::Table(t) = &items.iter().find(|i| matches!(i, hardcalc::print::PrintItem::Table(_))).unwrap() else { unreachable!() };
+    let first: Vec<&str> = t.rows.iter().map(|r| r[0].text.as_str()).collect();
+    assert_eq!(first, ["Power", "Phone", "Total"]);
+}
+
+#[test]
+fn scrolling_counts_shown_rows() {
+    let mut src = String::from("## Long :: matrix\n\n| N | Kind |\n|---|---|\n");
+    for i in 1..=200 {
+        src.push_str(&format!("| {i} | {} |\n", if i % 10 == 0 { "ten" } else { "other" }));
+    }
+    src.push_str("\n```layer filter\nKind: = ten\n```\n");
+    let mut a = App::new(PathBuf::from("long.hcmd"), hardcalc::parse(&src).unwrap());
+    assert_eq!(a.view.cursor.0, 9);
+    let screen = render(&mut a);
+    assert!(screen.contains(" 10 ") && screen.contains(" 100 "), "ten rows of ten fit: {screen}");
+    key(&mut a, KeyCode::PageDown);
+    let page = a.view.page_rows;
+    assert_eq!(a.view.cursor.0, 9 + 10 * page, "a page is a page of shown rows");
+    let screen = render(&mut a);
+    assert!(screen.contains(&format!(" {} ", 10 + 10 * page)), "{screen}");
+    a.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+    assert_eq!(a.view.cursor.0, 199);
+    a.on_key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+    assert_eq!(a.view.cursor.0, 9);
+}
+
+#[test]
+fn value_list_filters_by_ticking() {
+    let mut a = journal("");
+    a.view.cursor = (0, 2);
+    let screen = render(&mut a);
+    assert!(screen.contains("C ▾"), "the cursor column offers its value list: {screen}");
+    click(&mut a, Hit::Values(2));
+    let screen = render(&mut a);
+    assert!(screen.contains("[x] (all)") && screen.contains("[x] due soon") && screen.contains("[x] paid"), "{screen}");
+    // Untick "paid" (the third value: due soon, open, paid) and apply.
+    key(&mut a, KeyCode::End);
+    key(&mut a, KeyCode::Char(' '));
+    assert!(render(&mut a).contains("[-] (all)"));
+    key(&mut a, KeyCode::Enter);
+    assert!(a.values.is_none());
+    assert!(hardcalc::write(&a.doc).contains("```layer filter\nStatus: in(\"due soon\", open)\n```"), "{}", hardcalc::write(&a.doc));
+    let screen = render(&mut a);
+    assert!(screen.contains("C ▼") && screen.contains("■ filter 3/6") && !screen.contains("Rent"), "{screen}");
+    // Reopened, the list shows the ticks of the rule; a click ticks a line.
+    click(&mut a, Hit::Values(2));
+    let screen = render(&mut a);
+    assert!(screen.contains("[ ] paid") && screen.contains("[x] open"), "{screen}");
+    click(&mut a, Hit::ValueItem(3));
+    click(&mut a, Hit::ValuesApply);
+    assert!(!hardcalc::write(&a.doc).contains("layer filter\nStatus"), "all ticked: no rule");
+    assert!(render(&mut a).contains("Rent"));
+    // Typing searches; Enter then keeps just what is listed.
+    a.command("values Item");
+    typ(&mut a, "o");
+    let screen = render(&mut a);
+    assert!(screen.contains("Item: o") && screen.contains("Books") && screen.contains("Phone") && screen.contains("Power") && screen.contains("(all listed)"), "{screen}");
+    key(&mut a, KeyCode::Enter);
+    assert!(hardcalc::write(&a.doc).contains("Item: in(Books, Phone, Power)"), "{}", hardcalc::write(&a.doc));
+    // One value becomes `=`, numbers are named as numbers; Esc changes nothing.
+    a.command("filter off");
+    a.view.cursor = (0, 1);
+    key(&mut a, KeyCode::Up);
+    assert_eq!(a.on_header(), Some(Header::Column));
+    key(&mut a, KeyCode::Char(' '));
+    assert!(a.values.is_some(), "Space on the column header");
+    key(&mut a, KeyCode::Char(' ')); // (all) off
+    key(&mut a, KeyCode::Down);
+    key(&mut a, KeyCode::Char(' ')); // the smallest: 20
+    key(&mut a, KeyCode::Enter);
+    assert!(hardcalc::write(&a.doc).contains("Amount: = 20\n"), "{}", hardcalc::write(&a.doc));
+    key(&mut a, KeyCode::Char(' '));
+    key(&mut a, KeyCode::Esc);
+    assert!(a.values.is_none() && hardcalc::write(&a.doc).contains("Amount: = 20\n"));
+}

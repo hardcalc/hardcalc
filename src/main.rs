@@ -233,6 +233,9 @@ fn main() -> ExitCode {
             for e in &formats.errors {
                 findings.push(layer_finding(e, &wb));
             }
+            for e in &hardcalc::layers::Filters::new(&attached, hardcalc::layers::FILTER).errors {
+                findings.push(layer_finding(e, &wb));
+            }
             let (violations, rule_errors) = hardcalc::layers::validate(&attached, &mut wb, "validate");
             for e in &rule_errors {
                 findings.push(layer_finding(e, &wb));

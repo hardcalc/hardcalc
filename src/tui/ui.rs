@@ -121,6 +121,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     slide(f, app, "menu", menu, top.y + 1, |f, app| draw_menu(f, app, top));
     let context = app.context.map(|m| hash_of((m.pos, m.group)));
     slide(f, app, "context", context, 0, draw_context_menu);
+    let values = app.values.as_ref().map(|v| v.col as u64);
+    slide(f, app, "values", values, 0, draw_values);
     let dialog = app.file_dialog.as_ref().map(|_| 0);
     slide(f, app, "files", dialog, 0, draw_file_dialog);
     let confirm = app.confirm.as_ref().map(|_| 0);
@@ -269,6 +271,63 @@ fn draw_context_menu(f: &mut Frame, app: &mut App) {
         f.buffer_mut().set_string(kx, y, keys, if selected { base } else { Style::new().fg(Color::Gray) });
         app.hits.push((row, Hit::ContextItem(i)));
     }
+}
+
+/// The value list of a column: a tick per distinct value.
+fn draw_values(f: &mut Frame, app: &mut App) {
+    let Some(mut list) = app.values.clone() else { return };
+    let shown = list.shown();
+    let lines = shown.len() + 1;
+    let area = f.area();
+    let title = if list.query.is_empty() { format!(" {} ", list.name) } else { format!(" {}: {}▏", list.name, list.query) };
+    let bottom = " Space ✓ · type: search · Enter ";
+    let label_w = list.items.iter().map(|i| i.label.width()).max().unwrap_or(0).max("(all listed)".width());
+    let count_w = list.items.iter().map(|i| i.count.to_string().len()).max().unwrap_or(1);
+    let w = ((label_w + count_w + 9).max(title.width() + 2).max(bottom.width() + 2).min(48) as u16).min(area.width);
+    let h = (list.items.len() as u16 + 3).min(14).min(area.height.saturating_sub(2)).max(3);
+    let x = list.pos.0.min(area.right().saturating_sub(w));
+    let y = if list.pos.1 + h > area.bottom() { area.bottom().saturating_sub(h) } else { list.pos.1 };
+    let rect = Rect::new(x, y, w, h);
+    let body = h.saturating_sub(2) as usize;
+    // Keep the highlighted line in sight.
+    list.selected = list.selected.min(lines - 1);
+    if list.selected < list.scroll {
+        list.scroll = list.selected;
+    } else if body > 0 && list.selected >= list.scroll + body {
+        list.scroll = list.selected + 1 - body;
+    }
+    list.scroll = list.scroll.min(lines.saturating_sub(body));
+    list.rect = rect;
+    f.render_widget(Clear, rect);
+    f.render_widget(Block::bordered().title(title).title_bottom(bottom), rect);
+    app.hits.push((Rect::new(rect.x, rect.bottom().saturating_sub(1), rect.width, 1), Hit::ValuesApply));
+    let inner = (w as usize).saturating_sub(2);
+    for (k, line) in (list.scroll..lines).take(body).enumerate() {
+        let y = rect.y + 1 + k as u16;
+        let (tick, label, count) = match line.checked_sub(1) {
+            None => {
+                let tick = match list.all_checked() {
+                    (true, _) => "[x]",
+                    (false, true) => "[-]",
+                    _ => "[ ]",
+                };
+                (tick, if list.query.is_empty() { "(all)" } else { "(all listed)" }.to_string(), String::new())
+            }
+            Some(i) => {
+                let item = &list.items[shown[i]];
+                (if item.checked { "[x]" } else { "[ ]" }, item.label.clone(), item.count.to_string())
+            }
+        };
+        let selected = line == list.selected;
+        let base = if selected { Style::new().reversed().bold() } else { Style::new() };
+        let room = inner.saturating_sub(6 + count.width());
+        let text = format!(" {tick} {}", fit(&clip(&label, room), room, Align::Left));
+        f.buffer_mut().set_stringn(rect.x + 1, y, fit(&text, inner, Align::Left), inner, base);
+        let cx = rect.right().saturating_sub(2 + count.width() as u16);
+        f.buffer_mut().set_string(cx, y, &count, if selected { base } else { Style::new().fg(Color::Gray) });
+        app.hits.push((Rect::new(rect.x + 1, y, inner as u16, 1), Hit::ValueItem(line)));
+    }
+    app.values = Some(list);
 }
 
 /// While a `:` command is typed (like Helix): the matching commands or
@@ -1108,8 +1167,9 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     if app.view.follow {
         if focus.0 < app.view.scroll.0 {
             app.view.scroll.0 = focus.0;
-        } else if vis_rows > 0 && focus.0 >= app.view.scroll.0 + vis_rows {
-            app.view.scroll.0 = focus.0 + 1 - vis_rows;
+        } else if vis_rows > 0 && !app.rows_from(app.view.scroll.0, vis_rows).contains(&focus.0) {
+            // The cursor row becomes the last one shown (rows the filter hides do not count).
+            app.view.scroll.0 = app.step_row(focus.0, 1 - vis_rows as isize);
         }
     }
     app.view.scroll.0 = app.view.scroll.0.min(rows.saturating_sub(1));
@@ -1119,10 +1179,11 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let min_col = if app.fills() { FILL_MIN_COL } else { MIN_COL };
     // Rows with wrapped cells are several lines high, so fewer rows fit; the
     // scroll position moves on until the cursor row is shown completely.
-    let (row_range, cache, visible, heights, gutter) = loop {
-        let row_range = app.view.scroll.0..rows.min(app.view.scroll.0 + vis_rows);
+    let (row_list, cache, visible, heights, gutter) = loop {
+        // The rows drawn: without those the filter hides.
+        let mut row_list = app.rows_from(app.view.scroll.0, vis_rows);
         let gutter = {
-            let headers = row_range.clone().map(|r| app.row_header(r).width()).max().unwrap_or(1);
+            let headers = row_list.iter().map(|&r| app.row_header(r).width()).max().unwrap_or(1);
             headers.max(app.corner().width()).max(2) + 1
         };
         let avail = (area.width as usize).saturating_sub(gutter);
@@ -1136,12 +1197,12 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             if let Some((w, _)) = cache.get(&c) {
                 return *w;
             }
-            let views: Vec<CellView> = row_range.clone().map(|r| app.cell_view(r, c)).collect();
+            let views: Vec<CellView> = row_list.iter().map(|&r| app.cell_view(r, c)).collect();
             let (top, name) = app.col_header(c);
             let widest = views.iter().filter_map(|v| v.style.wrap).map(wrap_width).fold(MAX_COL, usize::max);
             let w = views
                 .iter()
-                .zip(row_range.clone())
+                .zip(row_list.iter().copied())
                 .map(|(v, r)| match v.style.wrap {
                     Some(n) => v.text.width().min(wrap_width(n)) + mark(r, c),
                     None => v.text.width().min(MAX_COL) + mark(r, c),
@@ -1189,12 +1250,12 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         let all: Vec<(usize, usize)> = (0..cols).map(|c| (c, column(app, c))).collect();
         let mut heights = Vec::new();
         let mut used = 0;
-        for i in 0..row_range.len() {
+        for (i, &r) in row_list.iter().enumerate() {
             let h = all
                 .iter()
                 .map(|&(c, w)| {
                     let v = &cache[&c].1[i];
-                    let w = w.saturating_sub(mark(row_range.start + i, c)).max(1);
+                    let w = w.saturating_sub(mark(r, c)).max(1);
                     if v.style.wrap.is_some() { crate::text::wrap_plain(&v.text, w).len() } else { 1 }
                 })
                 .max()
@@ -1206,12 +1267,12 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             heights.push(h);
         }
         let shown = heights.len();
-        if app.view.follow && focus.0 < rows && focus.0 >= app.view.scroll.0 + shown && app.view.scroll.0 < focus.0 {
-            app.view.scroll.0 += 1;
+        if app.view.follow && focus.0 < rows && !row_list[..shown].contains(&focus.0) && app.view.scroll.0 < focus.0 {
+            app.view.scroll.0 = row_list.get(1).copied().unwrap_or(app.view.scroll.0 + 1);
             continue;
         }
-        let row_range = row_range.start..row_range.start + shown;
-        break (row_range, cache, visible, heights, gutter);
+        row_list.truncate(shown);
+        break (row_list, cache, visible, heights, gutter);
     };
 
     let ((r0, c0), (r1, c1)) = app.selection();
@@ -1274,11 +1335,22 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         };
         buf.set_stringn(x, area.y, fit(&top, w, Align::Left), w, style.remove_modifier(Modifier::BOLD).italic());
         buf.set_stringn(x, area.y + 1, fit(&name, w, Align::Left), w, style.bold().underlined());
+        // The ▾ / ▼ behind the letter opens the value list of the column.
+        if top.ends_with(['▾', '▼']) && top.width() <= w {
+            let at = top.width().saturating_sub(2);
+            app.hits.push((Rect::new(x + at as u16, area.y, (top.width() - at) as u16, 1), Hit::Values(c)));
+        }
         app.hits.push((Rect::new(x, area.y, w as u16, HEADER_LINES), Hit::ColHeader(c)));
     }
 
+    let first_row = row_list.first().copied().unwrap_or(app.view.scroll.0);
+    // With hidden rows, the bands alternate over the rows that are shown.
+    let band_base = if app.hidden_count().is_some() { (0..first_row).filter(|&r| !app.row_hidden(r)).count() } else { first_row };
+    // A row the filter would hide, shown because the cursor is in it.
+    let strays: Vec<bool> = row_list.iter().map(|&r| app.row_hidden(r)).collect();
     let mut y_off = 0u16;
-    for (i, r) in row_range.clone().enumerate() {
+    for (i, &r) in row_list.iter().enumerate() {
+        let odd = if strays.contains(&true) || band_base != first_row { (band_base + i) % 2 == 1 } else { r % 2 == 1 };
         let y = area.y + HEADER_LINES + y_off;
         let lines = heights[i] as u16;
         y_off += lines;
@@ -1290,13 +1362,14 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             _ if current_row => Style::new().bold().fg(Color::Black).bg(Color::Gray),
             _ => header_style,
         };
+        let gstyle = if strays[i] { gstyle.italic() } else { gstyle };
         buf.set_stringn(area.x, y, fit(&app.row_header(r), gutter - 1, Align::Right), gutter - 1, gstyle);
         for extra in 1..lines {
             buf.set_stringn(area.x, y + extra, " ".repeat(gutter - 1), gutter - 1, gstyle);
         }
         app.hits.push((Rect::new(area.x, y, (gutter - 1) as u16, lines), Hit::RowHeader(r)));
 
-        let shade = |c: usize| bands.then(|| super::theme::band(r % 2 == 1, c % 2 == 1, light, truecolor)).flatten().filter(|_| !placeholder(r, c));
+        let shade = |c: usize| bands.then(|| super::theme::band(odd, c % 2 == 1, light, truecolor)).flatten().filter(|_| !placeholder(r, c));
         for (k, &(c, x, w, _)) in visible.iter().enumerate() {
             let x = area.x + (gutter + x) as u16;
             // The gap to the next data column carries the row's band.
@@ -1304,7 +1377,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 && bands
                 && !placeholder(r, c)
                 && !placeholder(r, next)
-                && let Some(bg) = super::theme::band(r % 2 == 1, false, light, truecolor)
+                && let Some(bg) = super::theme::band(odd, false, light, truecolor)
             {
                 for extra in 0..lines {
                     buf.set_string(x + w as u16, y + extra, " ", Style::new().bg(bg));
@@ -1427,7 +1500,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         };
         let mut lines = Vec::new(); // (row, first line, height)
         let mut y = grid.y;
-        for (i, r) in row_range.clone().enumerate() {
+        for (i, &r) in row_list.iter().enumerate() {
             lines.push((r, y, heights[i] as u16));
             y += heights[i] as u16;
         }
@@ -1435,7 +1508,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             let shown: Vec<(u16, u16)> = lines.iter().filter(|&&(r, ..)| (r0..=r1).contains(&r)).map(|&(_, y, h)| (y, y + h)).collect();
             match (shown.first(), shown.last()) {
                 (Some(a), Some(b)) => Span::Shown(a.0, b.1),
-                _ if r1 < row_range.start => Span::Before,
+                _ if r1 < first_row => Span::Before,
                 _ => Span::After,
             }
         };
@@ -1546,7 +1619,12 @@ fn draw_layers(f: &mut Frame, app: &mut App, area: Rect) {
         };
         // `*`: this table has its own setting for the layer.
         let local = if app.layer_is_local(name) { "*" } else { "" };
-        items.push((format!(" {mark} {name}{local} "), style, Some(Hit::Layer(i))));
+        // The filter says how many rows it shows: `filter 2/6`.
+        let count = match app.hidden_count().filter(|_| name == crate::tui::app::FILTER) {
+            Some((hidden, all)) => format!(" {}/{all}", all - hidden),
+            None => String::new(),
+        };
+        items.push((format!(" {mark} {name}{local}{count} "), style, Some(Hit::Layer(i))));
         items.push((" ".into(), Style::new().bg(Color::Black), None));
     }
     chips(f, area, items, &mut app.hits);
@@ -1634,6 +1712,8 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect, helper: Option<&str>) {
                 "own functions: name, parameters, definition, description · + row adds one · F8 deletes".into()
             } else if app.types_view() {
                 "your types: edit Type or Definition · + row adds a type · F8 deletes · Esc back".into()
+            } else if let Some((hidden, all)) = app.hidden_count() {
+                format!("✂ filter: {} of {all} rows shown · click the filter layer or :filter off for all rows · : command", all - hidden)
             } else {
                 "type or double-click to edit · Shift+arrows or drag to select · F9 menu · : command".into()
             },

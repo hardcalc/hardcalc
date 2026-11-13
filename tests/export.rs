@@ -182,3 +182,73 @@ fn wrap_and_range_bg_reach_the_pdf() {
     assert!(text.iter().any(|l| l.contains("the quick") ), "{text:#?}");
     assert!(text.iter().any(|l| l.contains("lazy dog")), "{text:#?}");
 }
+
+const FILTERED: &str = "\
+## Journal :: matrix
+
+| Item | Amount | Status | Note |
+|---|--:|---|---|
+| Rent | 1200 | paid | flat |
+| Power | 85.5 | open | |
+| Internet | 39.99 | paid | cable |
+| Phone | 20 | open | mobile |
+| Car | 300 | due soon | |
+| Books | 45 | paid | |
+
+```footer
+| | Amount |
+|---|---|
+| Total | =sum |
+```
+
+```layer filter
+Status: in(open, \"due soon\")
+Amount: >= 50 < 1000
+Item: contains(r)
+```
+";
+
+fn zipped(path: &std::path::Path, name: &str) -> String {
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name(name).unwrap(), &mut content).unwrap();
+    content
+}
+
+#[test]
+fn filter_becomes_an_autofilter_in_xlsx() {
+    let path = temp("filter.xlsx");
+    let report = export_xlsx(&parse(FILTERED).unwrap(), &path).unwrap();
+    assert_eq!(report.filters, 1, "{report}");
+    let sheet = zipped(&path, "xl/worksheets/sheet1.xml");
+    // Header and data rows, not the footer row below.
+    assert!(sheet.contains("<autoFilter ref=\"A1:D7\">"), "{sheet}");
+    assert!(sheet.contains("<filterColumn colId=\"2\"><filters><filter val=\"open\"/><filter val=\"due soon\"/></filters></filterColumn>"), "{sheet}");
+    assert!(sheet.contains("<customFilters and=\"1\"><customFilter operator=\"greaterThanOrEqual\" val=\"50\"/><customFilter operator=\"lessThan\" val=\"1000\"/></customFilters>"), "{sheet}");
+    assert!(sheet.contains("<customFilter val=\"*r*\"/>"), "{sheet}");
+    // Power and Car are shown, the footer row too.
+    let hidden: Vec<bool> = sheet.split("<row ").skip(1).map(|row| row.split('>').next().unwrap().contains("hidden=\"1\"")).collect();
+    assert_eq!(hidden, [false, true, false, true, true, false, true, false]);
+    // Every row is still in the file.
+    let mut book = open_workbook_auto(&path).unwrap();
+    let values = book.worksheet_range("Journal").unwrap();
+    assert_eq!(values.get_value((1, 0)), Some(&Data::String("Rent".into())));
+    assert_eq!(values.get_value((6, 1)), Some(&Data::Float(45.0)));
+}
+
+#[test]
+fn filter_becomes_an_autofilter_in_ods() {
+    let path = temp("filter.ods");
+    hardcalc::export::export_ods(&parse(FILTERED).unwrap(), &path).unwrap();
+    let content = zipped(&path, "content.xml");
+    assert!(content.contains("<table:database-range table:name=\"__Anonymous_Sheet_DB__0\" table:target-range-address=\"&apos;Journal&apos;.A1:&apos;Journal&apos;.D7\" table:display-filter-buttons=\"true\">") || content.contains("table:target-range-address=\"'Journal'.A1:'Journal'.D7\""), "{content}");
+    assert!(content.contains("<table:filter-condition table:field-number=\"2\" table:operator=\"=\" table:value=\"open\"><table:filter-set-item table:value=\"open\"/><table:filter-set-item table:value=\"due soon\"/></table:filter-condition>"), "{content}");
+    assert!(content.contains("<table:filter-condition table:field-number=\"1\" table:operator=\"&gt;=\" table:value=\"50\" table:data-type=\"number\"/>"), "{content}");
+    assert!(content.contains("<table:filter-condition table:field-number=\"0\" table:operator=\"contains\" table:value=\"r\"/>"), "{content}");
+    let rows: Vec<bool> = content.split("<table:table-row").skip(1).map(|row| row.starts_with(" table:visibility=\"filtered\"")).collect();
+    assert_eq!(rows, [false, true, false, true, true, false, true, false]);
+    // The importer still reads every row.
+    let (doc, _) = hardcalc::import::import_file(&path).unwrap();
+    let (wb, _) = Workbook::from_document(&doc);
+    assert_eq!(wb.sheets[0].raw.len(), 7, "six rows and the footer row as data");
+}

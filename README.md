@@ -159,6 +159,7 @@ layer and column names.
 | Ctrl+Z / Ctrl+Y                  | undo / redo                                                   |
 | F7, F7 again                     | sort the rows by the current column ascending, then descending; with a selection only its rows |
 | `:sortcol`, menu *Edit*          | sort the column on its own (a selection: each of its columns) |
+| `:filter`, `:filter Status = open`, `:filter off` | column filter: show only the rows with the value at the cursor / that meet a condition; remove it (see *Column filters*) |
 | F3 or Ctrl+E                     | open a file                                                   |
 | F4                               | go to a cell (`B5`)                                           |
 | F5 or Ins / F6                   | insert a row below / a column to the right (asks for `Name` or `Name:Type`) |
@@ -353,10 +354,59 @@ The layer bar above the status line shows all layers of the file:
   Esc returns.
 - **New layer:** `:layer new format` (or menu *Insert → Layer…*) adds the
   layer for the current table and opens its layer view right away. `format`,
-  `validate` and `comments` have an effect; other names are saved and shown.
+  `validate`, `filter`, `comments` and `links` have an effect; other names are
+  saved and shown.
 - The built-in layer **formulas** highlights formula cells (cyan, italic).
 - Validation failures are shown in red and counted, commented cells are
   underlined (the comment is shown in the status line).
+
+### Column filters
+
+A filter shows only the rows that meet a condition per column. It is a layer
+of its own, `filter`: the file keeps **every row and only the rule**, hiding
+is done when the table is shown or printed – a filter changes one line in a
+Git diff.
+
+````markdown
+```layer filter
+Status: in(open, paid)
+Amount: >= 100
+```
+````
+
+| Input                              | Effect                                              |
+|------------------------------------|-----------------------------------------------------|
+| click on **▾** in the header of the cursor column (**▼** when filtered), Space on a column header, `:values [Column]`, `/ C L` | the **value list**: every value of the column with a tick and its number of rows – Space or a click ticks, typing searches, Enter applies, Esc leaves |
+| `:filter` (also `/ C V`, menu *Edit*) | only the rows with the value at the cursor       |
+| `:filter Status = open`, `:filter Amount >= 100` | a condition for a column: `=`, `<>`, `<`, `<=`, `>`, `>=`, `in(a, b)`, `contains(text)`, `empty`, `required` (not empty) |
+| `:filter Status`                   | that column, by its value in the cursor row         |
+| `:filter off`, `:filter off Status` | remove all filters of the table / that of a column |
+| click on **■ filter** in the layer bar | show all rows for now, and filter again (not saved) |
+| right-click on **filter** (layer view) | all rows with the rules; typing in a column edits its rule, Del removes it |
+
+In the value list, `(all)` ticks or unticks everything listed. With a text
+typed, Enter keeps just the values listed (type `pa`, Enter: only *paid*).
+The ticks become the rule of the column: `= open`, `in(open, paid)`, `empty`,
+`required` – or none when everything is ticked.
+
+Rules for several columns narrow each other; a new rule for a column replaces
+its old one. A filtered column carries **▼** in its header, the layer bar
+counts the rows shown (`■ filter 2/6`), and row numbers keep their gaps.
+
+- Arrows, PgUp/PgDn and the mouse wheel step over hidden rows. Clearing,
+  copying, cutting, pasting and deleting rows leave hidden rows alone; a
+  selection across hidden rows applies to the shown ones. Filling (Ctrl+D,
+  the handle) and moving rows ask for all rows to be shown first.
+- The row with the cursor is always shown: a new row can be typed in full
+  before the filter hides it, and F4 or a link reaches a hidden row.
+- Formulas and footer rows calculate over **all** rows (`sum(B)` does not
+  change with the filter).
+- The print preview, PDF and grid layouts show the filtered rows (`rows:`
+  picks from them); with the layer switched off, all of them.
+- In slices and scenarios the filter judges the values of the level shown.
+- Exports to xlsx and ods contain all rows and the filter as the autofilter
+  of the sheet, with the same rows hidden – Excel and LibreOffice show the
+  filter buttons and can change or clear it. csv and tsv hold all rows.
 
 ### Split mode (as in Midnight Commander)
 
@@ -622,6 +672,8 @@ For power users; the help (F1) lists them all.
 | `:w [file]`, `:q`, `:q!`, `:wq` | save / quit |
 | `:B5` | go to a cell |
 | `:sort [column] [desc]` | sort (without arguments: the current column, again: descending) |
+| `:filter [Column [condition]]`, `:filter off [Column]` | column filter: only rows that meet the condition (without one: the value at the cursor); `off` removes it |
+| `:values [Column]` | the values of a column as a list to tick (the filter of the column) |
 | `:addrow`, `:delrow`, `:addcol Name[:Type]`, `:delcol` | rows / columns |
 | `:footer [Name]` | add a footer row below the table (a summary per column) |
 | menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, Ctrl+A all files, Ctrl+N / Ctrl+D sort by name / date (again: reverse); a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter; the sidebar starts with its own section **Recent** (the last 20 files opened or saved), also Ctrl+R in the dialog, menu *File → Recent files…* or `:recent` |

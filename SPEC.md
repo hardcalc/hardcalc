@@ -482,8 +482,57 @@ B2: nobold
 ### `validate`
 
 Checks: `required`, `unique`, comparisons (`>= 0`, `< 100`, `<> 0`),
-`in(a, b, c)`. Empty cells are only flagged by `required`. Failures are shown
-by `hardcalc check` and in the interface (red background).
+`in(a, b, c)`, `contains(text)` (upper and lower case alike), `empty`. Empty
+cells are only flagged by `required`. Failures are shown by `hardcalc check`
+and in the interface (red background).
+
+A value with a space, comma, bracket or quote is written in double quotes,
+a quote inside doubled: `= "due soon"`, `in(open, "a, b")`, `= "say ""hi"""`.
+
+### `filter`
+
+Column filters. Every rule names a **column** and the conditions its cells
+must meet, written like the checks of `validate`:
+
+````markdown
+```layer filter
+Status: in(open, paid)
+Amount: >= 100
+Item: contains(rent)
+```
+````
+
+| Condition              | A row is shown if the cell …                          |
+|------------------------|-------------------------------------------------------|
+| `= x`, `<> x`, `< x`, `<= x`, `> x`, `>= x` | compares so with `x` – as numbers if both are numbers, else as text |
+| `in(a, b, c)`          | equals one of the values                              |
+| `contains(text)`       | contains the text (upper and lower case alike)        |
+| `empty`                | is empty                                              |
+| `required`             | is not empty                                          |
+
+A row is shown when it meets **every** rule of its table; several conditions
+in one rule (`>= 100 < 500`) must all hold. An empty cell meets only `empty`
+and `<>`. Values are the calculated ones (a formula counts with its result);
+with slices and scenarios, those of the level shown.
+
+The file always holds all rows in their order; the layer only says which
+ones a program shows. Hiding rows is the task of the program that displays
+or evaluates the table: hardcalc hides them on screen, in the print preview,
+the PDF and in grid layouts (`rows:` picks from the rows shown). Formulas,
+footer rows, charts and live values are **not** affected – `sum(Amount)` is
+the sum of all rows. Whether the layer is switched on is a view setting like
+that of every layer and is not saved; a file opens with its filters on.
+
+The xlsx and ods exports pass the filter on as the autofilter of the sheet
+(header and data rows, without the footer rows) and mark the hidden rows as
+filtered: comparisons, `in(…)`, `contains(…)`, `empty` and `required` become
+the matching conditions; what Excel cannot say in one column filter (more
+than two comparisons, mixed conditions) becomes the list of the values
+shown. csv and tsv hold all rows.
+
+A rule with another target than a column (`B2`, `3`, `row[…]`, `*`), with
+`unique` or with a condition that cannot be read hides nothing and is
+reported by `hardcalc check`.
 
 Predefined layers:
 
@@ -491,6 +540,7 @@ Predefined layers:
 |-------------|----------------------------------------------------|
 | `format`    | presentation (alignment, colors, number format)    |
 | `validate`  | rules (`>= 0`, `required`, `unique`, `in(…)`)      |
+| `filter`    | column filters: rows that do not meet them are hidden |
 | `comments`  | notes on cells (footnotes when printed, see 7)     |
 | `formulas`  | built in: highlights formula cells (default: cyan, italic); a block of your own changes the presentation |
 | `links`     | jumps to other places of the document (see below)  |
@@ -550,7 +600,7 @@ Layer names of your own are allowed; their rules are saved and shown in the
 layer view but have no other effect. Which layers are shown or hidden in the
 interface is a view setting and is not saved in the file.
 The layer bar always lists the predefined layers (`formulas`, `format`,
-`validate`, `comments`, `links`), then the own ones. A layer without rules for
+`validate`, `filter`, `comments`, `links`), then the own ones. A layer without rules for
 the shown table is grey (`○`) and cannot be switched; a right-click opens its
 layer view, and the first rule typed there creates the block.
 

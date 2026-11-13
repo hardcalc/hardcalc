@@ -24,6 +24,7 @@ mod calc_view;
 mod data_layers;
 mod file_dialog;
 mod files;
+mod filter;
 mod jumps;
 pub use jumps::Step;
 pub mod formatting;
@@ -33,9 +34,11 @@ mod functions_view;
 mod point;
 mod shape;
 mod sources;
+mod values;
 pub use functions_view::{FnRow, FN_COLS};
 pub use calc_view::{CalcRow, FormulaStyle, PreviewKind, CALC_COLS};
 pub use context_menu::{ContextMenu, CONTEXT_MENU};
+pub use values::{ValueItem, ValueList};
 use crate::tui::keymap::{self, Cap, Cond};
 
 pub const FORMAT: &str = "format";
@@ -47,7 +50,9 @@ pub const COMMENTS: &str = "comments";
 /// Layer with links (`A2: Expenses[Rent, Amount]`): ↗ in the cell, a click or F4 jumps.
 pub const LINKS: &str = crate::links::LAYER;
 /// The layers that act; the layer bar always shows them, in this order.
-pub const PREDEFINED_LAYERS: [&str; 5] = [FORMULAS, FORMAT, VALIDATE, COMMENTS, LINKS];
+/// Layer whose rules hide rows (`Status: = open`).
+pub const FILTER: &str = layers::FILTER;
+pub const PREDEFINED_LAYERS: [&str; 6] = [FORMULAS, FORMAT, VALIDATE, FILTER, COMMENTS, LINKS];
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const UNDO_LIMIT: usize = 200;
 
@@ -152,6 +157,12 @@ pub enum Hit {
     Link(usize, usize),
     /// The way back after a jump, in the status line.
     Back,
+    /// The ▾ / ▼ in a column header: opens the value list of the column.
+    Values(usize),
+    /// Line `n` of the open value list (0: all).
+    ValueItem(usize),
+    /// The bottom line of the value list: apply.
+    ValuesApply,
 }
 
 /// What a mouse drag in the layout editor does.
@@ -397,6 +408,10 @@ pub struct App {
     /// (sheet, target, text) of all comments.
     comment_rules: Vec<(usize, layers::Target, String)>,
     pub violations: HashMap<CellId, String>,
+    /// The rules of the `filter` layers.
+    filters: layers::Filters,
+    /// (sheet, data layer) → per data row, whether the filter hides it.
+    hidden_rows: HashMap<(usize, usize), Vec<bool>>,
     /// Cells with a link and their destination (shown layers only).
     pub links: HashMap<CellId, String>,
     /// The evaluated calculation sheet, until the document changes.
@@ -409,6 +424,8 @@ pub struct App {
     pub bundle: Option<crate::bundle::Bundle>,
     /// The open context menu.
     pub context: Option<ContextMenu>,
+    /// The open value list of a column (filter by ticking values).
+    pub values: Option<ValueList>,
     /// Which conditional inputs work in this terminal.
     pub caps: keymap::Caps,
     /// Where observed capabilities are remembered.
@@ -848,12 +865,15 @@ impl App {
             formula_formats: Formats::default(),
             comment_rules: Vec::new(),
             violations: HashMap::new(),
+            filters: layers::Filters::default(),
+            hidden_rows: HashMap::new(),
             links: HashMap::new(),
             calc_cache: None,
             formula_style: FormulaStyle::default(),
             compression: crate::storage::Compression::None,
             bundle: None,
             context: None,
+            values: None,
             caps: keymap::Caps::default(),
             caps_path: None,
             key_test: None,
@@ -920,6 +940,7 @@ impl App {
             thumbnail: None,
         };
         app.rebuild();
+        app.snap_to_shown();
         app
     }
 
@@ -930,6 +951,7 @@ impl App {
         self.attached = layers::attach(&self.doc, &self.wb);
         self.formats = Formats::new(&self.attached, FORMAT);
         self.formula_formats = Formats::new(&self.attached, FORMULAS);
+        self.filters = layers::Filters::new(&self.attached, FILTER);
         self.comment_rules = self
             .attached
             .iter()
@@ -1475,6 +1497,7 @@ impl App {
                 self.violations.entry(v.cell).or_insert(v.message);
             }
         }
+        self.refilter();
         self.relink();
     }
 
@@ -1530,6 +1553,9 @@ impl App {
             self.layer_overrides.insert((sheet, name.to_string()), show);
         }
         self.revalidate();
+        if name == FILTER {
+            self.snap_to_shown();
+        }
     }
 
     pub fn toggle_layer_scope(&mut self) {
@@ -1646,6 +1672,18 @@ impl App {
             Some(p) => {
                 let axis = if c == 0 { self.axis_name(p.col_axis) } else { String::new() };
                 (axis, p.values[p.col_axis][c].clone())
+            }
+            // A filtered column carries ▼ beside its letter.
+            None if self.column_filtered(c) => {
+                let col = &self.wb.sheets[self.view.sheet].columns[c];
+                let name = if col.ty.unit.is_none() { col.name.clone() } else { format!("{} [{}]", col.name, col.ty.unit) };
+                if name == col_letters(c) { ("▼".into(), name) } else { (format!("{} ▼", col_letters(c)), name) }
+            }
+            // The column with the cursor offers its value list: ▾.
+            None if self.values_button(c) => {
+                let col = &self.wb.sheets[self.view.sheet].columns[c];
+                let name = if col.ty.unit.is_none() { col.name.clone() } else { format!("{} [{}]", col.name, col.ty.unit) };
+                (format!("{} ▾", col_letters(c)), name)
             }
             None => {
                 let playground = self.wb.sheets[self.view.sheet].shape == Shape::Playground;
@@ -2392,6 +2430,16 @@ impl App {
         table
     }
 
+    /// The data rows of table `s` that are printed on level `z`: all, or
+    /// those its filter shows (while the filter layer is switched on).
+    fn print_rows(&self, s: usize, z: usize) -> Vec<usize> {
+        let rows = self.wb.sheets[s].cells.len();
+        match self.hidden_rows.get(&(s, z)).filter(|_| self.layer_visible_in(FILTER, s)) {
+            Some(hidden) => (0..rows).filter(|&r| hidden.get(r) != Some(&true)).collect(),
+            None => (0..rows).collect(),
+        }
+    }
+
     fn print_table_inner(&mut self, s: usize, z: usize, footnote: &mut usize) -> PrintTable {
         let sheet = &self.wb.sheets[s];
         let mut title = sheet.name.clone().unwrap_or_else(|| format!("Table {}", s + 1));
@@ -2401,15 +2449,19 @@ impl App {
         let sheet = &self.wb.sheets[s];
         let mut headers: Vec<String> = sheet.columns.iter().map(|c| c.name.clone()).collect();
         let (rows, cols) = (sheet.cells.len(), sheet.columns.len());
+        // Rows the filter hides are not printed; the bands alternate over the others.
+        let kept = self.print_rows(s, z);
+        let place: HashMap<usize, usize> = kept.iter().enumerate().map(|(i, &r)| (r, i)).collect();
         let mut rows: Vec<Vec<PrintCell>> = (0..rows)
             .map(|r| {
+                let band = place.get(&r).copied().unwrap_or(r);
                 (0..cols)
                     .map(|c| {
                         let v = self.table_cell_view_in((s, r, c), z);
                         let mut color = if v.error { Some((190, 0, 0)) } else { v.style.fg.as_ref().and_then(print::print_color) };
                         let mut bg = v.style.bg.as_ref().and_then(print::print_bg);
                         // As on screen: banded rows, and a rule violation in red.
-                        if bg.is_none() && self.bands && let Some(ratatui::style::Color::Rgb(r, g, b)) = tui_band(r) {
+                        if bg.is_none() && self.bands && let Some(ratatui::style::Color::Rgb(r, g, b)) = tui_band(band) {
                             bg = Some((r, g, b));
                         }
                         if v.violation {
@@ -2441,14 +2493,23 @@ impl App {
                 if let Some(c) = column {
                     headers[c].push_str(&marker);
                 } else if let Some((r, c)) =
-                    (0..rows.len()).flat_map(|r| (0..cols).map(move |c| (r, c))).find(|&(r, c)| target.matches(&mut self.wb, (s, r, c)))
+                    kept.iter().flat_map(|&r| (0..cols).map(move |c| (r, c))).find(|&(r, c)| target.matches(&mut self.wb, (s, r, c)))
                 {
                     rows[r][c].text.push_str(&marker);
                 } else {
+                    // Nothing printed carries this comment: its number is free again.
+                    *footnote -= 1;
                     continue;
                 }
                 footnotes.push(format!("{marker} {text}"));
             }
+        }
+        if kept.len() < rows.len() {
+            let mut r = 0;
+            rows.retain(|_| {
+                r += 1;
+                place.contains_key(&(r - 1))
+            });
         }
         // Footer rows in bold below the data; the label in the first column.
         for k in 0..self.wb.sheets[s].footer.len() {
@@ -2897,8 +2958,10 @@ impl App {
             RowPick::Total => Vec::new(),
             RowPick::Ranked { n, by, bottom } => {
                 let c = self.wb.sheets[s].columns.iter().position(|c| c.name == *by).ok_or_else(|| format!("rows: no column '{by}' to rank by"))?;
-                let mut ranked: Vec<(usize, f64)> = (0..data)
-                    .filter_map(|r| match self.wb.value((s, r, in_layer(c, z))) {
+                // Position in the printed rows, ranked by the value of its table row.
+                let source = self.print_rows(s, z);
+                let mut ranked: Vec<(usize, f64)> = (0..data.min(source.len()))
+                    .filter_map(|r| match self.wb.value((s, source[r], in_layer(c, z))) {
                         Value::Num(x, _) => Some((r, x)),
                         Value::Date(d) => Some((r, d as f64)),
                         _ => None,
@@ -3515,8 +3578,10 @@ impl App {
             self.info(format!("layer {name} exists for this table – layer view: typing edits its rules · Esc back"));
         } else if name == FORMULAS {
             // set_solo explained the view already.
+        } else if name == FILTER {
+            self.info("layer filter added – type a condition into a column: = open, >= 100, in(a, b), contains(text), empty · Esc back");
         } else if !matches!(name, FORMAT | VALIDATE | COMMENTS | LINKS) {
-            self.info(format!("layer {name} added – its rules are kept and shown, but only format, validate, comments and links act · Esc back"));
+            self.info(format!("layer {name} added – its rules are kept and shown, but only format, validate, filter, comments and links act · Esc back"));
         } else {
             self.info(format!("layer {name} added – type a rule into a cell or selection · Esc back"));
         }
@@ -3540,6 +3605,10 @@ impl App {
     /// Rule target for the cursor: the cell (`B2`) or the selected range (`B2:D4`).
     fn solo_target(&self) -> String {
         let a1 = |(r, c): (usize, usize)| format!("{}{}", col_letters(c), r + 1);
+        // A filter rule belongs to a column.
+        if self.solo.as_deref() == Some(FILTER) {
+            return self.filter_target(self.view.cursor.1);
+        }
         let (from, to) = self.selection();
         if from == to { a1(from) } else { format!("{}:{}", a1(from), a1(to)) }
     }
@@ -4049,6 +4118,8 @@ impl App {
             return self.commit_value(String::new());
         }
         let ((r0, c0), (r1, c1)) = self.selection();
+        // Rows the filter hides keep their content.
+        let shown = self.shown_in(r0, r1);
         let footer: Vec<(usize, usize)> = (r0..=r1)
             .filter_map(|r| self.footer_at(r))
             .flat_map(|k| (c0..=c1).map(move |c| (k, c)))
@@ -4066,8 +4137,9 @@ impl App {
         }
         // In a data layer: its own cells (they take the table's again).
         if let z @ 1.. = self.shown_layer() {
-            let cells = (r0..=r1)
-                .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
+            let cells = shown
+                .iter()
+                .flat_map(|&r| (c0..=c1).map(move |c| (r, c)))
                 .filter(|&(r, c)| !self.own_raw(z, r, c).is_empty())
                 .map(|(r, c)| (r, c, String::new()))
                 .collect();
@@ -4075,8 +4147,9 @@ impl App {
         }
         // Only cells with data (an empty table or cells beyond it: nothing to clear).
         let raw = &self.wb.sheets[self.view.sheet].raw;
-        let cells = (r0..=r1)
-            .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
+        let cells = shown
+            .iter()
+            .flat_map(|&r| (c0..=c1).map(move |c| (r, c)))
             .filter(|&(r, c)| raw.get(r).and_then(|row| row.get(c)).is_some_and(|v| !v.is_empty()))
             .map(|(r, c)| (r, c, String::new()))
             .collect();
@@ -4101,7 +4174,7 @@ impl App {
         let ((r0, c0), (r1, c1)) = self.selection();
         let (rows, cols) = self.dims();
         self.clipboard = (r0..=r1.min(rows.saturating_sub(1)))
-            .filter(|&r| r < rows)
+            .filter(|&r| r < rows && self.row_shown(r))
             .map(|r| (c0..=c1.min(cols.saturating_sub(1))).filter(|&c| c < cols).map(|c| self.effective_raw(r, c)).collect())
             .collect();
         let n: usize = self.clipboard.iter().map(Vec::len).sum();
@@ -4125,10 +4198,15 @@ impl App {
                 _ => self.error("footer cells are pasted one by one"),
             };
         }
+        // Row by row into the shown rows: those the filter hides are skipped.
+        let targets: Vec<usize> = std::iter::successors(Some(r0), |&r| Some(self.step_row(r, 1)).filter(|&next| next > r)).take(grid.len()).collect();
+        if targets.len() < grid.len() {
+            return self.error("not enough rows below to paste into");
+        }
         let cells: Vec<(usize, usize, String)> = grid
             .into_iter()
-            .enumerate()
-            .flat_map(|(i, row)| row.into_iter().enumerate().map(move |(j, v)| (r0 + i, c0 + j, v)))
+            .zip(targets)
+            .flat_map(|(row, r)| row.into_iter().enumerate().map(move |(j, v)| (r, c0 + j, v)))
             .collect();
         let n = cells.len();
         self.set_cells(cells);
@@ -4205,10 +4283,11 @@ impl App {
         } else {
             self.view.anchor = None;
         }
-        let (rows, cols) = self.view_dims();
-        let r = (self.view.cursor.0 as isize + dr).clamp(0, rows.saturating_sub(1) as isize);
+        let (_, cols) = self.view_dims();
+        // Rows hidden by the filter are stepped over.
+        let r = self.step_row(self.view.cursor.0, dr);
         let c = (self.view.cursor.1 as isize + dc).clamp(0, cols.saturating_sub(1) as isize);
-        self.view.cursor = (r as usize, c as usize);
+        self.view.cursor = (r, c as usize);
         self.view.follow = true;
     }
 
@@ -4229,8 +4308,11 @@ impl App {
             Some(Header::Corner) if dr != 0 && self.layer_count() > 0 && !extend => self.step_layer(dr),
             Some(Header::Corner) if dr > 0 && rows > 0 => self.enter_header(Header::Row, 0, 0),
             Some(Header::Column) if dc < 0 && c == 0 && !extend => self.enter_header(Header::Corner, 0, 0),
-            Some(Header::Row) if dr < 0 && r == 0 && !extend => self.enter_header(Header::Corner, 0, 0),
-            Some(Header::Column) if dr > 0 => self.leave_header(),
+            Some(Header::Row) if dr < 0 && self.step_row(r, -1) == r && !extend => self.enter_header(Header::Corner, 0, 0),
+            Some(Header::Column) if dr > 0 => {
+                self.leave_header();
+                self.snap_to_shown();
+            }
             Some(Header::Row) if dc > 0 => self.leave_header(),
             Some(Header::Column) if dc != 0 => {
                 self.extend_header(extend);
@@ -4238,11 +4320,12 @@ impl App {
             }
             Some(Header::Row) if dr != 0 => {
                 self.extend_header(extend);
-                self.view.cursor.0 = along(r, dr, rows);
+                self.view.cursor.0 = self.step_row(r, dr);
             }
             // Already at the edge.
             Some(_) => {}
-            None if dr == -1 && dc == 0 && r == 0 && c < cols && !extend => self.enter_header(Header::Column, 0, c),
+            // From the first row (the first one the filter shows) up onto the header.
+            None if dr == -1 && dc == 0 && self.step_row(r, -1) == r && c < cols && !extend => self.enter_header(Header::Column, 0, c),
             None if dc == -1 && dr == 0 && c == 0 && r < rows && !extend => self.enter_header(Header::Row, r, 0),
             None => return false,
         }
@@ -4443,6 +4526,9 @@ impl App {
             Some(Header::Row) if dr != 0 => (r0, r1, rows, dr),
             _ => return,
         };
+        if header == Some(Header::Row) && self.hidden_count().is_some() {
+            return self.error("rows are moved with all rows shown – switch the filter layer off first");
+        }
         if n == 0 || hi >= n || (d < 0 && lo == 0) || (d > 0 && hi + 1 >= n) {
             return;
         }
@@ -4527,6 +4613,7 @@ impl App {
         if kind == ViewKind::Table {
             self.view.layer = self.levels.get(&sheet).copied().unwrap_or(0);
             self.clamp_view();
+            self.snap_to_shown();
         }
         self.layout_grab = false;
     }
@@ -4581,15 +4668,21 @@ impl App {
     /// Commits a running edit (if any) and moves by (dr, dc).
     fn commit_edit(&mut self, dr: isize, dc: isize) {
         if let Mode::Edit { buf, .. } = std::mem::replace(&mut self.mode, Mode::Normal) {
+            let edited = self.view.cursor.0;
             if buf != self.cursor_edit_text() {
                 self.commit_value(buf);
             }
+            let was_hidden = self.row_hidden(edited);
             // Names of the table, its columns and footers: the cursor stays on the header.
             let corner = matches!(self.on_header(), Some(Header::Corner | Header::Column | Header::Row));
             if std::mem::take(&mut self.skip_move) || corner || matches!(self.view.kind, ViewKind::Layout(_)) {
                 self.view.follow = true;
             } else {
                 self.move_by(dr, dc, false);
+            }
+            // The row just typed no longer meets the filter: say where it went.
+            if was_hidden && self.view.cursor.0 != edited && self.message.as_ref().is_none_or(|m| !m.error) {
+                self.info(format!("row {} does not meet the filter and is hidden – the filter layer (or :filter off) shows all rows", edited + 1));
             }
         }
     }
@@ -4666,6 +4759,9 @@ impl App {
         }
         if self.context.is_some() {
             return self.key_context(key);
+        }
+        if self.values.is_some() {
+            return self.key_values(key);
         }
         if self.show_help {
             return self.key_help(key);
@@ -4746,6 +4842,8 @@ impl App {
                     _ => self.move_lines(d, 0),
                 }
             }
+            // On a column header, Space opens its value list (the filter).
+            KeyCode::Char(' ') if !ctrl && !alt && self.on_header() == Some(Header::Column) && self.view.cursor.1 < self.dims().1 => self.open_values(None),
             KeyCode::Up if alt && self.view.kind == ViewKind::Table => self.step_layer(-1),
             KeyCode::Down if alt && self.view.kind == ViewKind::Table => self.step_layer(1),
             KeyCode::Up => self.move_by(-1, 0, shift),
@@ -4756,10 +4854,17 @@ impl App {
             KeyCode::BackTab => self.tab_key(true),
             KeyCode::PageDown => self.move_by(self.view.page_rows as isize, 0, shift),
             KeyCode::PageUp => self.move_by(-(self.view.page_rows as isize), 0, shift),
-            KeyCode::Home if ctrl => self.move_to(0, 0),
+            KeyCode::Home if ctrl => {
+                self.move_to(0, 0);
+                self.snap_to_shown();
+            }
             KeyCode::End if ctrl => {
                 let (rows, cols) = self.dims();
                 self.move_to(rows.saturating_sub(1), cols.saturating_sub(1));
+                // The last row the filter shows.
+                if self.row_hidden(self.view.cursor.0) {
+                    self.view.cursor.0 = self.step_row(self.view.cursor.0, -1);
+                }
             }
             KeyCode::Home => self.move_to(self.view.cursor.0, 0),
             KeyCode::End => self.move_to(self.view.cursor.0, self.dims().1.saturating_sub(1)),
@@ -4903,6 +5008,7 @@ impl App {
     fn overlay_open(&self) -> bool {
         self.key_test.is_some()
             || self.context.is_some()
+            || self.values.is_some()
             || self.show_help
             || self.confirm.is_some()
             || self.menu.is_some()
@@ -4941,6 +5047,19 @@ impl App {
                     Some(Hit::ContextItem(i)) => self.choose_context(i),
                     _ => self.context = None,
                 }
+            }
+            return;
+        }
+        if let Some(list) = &self.values {
+            let inside = list.rect.contains(pos);
+            match m.kind {
+                MouseEventKind::Down(_) => {
+                    let hit = self.hits.iter().rev().find(|(r, h)| r.contains(pos) && matches!(h, Hit::ValueItem(_) | Hit::ValuesApply)).map(|(_, h)| *h);
+                    self.click_values(hit, inside);
+                }
+                MouseEventKind::ScrollDown => self.key_values(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+                MouseEventKind::ScrollUp => self.key_values(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+                _ => {}
             }
             return;
         }
@@ -5135,6 +5254,7 @@ impl App {
                             self.start_edit(None);
                         }
                     }
+                    Some(Hit::Values(c)) => self.open_values(Some(c)),
                     Some(Hit::ColHeader(c)) if self.view.kind == ViewKind::Table && self.view.pivot.is_none() => {
                         if c < self.view_dims().1 {
                             self.click_header(Header::Column, (0, c), m.modifiers.contains(KeyModifiers::SHIFT));
@@ -5159,7 +5279,7 @@ impl App {
                         self.fill_drag = Some(self.selection());
                         self.fill_to = None;
                     }
-                    Some(Hit::RowHeader(_) | Hit::File(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_)) => {}
+                    Some(Hit::RowHeader(_) | Hit::File(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_) | Hit::ValueItem(_) | Hit::ValuesApply) => {}
                     Some(Hit::Corner) => {
                         if matches!(self.mode, Mode::Edit { .. }) {
                             self.commit_edit(0, 0);
@@ -5341,7 +5461,9 @@ impl App {
                 if m.modifiers.contains(KeyModifiers::SHIFT) {
                     self.view.scroll.1 = if down { (self.view.scroll.1 + 1).min(cols.saturating_sub(1)) } else { self.view.scroll.1.saturating_sub(1) };
                 } else {
-                    self.view.scroll.0 = if down { (self.view.scroll.0 + 3).min(rows.saturating_sub(1)) } else { self.view.scroll.0.saturating_sub(3) };
+                    // Three shown rows: those the filter hides do not count.
+                    let top = self.rows_from(self.view.scroll.0, 1).first().copied().unwrap_or(self.view.scroll.0);
+                    self.view.scroll.0 = if down { self.step_row(top, 3).min(rows.saturating_sub(1)) } else { self.step_row(top, -3) };
                 }
                 self.view.follow = false;
             }
@@ -5510,7 +5632,7 @@ impl App {
             "layer" if args.len() == 2 && args[0] == "new" => self.new_layer(args[1]),
             "layer" if args.len() > 2 && args[0] == "new" => self.error("a layer name is one word (months, variants: :slice Name, :scenario Name)"),
             "layer" if args == ["new"] && !self.layer_names.iter().any(|n| n == "new") => {
-                self.error("usage: :layer new <name> – e.g. format, validate, comments")
+                self.error("usage: :layer new <name> – e.g. format, validate, filter, comments")
             }
             "layer" => match args.first() {
                 Some(name) => {
@@ -5693,9 +5815,20 @@ impl App {
                     return self.error("no data row selected");
                 }
                 let r1 = r1.min(rows - 1);
+                // Rows the filter hides stay.
+                let doomed = self.shown_in(r0, r1);
                 // References and format rules follow the rows below; those of the deleted rows go.
-                let gone = r1 - r0 + 1;
-                let moved: Vec<usize> = (0..rows).map(|r| if r < r0 { r } else if r <= r1 { crate::refs::GONE } else { r - gone }).collect();
+                let mut kept = 0;
+                let moved: Vec<usize> = (0..rows)
+                    .map(|r| {
+                        if doomed.contains(&r) {
+                            crate::refs::GONE
+                        } else {
+                            kept += 1;
+                            kept - 1
+                        }
+                    })
+                    .collect();
                 let same: Vec<usize> = (0..self.dims().1).collect();
                 let sheet = self.view.sheet;
                 self.with_doc(|doc| {
@@ -5703,7 +5836,9 @@ impl App {
                     if let Some(t) = table_mut(doc, sheet) {
                         data_layers::pad_layers(t);
                         for grid in t.grids_mut() {
-                            grid.drain(r0..=r1);
+                            for &r in doomed.iter().rev() {
+                                grid.remove(r);
+                            }
                         }
                     }
                 });
@@ -5714,7 +5849,8 @@ impl App {
                         self.view.header = None;
                     }
                 }
-                self.info(format!("deleted {} row(s)", r1 - r0 + 1));
+                self.snap_to_shown();
+                self.info(format!("deleted {} row(s)", doomed.len()));
             }
             "addcol" => {
                 let Some(spec) = args.first() else { return self.error("usage: :addcol Name[:Type]") };
@@ -5899,6 +6035,12 @@ impl App {
                 self.rebuild();
                 self.switch_sheet(self.wb.sheets.len() - 1);
             }
+            "filter" => self.filter_command(&args),
+            "values" if args.is_empty() => self.open_values(None),
+            "values" => match self.find_column(&args.join(" ")) {
+                Some(c) => self.open_values(Some(c)),
+                None => self.error(format!("no column '{}'", args.join(" "))),
+            },
             "filldown" => self.fill_down(),
             "fillright" => self.fill_right(),
             "shape" => self.set_shape(args.first().copied()),

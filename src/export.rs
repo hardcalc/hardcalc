@@ -5,7 +5,8 @@
 //! the cached result); otherwise the value is written and the hardcalc
 //! formula becomes a note. Types become number formats, the `format` layer
 //! cell formats, `comments` notes, enum types and `validate` rules data
-//! validation, and charts native Excel charts.
+//! validation, the `filter` layer an autofilter with its rows hidden, and
+//! charts native Excel charts.
 
 use crate::chart::{self, ChartSpec, ChartType};
 use crate::engine::{col_letters, Cell, Workbook};
@@ -25,6 +26,8 @@ pub struct ExportReport {
     pub kept: usize,
     pub notes: usize,
     pub validations: usize,
+    /// Tables written with their filter (autofilter, hidden rows).
+    pub filters: usize,
     pub charts: usize,
     /// CSV/TSV: the files written (values only).
     pub files: Vec<std::path::PathBuf>,
@@ -46,7 +49,11 @@ impl std::fmt::Display for ExportReport {
         if self.kept > 0 {
             write!(f, " ({} as value with note)", self.kept)?;
         }
-        write!(f, ", {} notes, {} validations, {} charts", self.notes, self.validations, self.charts)
+        write!(f, ", {} notes, {} validations, {} charts", self.notes, self.validations, self.charts)?;
+        if self.filters > 0 {
+            write!(f, ", {} filter(s)", self.filters)?;
+        }
+        Ok(())
     }
 }
 
@@ -442,7 +449,7 @@ fn validation(check: &Check) -> Option<Validation> {
     match check {
         Check::Compare(op, v) => Some(Validation::Compare(*op, crate::value::parse_number(v)?.0)),
         Check::OneOf(options) => Some(Validation::List(options.clone())),
-        Check::Required | Check::Unique => None,
+        Check::Required | Check::Unique | Check::Empty | Check::Contains(_) => None,
     }
 }
 
@@ -466,6 +473,119 @@ struct SheetOut {
     cells: Vec<Vec<CellOut>>,
     /// Data area (rows, cols inclusive) and rule.
     validations: Vec<((usize, usize, usize, usize), Validation)>,
+    filter: Option<FilterOut>,
+}
+
+/// The `filter` layer of a table: an autofilter over header and data rows
+/// (the footer rows below stay out of it).
+struct FilterOut {
+    /// Per data row, whether the filter hides it.
+    hidden: Vec<bool>,
+    /// (column, its conditions, the values of the rows that meet them).
+    columns: Vec<(usize, Vec<Check>, Vec<Value>)>,
+}
+
+fn filter_out(filters: &layers::Filters, wb: &mut Workbook, s: usize) -> Option<FilterOut> {
+    let hidden = filters.hidden(wb, s, 0);
+    if hidden.is_empty() {
+        return None;
+    }
+    let columns = filters
+        .conditions(wb, s)
+        .into_iter()
+        .map(|(c, checks)| {
+            let mut passing: Vec<Value> = Vec::new();
+            for r in 0..hidden.len() {
+                let v = wb.value((s, r, c));
+                if checks.iter().all(|check| check.holds(&v)) && !passing.contains(&v) {
+                    passing.push(v);
+                }
+            }
+            (c, checks, passing)
+        })
+        .collect();
+    Some(FilterOut { hidden, columns })
+}
+
+fn is_blank(v: &Value) -> bool {
+    matches!(v, Value::Null) || matches!(v, Value::Text(t) if t.trim().is_empty())
+}
+
+/// The conditions of a column as an Excel filter: one or two comparisons, a
+/// list of values, "contains", blanks or non-blanks. What Excel cannot say
+/// in one filter becomes the list of the values that are shown.
+fn xl_filter(checks: &[Check], passing: &[Value]) -> xl::FilterCondition {
+    use xl::FilterCriteria as Criteria;
+    let criteria = |op: &CmpOp| match op {
+        CmpOp::Eq => Criteria::EqualTo,
+        CmpOp::Ne => Criteria::NotEqualTo,
+        CmpOp::Lt => Criteria::LessThan,
+        CmpOp::Le => Criteria::LessThanOrEqualTo,
+        CmpOp::Gt => Criteria::GreaterThan,
+        CmpOp::Ge => Criteria::GreaterThanOrEqualTo,
+    };
+    let custom = |f: xl::FilterCondition, c: Criteria, v: &str| match crate::value::parse_number(v) {
+        Some((n, _)) => f.add_custom_filter(c, n),
+        None => f.add_custom_filter(c, v),
+    };
+    let list = |f: xl::FilterCondition, v: &str| match crate::value::parse_number(v) {
+        _ if v.trim().is_empty() => f.add_list_blanks_filter(),
+        Some((n, _)) => f.add_list_filter(n),
+        None => f.add_list_filter(v),
+    };
+    let f = xl::FilterCondition::new();
+    match checks {
+        [Check::Compare(op, v)] if !v.trim().is_empty() => custom(f, criteria(op), v),
+        [Check::Compare(a, x), Check::Compare(b, y)] if !x.trim().is_empty() && !y.trim().is_empty() => custom(custom(f, criteria(a), x), criteria(b), y),
+        [Check::OneOf(options)] => options.iter().fold(f, |f, o| list(f, o)),
+        [Check::Contains(text)] => f.add_custom_filter(Criteria::Contains, text.as_str()),
+        [Check::Empty] => f.add_list_blanks_filter(),
+        [Check::Required] => f.add_custom_filter(Criteria::NotEqualTo, " "),
+        _ => passing.iter().fold(f, |f, v| match v {
+            v if is_blank(v) => f.add_list_blanks_filter(),
+            Value::Num(n, _) => f.add_list_filter(*n),
+            other => f.add_list_filter(other.display(None, false).as_str()),
+        }),
+    }
+}
+
+/// The conditions of a column as ODF filter conditions (all must hold).
+fn ods_filter(field: usize, checks: &[Check]) -> Vec<String> {
+    let condition = |operator: &str, value: &str, items: &[String]| {
+        let number = if !value.is_empty() && crate::value::parse_number(value).is_some() { " table:data-type=\"number\"" } else { "" };
+        let head = format!("<table:filter-condition table:field-number=\"{field}\" table:operator=\"{}\" table:value=\"{}\"{number}", xml(operator), xml(value));
+        if items.is_empty() {
+            format!("{head}/>")
+        } else {
+            let items: String = items.iter().map(|i| format!("<table:filter-set-item table:value=\"{}\"/>", xml(i))).collect();
+            format!("{head}>{items}</table:filter-condition>")
+        }
+    };
+    checks
+        .iter()
+        .filter_map(|check| match check {
+            Check::Compare(op, v) => {
+                let sym = match op {
+                    CmpOp::Eq => "=",
+                    CmpOp::Ne => "!=",
+                    CmpOp::Lt => "<",
+                    CmpOp::Le => "<=",
+                    CmpOp::Gt => ">",
+                    CmpOp::Ge => ">=",
+                };
+                Some(match (v.trim().is_empty(), op) {
+                    (true, CmpOp::Ne) => condition("!empty", "", &[]),
+                    (true, _) => condition("empty", "", &[]),
+                    _ => condition(sym, v, &[]),
+                })
+            }
+            Check::OneOf(options) => Some(condition("=", options.first().map_or("", |o| o.as_str()), options)),
+            Check::Contains(text) => Some(condition("contains", text, &[])),
+            Check::Empty => Some(condition("empty", "", &[])),
+            Check::Required => Some(condition("!empty", "", &[])),
+            Check::Unique => None,
+        })
+        .collect()
 }
 
 /// Computes all values and translates formulas, formats, comments and
@@ -475,6 +595,7 @@ fn prepare(doc: &Document) -> (Workbook, Vec<SheetOut>, ExportReport) {
     wb.eval_all();
     let attached: Vec<Attached> = layers::attach(doc, &wb);
     let formats = Formats::new(&attached, "format");
+    let filters = layers::Filters::new(&attached, layers::FILTER);
     let names = sheet_names(&wb);
     let mut report = ExportReport::default();
     let mut sheets = Vec::new();
@@ -598,7 +719,9 @@ fn prepare(doc: &Document) -> (Workbook, Vec<SheetOut>, ExportReport) {
         }
         report.validations += validations.len();
         let headers = wb.sheets[s].columns.iter().map(|c| c.name.clone()).collect();
-        sheets.push(SheetOut { name: names[s].clone(), headers, cells, validations });
+        let filter = filter_out(&filters, &mut wb, s);
+        report.filters += usize::from(filter.is_some());
+        sheets.push(SheetOut { name: names[s].clone(), headers, cells, validations, filter });
         report.sheets += 1;
     }
     (wb, sheets, report)
@@ -694,6 +817,21 @@ pub fn export_xlsx(doc: &Document, path: &Path) -> Result<ExportReport, String> 
         }
         for ((r0, c0, r1, c1), v) in &sheet.validations {
             ws.add_data_validation(*r0 as u32 + 1, *c0 as u16, *r1 as u32 + 1, *c1 as u16, &xl_validation(v).map_err(err)?).map_err(err)?;
+        }
+        // The filter: Excel's own, over header and data; the rows it hides
+        // are those hardcalc hides.
+        if let Some(filter) = sheet.filter.as_ref().filter(|_| !sheet.headers.is_empty()) {
+            ws.autofilter(0, 0, filter.hidden.len() as u32, sheet.headers.len() as u16 - 1).map_err(err)?;
+            ws.filter_automatic_off();
+            for (c, checks, passing) in &filter.columns {
+                // A column in which nothing passes has no values to list.
+                if let Err(xl::XlsxError::ParameterError(_)) = ws.filter_column(*c as u16, &xl_filter(checks, passing)) {
+                    ws.filter_column(*c as u16, &xl::FilterCondition::new().add_list_filter("")).map_err(err)?;
+                }
+            }
+            for (r, _) in filter.hidden.iter().enumerate().filter(|(_, h)| **h) {
+                ws.set_row_hidden(r as u32 + 1).map_err(err)?;
+            }
         }
         ws.set_freeze_panes(1, 0).map_err(err)?;
         ws.autofit();
@@ -1026,8 +1164,25 @@ pub fn export_ods(doc: &Document, path: &Path) -> Result<ExportReport, String> {
     let mut styles = OdsStyles::default();
     let mut validations = String::new();
     let mut tables = String::new();
+    let mut ranges = String::new();
     let mut count = 0;
-    for sheet in &sheets {
+    for (index, sheet) in sheets.iter().enumerate() {
+        // The filter: the sheet's autofilter (LibreOffice keeps it as an
+        // anonymous database range), the rows it hides marked as filtered.
+        if let Some(filter) = sheet.filter.as_ref().filter(|_| !sheet.headers.is_empty()) {
+            let conditions: Vec<String> = filter.columns.iter().flat_map(|(c, checks, _)| ods_filter(*c, checks)).collect();
+            let body = match conditions.as_slice() {
+                [] => String::new(),
+                [one] => format!("<table:filter>{one}</table:filter>"),
+                all => format!("<table:filter><table:filter-and>{}</table:filter-and></table:filter>", all.concat()),
+            };
+            ranges.push_str(&format!(
+                "<table:database-range table:name=\"__Anonymous_Sheet_DB__{index}\" table:target-range-address=\"{}:{}\" table:display-filter-buttons=\"true\">{body}</table:database-range>",
+                xml(&ods_address(&sheet.name, 0, 0)),
+                xml(&ods_address(&sheet.name, filter.hidden.len(), sheet.headers.len() - 1))
+            ));
+        }
+        let filtered = |r: usize| sheet.filter.as_ref().is_some_and(|f| f.hidden.get(r) == Some(&true));
         // Validation names per cell (later rules win, as one cell has one validation).
         let mut cell_validation: std::collections::HashMap<(usize, usize), String> = Default::default();
         for ((r0, c0, r1, c1), v) in &sheet.validations {
@@ -1071,7 +1226,7 @@ pub fn export_ods(doc: &Document, path: &Path) -> Result<ExportReport, String> {
         }
         tables.push_str("</table:table-row>");
         for (r, row) in sheet.cells.iter().enumerate() {
-            tables.push_str("<table:table-row>");
+            tables.push_str(if filtered(r) { "<table:table-row table:visibility=\"filtered\">" } else { "<table:table-row>" });
             for (c, cell) in row.iter().enumerate() {
                 let number = styles.number(cell, comma);
                 let mut attrs = String::new();
@@ -1125,9 +1280,10 @@ pub fn export_ods(doc: &Document, path: &Path) -> Result<ExportReport, String> {
         xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
         xmlns:of=\"urn:oasis:names:tc:opendocument:xmlns:of:1.2\" office:version=\"1.2\"";
     let validations = if validations.is_empty() { String::new() } else { format!("<table:content-validations>{validations}</table:content-validations>") };
+    let ranges = if ranges.is_empty() { String::new() } else { format!("<table:database-ranges>{ranges}</table:database-ranges>") };
     let content = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}><office:automatic-styles>{}</office:automatic-styles>\
-         <office:body><office:spreadsheet>{validations}{tables}</office:spreadsheet></office:body></office:document-content>",
+         <office:body><office:spreadsheet>{validations}{tables}{ranges}</office:spreadsheet></office:body></office:document-content>",
         styles.xml()
     );
     let styles_xml = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}/>");
