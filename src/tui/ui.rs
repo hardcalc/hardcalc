@@ -123,6 +123,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     slide(f, app, "context", context, 0, draw_context_menu);
     let values = app.values.as_ref().map(|v| v.col as u64);
     slide(f, app, "values", values, 0, draw_values);
+    let plot = app.plot_dialog.as_ref().map(|_| 0);
+    slide(f, app, "plot", plot, 0, draw_plot_dialog);
+    let library = app.library.as_ref().map(|_| 0);
+    slide(f, app, "library", library, 0, draw_library);
     let dialog = app.file_dialog.as_ref().map(|_| 0);
     slide(f, app, "files", dialog, 0, draw_file_dialog);
     let confirm = app.confirm.as_ref().map(|_| 0);
@@ -274,6 +278,88 @@ fn draw_context_menu(f: &mut Frame, app: &mut App) {
 }
 
 /// The value list of a column: a tick per distinct value.
+/// A box of `w` × `h` in the middle of the screen, cleared, with a frame.
+fn centered_box(f: &mut Frame, w: u16, h: u16, title: String, bottom: String) -> Rect {
+    let area = f.area();
+    let (w, h) = (w.min(area.width), h.min(area.height));
+    let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    f.render_widget(Clear, rect);
+    f.render_widget(Block::bordered().title(title).title_bottom(bottom), rect);
+    rect
+}
+
+/// The settings of a chart in the calculation sheet (F7).
+fn draw_plot_dialog(f: &mut Frame, app: &mut App) {
+    use super::app::PlotDialog;
+    let Some(d) = app.plot_dialog.clone() else { return };
+    let title = if d.row.is_some() { " chart settings " } else { " new chart " };
+    let rect = centered_box(f, 72, 10, title.into(), " ↑↓ field · type to edit · ←→ type · Enter writes · Esc ".into());
+    let inner = rect.width.saturating_sub(2) as usize;
+    let label_w = PlotDialog::LABELS.iter().map(|l| l.width()).max().unwrap_or(0);
+    let hints = ["the chart's name, for layouts and ▥", "ranges to draw, separated by ;  (M; V)", "the x values; empty: the range they run over", "", "above the chart; empty: the name"];
+    for (i, label) in PlotDialog::LABELS.iter().enumerate() {
+        let y = rect.y + 1 + i as u16;
+        let selected = i == d.selected;
+        let value = if i == PlotDialog::TYPE {
+            format!("◂ {} ▸", d.fields[i])
+        } else if selected {
+            format!("{}▏", d.fields[i])
+        } else {
+            d.fields[i].clone()
+        };
+        let text = format!(" {label:>label_w$}  {value}");
+        let style = if selected { Style::new().reversed() } else { Style::new() };
+        f.buffer_mut().set_stringn(rect.x + 1, y, fit(&text, inner, Align::Left), inner, style);
+        // What the field is for, dim, after a short value.
+        let used = text.width() + 2;
+        if !selected && d.fields[i].is_empty() && used < inner {
+            f.buffer_mut().set_stringn(rect.x + 1 + used as u16, y, hints[i], inner - used, Style::new().fg(Color::DarkGray));
+        }
+    }
+    let y = rect.y + 1 + PlotDialog::LABELS.len() as u16 + 1;
+    match &d.error {
+        Some(e) => f.buffer_mut().set_stringn(rect.x + 2, y, format!("⚠ {e}"), inner - 1, Style::new().fg(Color::Red)),
+        None => f.buffer_mut().set_stringn(rect.x + 2, y, "types: line, area, bar, scatter", inner - 1, Style::new().fg(Color::DarkGray)),
+    };
+}
+
+/// The formula library (F6): pick a formula to insert.
+fn draw_library(f: &mut Frame, app: &mut App) {
+    let Some(mut d) = app.library.clone() else { return };
+    let area = f.area();
+    let title = if d.query.is_empty() { " formula library – type to search ".to_string() } else { format!(" formula library: {}▏ ", d.query) };
+    let rect = centered_box(f, (area.width * 9 / 10).max(40), (area.height * 4 / 5).max(8), title, " ↑↓ · Enter inserts the formula with its inputs · Esc ".into());
+    let inner = rect.width.saturating_sub(2) as usize;
+    // The last two lines: the note of the selected formula.
+    let body = rect.height.saturating_sub(4) as usize;
+    let shown = d.shown().into_iter().cloned().collect::<Vec<_>>();
+    d.selected = d.selected.min(shown.len().saturating_sub(1));
+    if d.selected < d.scroll {
+        d.scroll = d.selected;
+    } else if body > 0 && d.selected >= d.scroll + body {
+        d.scroll = d.selected + 1 - body;
+    }
+    let left_w = shown.iter().map(|e| e.title.width() + 2).max().unwrap_or(0).min(inner / 3);
+    for (k, e) in shown.iter().enumerate().skip(d.scroll).take(body) {
+        let y = rect.y + 1 + (k - d.scroll) as u16;
+        let selected = k == d.selected;
+        let own = if e.own { " ★" } else { "" };
+        let left = fit(&clip(&format!("{}{own}", e.title), left_w), left_w, Align::Left);
+        let text = format!(" {left}  {}", crate::sheet::expr::Parts::of(&e.line).code);
+        let style = if selected { Style::new().reversed() } else { Style::new() };
+        f.buffer_mut().set_stringn(rect.x + 1, y, fit(&clip(&text, inner), inner, Align::Left), inner, style);
+    }
+    if shown.is_empty() {
+        f.buffer_mut().set_stringn(rect.x + 2, rect.y + 1, "(no formula matches)", inner - 1, Style::new().fg(Color::DarkGray));
+    }
+    // Where the selected formula belongs and what it is for.
+    let note = shown.get(d.selected).map(|e| [Some(e.group.clone()), e.note.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ")).unwrap_or_default();
+    let file = crate::sheet::library::own_file().map(|p| format!("own formulas: {}", p.display())).unwrap_or_default();
+    f.buffer_mut().set_stringn(rect.x + 2, rect.bottom().saturating_sub(3), &note, inner - 1, Style::new().italic());
+    f.buffer_mut().set_stringn(rect.x + 2, rect.bottom().saturating_sub(2), &file, inner - 1, Style::new().fg(Color::DarkGray));
+    app.library = Some(d);
+}
+
 fn draw_values(f: &mut Frame, app: &mut App) {
     let Some(mut list) = app.values.clone() else { return };
     let shown = list.shown();
@@ -1195,19 +1281,36 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         let marks = app.view.kind == ViewKind::Table && app.view.pivot.is_none() && app.solo.is_none();
         let (sheet, links) = (app.view.sheet, app.links.clone());
         let mark = move |r: usize, c: usize| usize::from(marks && links.contains_key(&(sheet, r, c)));
+        // In the calculation sheet the way to the result takes the room the
+        // other columns leave.
+        let calc_room = app.calc_view().then(|| {
+            use crate::tui::app::{CALC_COLS, CALCULATION};
+            let others: usize = (0..CALC_COLS.len())
+                .filter(|&c| c != CALCULATION)
+                .map(|c| {
+                    let content = row_list.iter().map(|&r| app.cell_view(r, c).text.width()).max().unwrap_or(0);
+                    content.max(app.col_header(c).1.width()).clamp(min_col, MAX_COL) + 1
+                })
+                .sum();
+            avail.saturating_sub(others + 1).max(MAX_COL)
+        });
         let mut column = |app: &mut App, c: usize| -> usize {
             if let Some((w, _)) = cache.get(&c) {
                 return *w;
             }
+            let cap = match calc_room {
+                Some(room) if c == crate::tui::app::CALCULATION => room,
+                _ => MAX_COL,
+            };
             let views: Vec<CellView> = row_list.iter().map(|&r| app.cell_view(r, c)).collect();
             let (top, name) = app.col_header(c);
-            let widest = views.iter().filter_map(|v| v.style.wrap).map(wrap_width).fold(MAX_COL, usize::max);
+            let widest = views.iter().filter_map(|v| v.style.wrap).map(wrap_width).fold(cap, usize::max);
             let w = views
                 .iter()
                 .zip(row_list.iter().copied())
                 .map(|(v, r)| match v.style.wrap {
                     Some(n) => v.text.width().min(wrap_width(n)) + mark(r, c),
-                    None => v.text.width().min(MAX_COL) + mark(r, c),
+                    None => v.text.width().min(cap) + mark(r, c),
                 })
                 .chain([top.width(), name.width()])
                 .max()
@@ -1741,7 +1844,7 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect, helper: Option<&str>) {
             } else if matches!(app.view.kind, ViewKind::Layout(_)) {
                 "arrows: select · F3: move and resize · Space: overview · mouse: drag, ◢ resize, draw new".to_string()
             } else if app.calc_view() {
-                "calculation: f_d = f_tk / γ_M · checks n ≤ f · cells Loads!C12 · ' comment · ## heading · #result/#formula/#full".into()
+                "calculation: f_d = f_tk / γ_M · checks n ≤ f · cells Loads!C12 · Name and Comment beside the input · ## heading · #result/#formula/#full".into()
             } else if app.functions_view() {
                 "own functions: name, parameters, definition, description · + row adds one · F8 deletes".into()
             } else if app.types_view() {

@@ -35,7 +35,13 @@ pub enum Expr {
     Cell(String),
     Neg(Box<Expr>),
     Bin(Op, Box<Expr>, Box<Expr>),
+    /// A function call, the name as written (built-in functions are found
+    /// whatever their case). `int(f; x; a; b)` and `diff(f; x; x0)` bind
+    /// their variable `x` while `f` is evaluated.
     Call(String, Vec<Expr>),
+    /// A range of numbers: `{1, 1.1,,, 2}` – an empty item continues with the
+    /// step of the two values before it. The unit after `}` applies to all.
+    Range { items: Vec<Option<Expr>>, unit: Option<Unit> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -111,7 +117,14 @@ pub enum Stmt {
     Assign { name: String, expr: Expr, to: Option<Unit> },
     Check { lhs: Expr, rel: Rel, rhs: Expr },
     Show { expr: Expr, to: Option<Unit> },
+    /// An own function: `M_span(q; L) = q·L^2/8`.
+    Def { name: String, params: Vec<String>, expr: Expr },
+    /// A chart of ranges: `plot(M; V; x: x; type: line; title: Moments)`.
+    Plot { ys: Vec<Expr>, x: Option<Expr>, opts: Vec<(String, String)> },
 }
+
+/// The options of `plot(…)` besides `x`.
+pub const PLOT_OPTIONS: [&str; 2] = ["type", "title"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Line {
@@ -120,8 +133,9 @@ pub enum Line {
     /// `#result`, `#formula`, `#full`: the mode of the following lines.
     Mode(Mode),
     /// A line with a statement, a comment or both. `mode` overrides the
-    /// block's mode for this line (suffix `#result` …).
-    Stmt { stmt: Option<Stmt>, comment: Option<String>, mode: Option<Mode> },
+    /// block's mode for this line (suffix `#result` …); `label` names the
+    /// line (`[Bending] σ_Ed ≤ f_yd`) and has no effect on the calculation.
+    Stmt { stmt: Option<Stmt>, comment: Option<String>, mode: Option<Mode>, label: Option<String> },
     Error { msg: String },
 }
 
@@ -219,6 +233,7 @@ pub fn parse_line(src: &str) -> Line {
     if hashes > 0 && t[hashes..].starts_with(' ') {
         return Line::Heading { level: hashes, text: t[hashes..].trim().to_string() };
     }
+    let (label, t) = split_label(t);
     let (code, comment) = split_comment(t);
     let (code, mode) = match code.rfind('#') {
         Some(i) if mode_directive(code[i..].trim()).is_some() => (&code[..i], mode_directive(code[i..].trim())),
@@ -226,10 +241,10 @@ pub fn parse_line(src: &str) -> Line {
     };
     let code = code.trim();
     if code.is_empty() {
-        return Line::Stmt { stmt: None, comment, mode };
+        return Line::Stmt { stmt: None, comment, mode, label };
     }
     match Parser::new(code).statement() {
-        Ok(stmt) => Line::Stmt { stmt: Some(stmt), comment, mode },
+        Ok(stmt) => Line::Stmt { stmt: Some(stmt), comment, mode, label },
         Err(msg) => Line::Error { msg },
     }
 }
@@ -240,6 +255,69 @@ fn mode_directive(t: &str) -> Option<Mode> {
         "#formula" => Some(Mode::Formula),
         "#full" => Some(Mode::Full),
         _ => None,
+    }
+}
+
+/// The label of a line, `[Bending]` at its start, and the rest. An empty
+/// label (`[]`) is none.
+fn split_label(t: &str) -> (Option<String>, &str) {
+    match t.strip_prefix('[').and_then(|r| r.split_once(']')) {
+        Some((label, rest)) => (Some(label.trim().to_string()).filter(|l| !l.is_empty()), rest.trim_start()),
+        None => (None, t),
+    }
+}
+
+/// Length of the label at the start of `line` (`[Bending]`, with the
+/// spaces before it); 0 without one.
+pub fn label_prefix(line: &str) -> usize {
+    let t = line.trim_start();
+    match t.strip_prefix('[').and_then(|r| r.find(']')) {
+        Some(i) => line.len() - t.len() + i + 2,
+        None => 0,
+    }
+}
+
+/// A source line taken apart, as the calculation view edits it:
+/// `[label] code   ' comment`. Headings, mode lines and lines that are only
+/// a comment are all code.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Parts {
+    pub label: Option<String>,
+    pub code: String,
+    /// What stands between the code and the `'` (kept when the code or the
+    /// comment changes, so aligned comments stay aligned).
+    pub gap: String,
+    pub comment: Option<String>,
+}
+
+impl Parts {
+    pub fn of(src: &str) -> Parts {
+        let t = src.trim();
+        let hashes = t.chars().take_while(|c| *c == '#').count();
+        if mode_directive(t).is_some() || hashes > 0 && t[hashes..].starts_with(' ') {
+            return Parts { code: t.to_string(), ..Parts::default() };
+        }
+        let (label, rest) = split_label(t);
+        let (code, comment) = split_comment(rest);
+        if code.trim().is_empty() {
+            return Parts { label, code: rest.to_string(), ..Parts::default() };
+        }
+        let gap = if comment.is_some() { code[code.trim_end().len()..].to_string() } else { String::new() };
+        Parts { label, code: code.trim().to_string(), gap, comment }
+    }
+
+    /// The line again; an empty comment goes, a new one gets three spaces.
+    pub fn line(&self) -> String {
+        let mut s = match &self.label {
+            Some(l) if !l.trim().is_empty() => format!("[{}] ", l.trim()),
+            _ => String::new(),
+        };
+        s.push_str(self.code.trim());
+        if let Some(c) = self.comment.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+            let gap = if self.code.trim().is_empty() { "" } else if self.gap.is_empty() { "   " } else { self.gap.as_str() };
+            s.push_str(&format!("{gap}' {c}"));
+        }
+        s.trim_end().to_string()
     }
 }
 
@@ -259,6 +337,8 @@ fn split_comment(t: &str) -> (&str, Option<String>) {
 struct Parser {
     chars: Vec<char>,
     pos: usize,
+    /// Inside `{…}`: a comma separates, it is no decimal comma.
+    in_range: bool,
 }
 
 fn is_name_start(c: char) -> bool {
@@ -279,7 +359,7 @@ fn is_sup(c: char) -> bool {
 
 impl Parser {
     fn new(src: &str) -> Parser {
-        Parser { chars: src.chars().collect(), pos: 0 }
+        Parser { chars: src.chars().collect(), pos: 0, in_range: false }
     }
 
     fn peek(&self) -> Option<char> {
@@ -321,8 +401,21 @@ impl Parser {
         let start = self.pos;
         if let Some(name) = self.name() {
             self.skip_ws();
+            if name.eq_ignore_ascii_case("plot") && self.peek() == Some('(') {
+                return self.plot();
+            }
+            if self.peek() == Some('(')
+                && let Some(params) = self.params()
+            {
+                let expr = self.expr()?;
+                self.finish()?;
+                return Ok(Stmt::Def { name, params, expr });
+            }
             if self.peek() == Some('=') && !matches!(self.peek_at(1), Some('=' | '>')) {
                 self.pos += 1;
+                if self.at_end() {
+                    return Err(format!("{}: enter a value", greek(&name)));
+                }
                 let expr = self.expr()?;
                 let to = self.convert()?;
                 self.finish()?;
@@ -339,6 +432,82 @@ impl Parser {
         let to = self.convert()?;
         self.finish()?;
         Ok(Stmt::Show { expr: lhs, to })
+    }
+
+    /// `(q; L) =` after a function name: its parameters; `None` (and the
+    /// position kept) if this is no definition.
+    fn params(&mut self) -> Option<Vec<String>> {
+        let save = self.pos;
+        self.pos += 1;
+        let mut params = Vec::new();
+        let ok = loop {
+            let Some(p) = self.name() else { break self.eat(")") && params.is_empty() };
+            params.push(greek(&p));
+            if self.eat(")") {
+                break true;
+            }
+            if !self.eat(";") {
+                break false;
+            }
+        };
+        self.skip_ws();
+        if ok && self.peek() == Some('=') && !matches!(self.peek_at(1), Some('=' | '>')) {
+            self.pos += 1;
+            return Some(params);
+        }
+        self.pos = save;
+        None
+    }
+
+    /// `plot(` read: the series, `x: …` and the options up to `)`.
+    fn plot(&mut self) -> Result<Stmt, String> {
+        self.pos += 1;
+        let (mut ys, mut x, mut opts) = (Vec::new(), None, Vec::new());
+        loop {
+            self.skip_ws();
+            let save = self.pos;
+            let key = self.name().filter(|_| {
+                self.skip_ws();
+                self.peek() == Some(':')
+            });
+            match key {
+                Some(k) if k == "x" => {
+                    self.pos += 1;
+                    x = Some(self.expr()?);
+                }
+                Some(k) if PLOT_OPTIONS.contains(&k.as_str()) => {
+                    self.pos += 1;
+                    let start = self.pos;
+                    let mut quoted = false;
+                    while let Some(c) = self.peek() {
+                        if c == '"' {
+                            quoted = !quoted;
+                        } else if !quoted && matches!(c, ';' | ')') {
+                            break;
+                        }
+                        self.pos += 1;
+                    }
+                    let value: String = self.chars[start..self.pos].iter().collect();
+                    opts.push((k, value.trim().trim_matches('"').to_string()));
+                }
+                Some(k) => return Err(format!("plot: unknown option '{k}' – x, type, title")),
+                None => {
+                    self.pos = save;
+                    ys.push(self.expr()?);
+                }
+            }
+            if self.eat(")") {
+                break;
+            }
+            if !self.eat(";") {
+                return Err("plot: ';' or ')' expected".into());
+            }
+        }
+        self.finish()?;
+        if ys.is_empty() {
+            return Err("plot: name what to draw, e.g. plot(M)".into());
+        }
+        Ok(Stmt::Plot { ys, x, opts })
     }
 
     fn finish(&mut self) -> Result<(), String> {
@@ -434,6 +603,9 @@ impl Parser {
         if c.is_ascii_digit() {
             return self.number();
         }
+        if c == '{' {
+            return self.range();
+        }
         if c == '(' {
             self.pos += 1;
             let e = self.expr()?;
@@ -493,7 +665,7 @@ impl Parser {
                         }
                     }
                 }
-                Ok(Expr::Call(name.to_lowercase(), args))
+                Ok(Expr::Call(name, args))
             }
             _ => Ok(Expr::Var(greek(&name))),
         }
@@ -508,12 +680,75 @@ impl Parser {
         Expr::Cell(self.chars[start..self.pos].iter().collect())
     }
 
+    /// `{1, 1.1,,, 2} m`; in it a comma separates, as `;` does.
+    fn range(&mut self) -> Result<Expr, String> {
+        self.pos += 1;
+        let outer = std::mem::replace(&mut self.in_range, true);
+        let mut items = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(',' | ';') => {
+                    items.push(None);
+                    self.pos += 1;
+                    continue;
+                }
+                Some('}') => {
+                    self.pos += 1;
+                    break;
+                }
+                None => {
+                    self.in_range = outer;
+                    return Err("'}' expected".into());
+                }
+                _ => {}
+            }
+            let e = self.expr();
+            let e = match e {
+                Ok(e) => e,
+                Err(err) => {
+                    self.in_range = outer;
+                    return Err(err);
+                }
+            };
+            items.push(Some(e));
+            self.skip_ws();
+            match self.peek() {
+                Some(',' | ';') => self.pos += 1,
+                Some('}') => {
+                    self.pos += 1;
+                    break;
+                }
+                _ => {
+                    self.in_range = outer;
+                    return Err("',' or '}' expected in a range".into());
+                }
+            }
+        }
+        self.in_range = outer;
+        // `{1, 2,,, 5}`: the separators after a value were read with it, so
+        // a run of commas leaves `None`s – one is enough to mean "continue".
+        let mut cleaned: Vec<Option<Expr>> = Vec::new();
+        for item in items {
+            if item.is_none() && matches!(cleaned.last(), Some(None)) {
+                continue;
+            }
+            cleaned.push(item);
+        }
+        if cleaned.iter().all(Option::is_none) {
+            return Err("a range needs values, e.g. {1, 1.1,,, 2}".into());
+        }
+        let unit = self.unit();
+        Ok(Expr::Range { items: cleaned, unit })
+    }
+
     fn number(&mut self) -> Result<Expr, String> {
         let start = self.pos;
         while self.peek().is_some_and(|c| c.is_ascii_digit()) {
             self.pos += 1;
         }
-        if matches!(self.peek(), Some(',' | '.')) && self.peek_at(1).is_some_and(|c| c.is_ascii_digit()) {
+        let comma = !self.in_range && self.peek() == Some(',');
+        if (comma || self.peek() == Some('.')) && self.peek_at(1).is_some_and(|c| c.is_ascii_digit()) {
             self.pos += 1;
             while self.peek().is_some_and(|c| c.is_ascii_digit()) {
                 self.pos += 1;
@@ -600,9 +835,12 @@ impl Parser {
 /// `;`, so a comma between digits is always a decimal comma; comments (`'`)
 /// and quoted names stay as they are.
 pub fn point_decimals(line: &str) -> String {
+    // The label is text: `[Eq. 3,1]` stays.
+    let (label, line) = line.split_at(label_prefix(line));
     let chars: Vec<char> = line.chars().collect();
-    let mut out = String::with_capacity(line.len());
-    let mut quoted = false;
+    let mut out = String::with_capacity(label.len() + line.len());
+    out.push_str(label);
+    let (mut quoted, mut braces) = (false, 0usize);
     for (i, &c) in chars.iter().enumerate() {
         if c == '\'' && !quoted {
             out.extend(&chars[i..]);
@@ -610,6 +848,16 @@ pub fn point_decimals(line: &str) -> String {
         }
         if c == '"' {
             quoted = !quoted;
+        }
+        // In a range `{1,1.1,,,2}` the comma separates.
+        match c {
+            '{' if !quoted => braces += 1,
+            '}' if !quoted => braces = braces.saturating_sub(1),
+            _ => {}
+        }
+        if braces > 0 {
+            out.push(c);
+            continue;
         }
         let between_digits = i > 0 && chars[i - 1].is_ascii_digit() && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit());
         // Not in a name like `f_1,2` – the number must start the token.
@@ -680,13 +928,65 @@ pub fn to_text(e: &Expr, style: TextStyle, leaf: &dyn Fn(&Expr) -> Option<String
                 let s = format!("{}{sym}{}", go(a, style, leaf, pl), go(b, style, leaf, pr));
                 if p < parent { format!("({s})") } else { s }
             }
+            // ∫[0; L] q dx and d/dx(M)|x=2.5 – in ASCII as written.
+            Expr::Call(f, args) if !style.ascii && is_integral(f, args) => {
+                let x = go(&args[1], style, leaf, 0);
+                format!("∫[{}; {}] {} d{x}", go(&args[2], style, leaf, 0), go(&args[3], style, leaf, 0), go(&args[0], style, leaf, 2))
+            }
+            Expr::Call(f, args) if !style.ascii && is_derivative(f, args) => {
+                let x = go(&args[1], style, leaf, 0);
+                format!("d/d{x}({})|{x}={}", go(&args[0], style, leaf, 0), go(&args[2], style, leaf, 0))
+            }
             Expr::Call(f, args) => {
                 let parts: Vec<String> = args.iter().map(|a| go(a, style, leaf, 0)).collect();
                 format!("{f}({})", parts.join("; "))
             }
+            Expr::Range { items, unit } => {
+                let mut parts: Vec<String> = Vec::new();
+                for item in items {
+                    match item {
+                        Some(e) => parts.push(go(e, style, leaf, 0)),
+                        None => parts.push(if style.ascii { "..." } else { "…" }.to_string()),
+                    }
+                }
+                let unit = match unit {
+                    Some(u) if style.ascii => format!(" {u}"),
+                    Some(u) => format!(" {}", crate::quantity::pretty(u)),
+                    None => String::new(),
+                };
+                format!("{{{}}}{unit}", parts.join("; "))
+            }
         }
     }
     go(e, style, leaf, 0)
+}
+
+/// The code of a plot line: `plot(M; V; x: x; type: area; title: Moments)`.
+/// Empty options are left out, as is `type: line`.
+pub fn plot_code(ys: &[String], x: Option<&str>, opts: &[(String, String)]) -> String {
+    let mut args: Vec<String> = ys.iter().map(|y| y.trim().to_string()).filter(|y| !y.is_empty()).collect();
+    if let Some(x) = x.map(str::trim).filter(|x| !x.is_empty()) {
+        args.push(format!("x: {x}"));
+    }
+    for (k, v) in opts {
+        let v = v.trim();
+        if v.is_empty() || (k == "type" && v == "line") {
+            continue;
+        }
+        let v = if v.contains([';', ')', '"', '(']) { format!("\"{}\"", v.replace('"', "'")) } else { v.to_string() };
+        args.push(format!("{k}: {v}"));
+    }
+    format!("plot({})", args.join("; "))
+}
+
+/// `int(f; x; a; b)`: the integral of `f` over `x` from `a` to `b`.
+pub fn is_integral(f: &str, args: &[Expr]) -> bool {
+    f.eq_ignore_ascii_case("int") && args.len() == 4 && matches!(args[1], Expr::Var(_))
+}
+
+/// `diff(f; x; x0)`: the derivative of `f` by `x` at `x0`.
+pub fn is_derivative(f: &str, args: &[Expr]) -> bool {
+    f.eq_ignore_ascii_case("diff") && args.len() == 3 && matches!(args[1], Expr::Var(_))
 }
 
 #[cfg(test)]
@@ -717,6 +1017,7 @@ mod tests {
     fn decimals_are_written_with_a_point() {
         assert_eq!(point_decimals("q_d = 1,35·g_k + 1,5·q_k   ' 1,5 stays in comments"), "q_d = 1.35·g_k + 1.5·q_k   ' 1,5 stays in comments");
         assert_eq!(point_decimals("x = max(1,5; 2)"), "x = max(1.5; 2)");
+        assert_eq!(point_decimals("[Eq. 3,1] x = 1,5"), "[Eq. 3,1] x = 1.5");
         assert_eq!(point_decimals("y = Loads[Wind, q] + \"a 1,5\"!B2"), "y = Loads[Wind, q] + \"a 1,5\"!B2");
         assert_eq!(point_decimals("z = 4.0 kN/m"), "z = 4.0 kN/m");
     }
@@ -785,10 +1086,35 @@ mod tests {
     }
 
     #[test]
+    fn lines_have_labels() {
+        let Line::Stmt { stmt: Some(Stmt::Check { .. }), label, comment, .. } = parse_line("[Bending] σ_Ed ≤ f_yd   ' midspan") else { panic!() };
+        assert_eq!((label.as_deref(), comment.as_deref()), (Some("Bending"), Some("midspan")));
+        let Line::Stmt { label, .. } = parse_line("[ ] a = 1") else { panic!() };
+        assert_eq!(label, None);
+        // Brackets after a name are a reference, not a label.
+        let Line::Stmt { label, .. } = parse_line("a = Loads[Wind, q]") else { panic!() };
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn parts_of_a_line() {
+        let p = Parts::of("[Eq. 1] f_tk   = 84 kN/m    ' strength");
+        assert_eq!(p, Parts { label: Some("Eq. 1".into()), code: "f_tk   = 84 kN/m".into(), gap: "    ".into(), comment: Some("strength".into()) });
+        assert_eq!(p.line(), "[Eq. 1] f_tk   = 84 kN/m    ' strength");
+        assert_eq!(Parts { label: None, comment: None, ..p.clone() }.line(), "f_tk   = 84 kN/m");
+        assert_eq!(Parts { gap: String::new(), ..Parts::of("a = 1") }.line(), "a = 1");
+        assert_eq!(Parts { comment: Some("x".into()), ..Parts::of("a = 1") }.line(), "a = 1   ' x");
+        // Headings, mode lines and comment lines are code.
+        assert_eq!(Parts::of("## Check ' x").code, "## Check ' x");
+        assert_eq!(Parts::of("' just text"), Parts { code: "' just text".into(), ..Parts::default() });
+        assert_eq!(Parts::of("[A] ' text").label.as_deref(), Some("A"));
+    }
+
+    #[test]
     fn headings_modes_comments() {
         assert_eq!(parse_line("## Check"), Line::Heading { level: 2, text: "Check".into() });
         assert_eq!(parse_line("#result"), Line::Mode(Mode::Result));
-        assert_eq!(parse_line("' just text"), Line::Stmt { stmt: None, comment: Some("just text".into()), mode: None });
+        assert_eq!(parse_line("' just text"), Line::Stmt { stmt: None, comment: Some("just text".into()), mode: None, label: None });
         let Line::Stmt { mode, .. } = parse_line("a = 1 #formula ' x") else { panic!() };
         assert_eq!(mode, Some(Mode::Formula));
         assert!(matches!(parse_line("a = = 1"), Line::Error { .. }));

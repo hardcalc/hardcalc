@@ -1,0 +1,50 @@
+<!-- hardcalc 1 -->
+
+# Formula library
+
+The formulas hardcalc brings along. Your own go into `formulas.hcmd` in the
+hardcalc configuration folder, written the same way: a heading per group,
+one formula per line, its name in brackets, a comment that explains it.
+
+```hardcalc
+## Simply supported beam, uniform load q, span L
+[Maximum moment] M_ss(q; L) = q·L^2/8   ' at midspan
+[Moment at x] M_ss_x(q; L; x) = q·x·(L - x)/2   ' x from the left support
+[Support force] V_ss(q; L) = q·L/2   ' each support
+[Shear at x] V_ss_x(q; L; x) = q·(L/2 - x)   ' x from the left support
+[Maximum deflection] w_ss(q; L; E; I) = 5·q·L^4/(384·E·I)   ' at midspan
+## Simply supported beam, point load F at midspan
+[Maximum moment] M_ssF(F; L) = F·L/4   ' under the load
+[Maximum deflection] w_ssF(F; L; E; I) = F·L^3/(48·E·I)   ' under the load
+## Cantilever, uniform load q, length L
+[Fixed-end moment] M_c(q; L) = q·L^2/2   ' at the support
+[Support force] V_c(q; L) = q·L   ' at the support
+[Tip deflection] w_c(q; L; E; I) = q·L^4/(8·E·I)   ' at the free end
+## Cantilever, point load F at the tip
+[Fixed-end moment] M_cF(F; L) = F·L   ' at the support
+[Tip deflection] w_cF(F; L; E; I) = F·L^3/(3·E·I)   ' at the free end
+## Rectangle, width b, height h
+[Area] A_rect(b; h) = b·h
+[Second moment of area] I_rect(b; h) = b·h^3/12   ' about the axis parallel to b
+[Section modulus] W_rect(b; h) = b·h^2/6   ' about the axis parallel to b
+[Radius of gyration] i_rect(h) = h/sqrt(12)
+## Circle, diameter d
+[Area] A_circ(d) = π·d^2/4
+[Second moment of area] I_circ(d) = π·d^4/64
+[Section modulus] W_circ(d) = π·d^3/32
+## Tube, outer diameter D, inner diameter d
+[Area] A_tube(D; d) = π·(D^2 - d^2)/4
+[Second moment of area] I_tube(D; d) = π·(D^4 - d^4)/64
+[Section modulus] W_tube(D; d) = π·(D^4 - d^4)/(32·D)
+## Stresses
+[Normal stress] σ_N(N; A) = N/A   ' axial force N over the area A
+[Bending stress] σ_M(M; W) = M/W   ' moment M over the section modulus W
+[Shear stress, rectangle] τ_rect(V; A) = 1.5·V/A   ' maximum, at the centroid
+## Buckling
+[Euler critical load] N_cr(E; I; L_cr) = π^2·E·I/L_cr^2   ' L_cr: buckling length
+[Slenderness] λ_s(L_cr; i) = L_cr/i   ' i: radius of gyration
+## Geometry
+[Hypotenuse] c_hyp(a; b) = sqrt(a^2 + b^2)
+[Angle of a slope] α_slope(h; l) = atan2(h; l)   ' rise h over the run l
+[Circle area] A_c(r) = π·r^2   ' radius r
+```

@@ -2517,9 +2517,125 @@ fn calc_tab_edits_the_sheet() {
     key(&mut a, KeyCode::F(8));
     assert_eq!(hardcalc::sheet::source_lines(&a.doc).len(), 3);
     // The calculation column is computed.
-    a.view.cursor = (0, 1);
+    a.view.cursor = (0, 2);
     typ(&mut a, "x");
     assert!(matches!(a.mode, Mode::Normal));
+}
+
+#[test]
+fn calc_lines_have_a_name_and_a_comment_beside_the_input() {
+    let mut a = app();
+    a.command("calc");
+    assert_eq!(a.view.cursor, (0, 1), "the cursor starts in Input");
+    typ(&mut a, "f = 30 kN/m^2 ' strength");
+    key(&mut a, KeyCode::Enter);
+    typ(&mut a, "f <= 25 kN/m^2");
+    key(&mut a, KeyCode::Enter);
+    // The name left of the input, the comment right of the calculation.
+    a.view.cursor = (1, 0);
+    typ(&mut a, "Bending");
+    key(&mut a, KeyCode::Enter);
+    a.view.cursor = (1, 3);
+    typ(&mut a, "midspan");
+    key(&mut a, KeyCode::Enter);
+    let body = hardcalc::sheet::source_lines(&a.doc);
+    assert_eq!(body, ["f = 30 kN/m^2 ' strength", "[Bending] f ≤ 25 kN/m^2   ' midspan"]);
+    // Each column shows its part; the calculation has neither name nor comment.
+    assert_eq!(a.cell_view(1, 0).text, "Bending");
+    assert_eq!(a.cell_view(1, 1).text, "f ≤ 25 kN/m^2");
+    assert!(a.cell_view(1, 2).text.ends_with("✗") && !a.cell_view(1, 2).text.contains("midspan"), "{}", a.cell_view(1, 2).text);
+    assert_eq!(a.cell_view(1, 3).text, "midspan");
+    assert_eq!(a.cell_view(0, 3).text, "strength");
+    // Editing the input keeps name and comment.
+    a.view.cursor = (1, 1);
+    key(&mut a, KeyCode::Enter);
+    for _ in 0.."f ≤ 25 kN/m^2".chars().count() {
+        key(&mut a, KeyCode::Backspace);
+    }
+    typ(&mut a, "f <= 40 kN/m^2");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(hardcalc::sheet::source_lines(&a.doc)[1], "[Bending] f ≤ 40 kN/m^2   ' midspan");
+    // An empty name or comment goes away.
+    a.view.cursor = (1, 0);
+    key(&mut a, KeyCode::Delete);
+    a.view.cursor = (1, 3);
+    key(&mut a, KeyCode::Delete);
+    assert_eq!(hardcalc::sheet::source_lines(&a.doc)[1], "f ≤ 40 kN/m^2");
+    // The text output and the printout show the name before the line.
+    let out = hardcalc::sheet::evaluate(&["[Eq. 1] x = 2 m ' span".to_string()], None);
+    assert_eq!(hardcalc::sheet::Render::default().line(&out[0]), "[Eq. 1] x = 2 m   ' span");
+}
+
+#[test]
+fn formula_library_inserts_a_formula_with_its_inputs() {
+    let mut a = app();
+    a.command("calc");
+    typ(&mut a, "q = 10 kN/m");
+    key(&mut a, KeyCode::Enter);
+    a.view.cursor = (0, 1);
+    key(&mut a, KeyCode::F(6));
+    assert!(a.library.is_some());
+    typ(&mut a, "maximum moment");
+    let screen = render(&mut a);
+    assert!(screen.contains("formula library") && screen.contains("M_ss(q; L) = q·L^2/8"), "{screen}");
+    key(&mut a, KeyCode::Enter);
+    assert!(a.library.is_none());
+    let body = hardcalc::sheet::source_lines(&a.doc);
+    assert_eq!(body, ["q = 10 kN/m", "[Maximum moment] M_ss(q; L) = q·L^2/8   ' at midspan", "L =", "[Maximum moment] M = M_ss(q; L)   ' at midspan"]);
+    assert_eq!(a.message.as_ref().unwrap().text, "Maximum moment inserted – enter L");
+    // The cursor waits on the input to fill in.
+    assert_eq!(a.view.cursor, (2, 1));
+    key(&mut a, KeyCode::Enter);
+    typ(&mut a, " 5 m");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(hardcalc::sheet::source_lines(&a.doc)[2], "L = 5 m");
+    render(&mut a);
+    assert!(a.cell_view(3, 2).text.ends_with("31.3 kN·m"), "{}", a.cell_view(3, 2).text);
+}
+
+#[test]
+fn plots_are_charts_with_a_settings_dialog() {
+    use hardcalc::tui::app::ViewKind;
+    let src = "## T :: matrix\n\n| A |\n|---|\n| 1 |\n\n```hardcalc\nx = {0, 1,,, 4} m\nM = 2 kN·x\n```\n\n```layout L\n1-10 / 1-30 chart Moments\n```\n";
+    let mut a = App::new(PathBuf::from("t.hcmd"), hardcalc::parse(src).unwrap());
+    a.command("calc");
+    a.view.cursor = (1, 1);
+    // F7 on M: a new chart of M.
+    key(&mut a, KeyCode::F(7));
+    assert_eq!(a.plot_dialog.as_ref().unwrap().fields[1], "M");
+    typ(&mut a, "Moments");
+    key(&mut a, KeyCode::Down);
+    key(&mut a, KeyCode::Down);
+    key(&mut a, KeyCode::Down);
+    key(&mut a, KeyCode::Right);
+    let screen = render(&mut a);
+    assert!(screen.contains("new chart") && screen.contains("◂ area ▸"), "{screen}");
+    key(&mut a, KeyCode::Enter);
+    assert!(a.plot_dialog.is_none());
+    assert_eq!(hardcalc::sheet::source_lines(&a.doc)[2], "[Moments] plot(M; type: area)");
+    // A chart like the others: in the list, with its data.
+    let names: Vec<String> = a.chart_blocks().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["Moments"]);
+    let data = a.chart_data(0).unwrap();
+    assert_eq!((data.series[0].values.len(), data.categories[4].as_str()), (5, "4.00"));
+    assert_eq!(data.series[0].values[4], Some(8.0));
+    // `t` in the chart window changes its type in the line.
+    a.show_helper(ViewKind::Chart(0));
+    a.with_window(false, |a| a.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)));
+    assert_eq!(hardcalc::sheet::source_lines(&a.doc)[2], "[Moments] plot(M; type: scatter)");
+    // The layout shows it, printing puts it after its block.
+    let items = a.print_items(true);
+    assert!(items.iter().any(|i| matches!(i, hardcalc::print::PrintItem::Chart(c) if c.title == "Moments")));
+    a.command("layout L");
+    render(&mut a);
+    // F7 on the plot line: its settings.
+    a.command("calc");
+    a.view.cursor = (2, 1);
+    key(&mut a, KeyCode::F(7));
+    let d = a.plot_dialog.clone().unwrap();
+    assert_eq!((d.fields[0].as_str(), d.fields[3].as_str()), ("Moments", "scatter"));
+    key(&mut a, KeyCode::Esc);
+    assert!(a.plot_dialog.is_none());
 }
 
 #[test]
@@ -4201,4 +4317,20 @@ fn layout_tables_pick_rows_by_condition() {
     assert!(element_text(&mut a, 2)[0].contains("where:"), "{:?}", element_text(&mut a, 2));
     // Written back as typed.
     assert_eq!(element(&a, 1).to_line().trim_end(), "7-12    / 1-20    table    Data   rows: top 2 by Amount   where: Amount < 100");
+}
+
+#[test]
+fn calc_features_example_calculates() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    let out = hardcalc::sheet::evaluate_document(&a.doc.clone(), &mut a.wb);
+    assert!(hardcalc::sheet::problems(&out).is_empty(), "{:?}", hardcalc::sheet::problems(&out));
+    let names: Vec<String> = a.chart_blocks().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["Moments", "Shear", "Deflection", "Factors"]);
+    for (i, name) in names.iter().enumerate() {
+        assert!(a.chart_data(i).is_ok(), "{name}");
+    }
+    a.show_helper(hardcalc::tui::app::ViewKind::Layout(0));
+    let screen = render(&mut a);
+    assert!(screen.contains("Bending moment M") && screen.contains("IPE 270"), "{screen}");
 }

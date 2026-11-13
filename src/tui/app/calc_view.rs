@@ -5,9 +5,15 @@ use super::{App, CellView, ViewKind};
 use crate::layers::{CellStyle, Color};
 use crate::model::{Align, Block, Document};
 use crate::sheet;
+use crate::sheet::expr::{Line, Parts};
 
-/// Columns of the calculation view.
-pub const CALC_COLS: [&str; 2] = ["Input", "Calculation"];
+/// Columns of the calculation view: the label of a line, its input, the
+/// way to the result and the comment – all but the calculation are edited.
+pub const CALC_COLS: [&str; 4] = ["Name", "Input", "Calculation", "Comment"];
+pub const NAME: usize = 0;
+pub const INPUT: usize = 1;
+pub const CALCULATION: usize = 2;
+pub const COMMENT: usize = 3;
 
 /// One row of the calculation view.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -21,6 +27,8 @@ pub enum CalcRow {
 /// ASCII input as typed in a terminal, written the readable way:
 /// `*` → ·, `<=` → ≤, `>=` → ≥, `->` → →, `gamma_M` → γ_M.
 pub fn tidy_input(line: &str) -> String {
+    // The label is text: `[beta check]` stays.
+    let (label, line) = line.split_at(sheet::expr::label_prefix(line));
     let (code, comment) = match line.find('\'') {
         Some(i) => line.split_at(i),
         None => (line, ""),
@@ -70,7 +78,7 @@ pub fn tidy_input(line: &str) -> String {
     }
     flush(&mut word, &mut out);
     // Numbers are written with a decimal point.
-    sheet::expr::point_decimals(&(out + comment))
+    format!("{label}{}", sheet::expr::point_decimals(&(out + comment)))
 }
 
 /// How formulas are shown in the preview (`:formulas`).
@@ -139,19 +147,20 @@ pub fn preview_lines(out: &[sheet::Out], style: FormulaStyle) -> Vec<(String, Pr
             Out::Comment(c) => lines.push((c.clone(), PreviewKind::Comment)),
             Out::Error(_) => lines.push((render.line(o), PreviewKind::Error)),
             _ => {
-                let comment = match o {
-                    Out::Assign { comment, .. } | Out::Show { comment, .. } | Out::Check { comment, .. } => comment.clone().filter(|c| !c.is_empty()),
-                    _ => None,
-                };
+                let comment = o.comment();
                 let latex = (style == FormulaStyle::TwoD).then(|| sheet::notation::line(sheet::notation::Lang::Latex, o)).flatten();
                 match latex {
                     Some(latex) => {
+                        // The label above the formula drawn over several lines.
+                        if let Some(l) = o.label() {
+                            lines.push((format!("[{l}]"), PreviewKind::Comment));
+                        }
                         let block = term_maths::render(&latex).to_string();
                         let rows: Vec<&str> = block.lines().collect();
                         let n = rows.len();
                         for (i, row) in rows.into_iter().enumerate() {
                             // The comment on the last line of the formula.
-                            let row = match (&comment, i + 1 == n) {
+                            let row = match (comment, i + 1 == n) {
                                 (Some(c), true) => format!("{}   {c}", row.trim_end()),
                                 _ => row.trim_end().to_string(),
                             };
@@ -172,7 +181,7 @@ pub fn preview_lines(out: &[sheet::Out], style: FormulaStyle) -> Vec<(String, Pr
 }
 
 /// Appends a line to the last ```hardcalc block, creating one at the end.
-fn add_calc_line(doc: &mut Document, line: String) {
+pub(super) fn add_calc_line(doc: &mut Document, line: String) {
     let last = doc.blocks.iter_mut().rev().find_map(|b| match b {
         Block::Code { info, body } if sheet::is_sheet_info(info) => Some(body),
         _ => None,
@@ -278,17 +287,21 @@ impl App {
         let mut style = CellStyle::default();
         let mut error = false;
         let row = self.calc_rows().get(r).copied();
+        let parts = row.and_then(|row| self.calc_source(row)).map(|s| Parts::of(s));
         let text = match (row, c) {
-            (Some(CalcRow::Line { .. }), 0) => self.calc_source(row.unwrap()).cloned().unwrap_or_default(),
+            (Some(CalcRow::Line { .. }), NAME) => parts.and_then(|p| p.label).unwrap_or_default(),
+            (Some(CalcRow::Line { .. }), INPUT) => parts.map(|p| p.code).unwrap_or_default(),
+            (Some(CalcRow::Line { .. }), COMMENT) => {
+                style.fg = Some(Color::Named("darkgray".into()));
+                parts.and_then(|p| p.comment).unwrap_or_default()
+            }
             (Some(CalcRow::Line { .. }), _) => match self.calc_out(r) {
                 Some(out) => {
                     match &out {
                         sheet::Out::Heading { .. } => style.bold = true,
                         sheet::Out::Comment(_) => style.fg = Some(Color::Named("darkgray".into())),
-                        sheet::Out::Error(_) => error = true,
-                        sheet::Out::Assign { result: Err(_), .. } | sheet::Out::Show { result: Err(_), .. } | sheet::Out::Check { sides: Err(_), .. } => {
-                            error = true
-                        }
+                        _ if !sheet::problems(std::slice::from_ref(&out)).is_empty() => error = true,
+                        sheet::Out::Def { .. } | sheet::Out::Plot { .. } => style.fg = Some(Color::Named("cyan".into())),
                         sheet::Out::Check { rel, sides: Ok((l, r)), .. } => {
                             let ok = sheet::verdict(*rel, l, r).ok;
                             style.fg = Some(Color::Named(if ok { "green" } else { "red" }.into()));
@@ -296,7 +309,7 @@ impl App {
                         }
                         _ => {}
                     }
-                    sheet::Render::default().line(&out)
+                    sheet::Render::default().body(&out)
                 }
                 None => String::new(),
             },
@@ -309,13 +322,16 @@ impl App {
     pub(super) fn calc_raw(&self) -> String {
         let (r, c) = self.view.cursor;
         let row = self.calc_rows().get(r).copied();
+        let parts = || row.and_then(|row| self.calc_source(row)).map(|s| Parts::of(s)).unwrap_or_default();
         match (row, c) {
-            (Some(row @ CalcRow::Line { .. }), 0) => self.calc_source(row).cloned().unwrap_or_default(),
+            (Some(CalcRow::Line { .. }), NAME) => parts().label.unwrap_or_default(),
+            (Some(CalcRow::Line { .. }), INPUT) => parts().code,
+            (Some(CalcRow::Line { .. }), COMMENT) => parts().comment.unwrap_or_default(),
             // The grid was drawn before, so the sheet is evaluated.
             (Some(CalcRow::Line { .. }), _) => self
                 .calc_index(r)
                 .and_then(|i| self.calc_cache.as_ref()?.get(i))
-                .map(|o| sheet::Render::default().line(o))
+                .map(|o| sheet::Render::default().body(o))
                 .unwrap_or_default(),
             _ => String::new(),
         }
@@ -323,22 +339,44 @@ impl App {
 
     pub(super) fn calc_problem(&mut self) -> Option<String> {
         let out = self.calc_out(self.view.cursor.0)?;
-        match out {
-            sheet::Out::Error(e) => Some(e),
-            sheet::Out::Assign { result: Err(e), .. } | sheet::Out::Show { result: Err(e), .. } | sheet::Out::Check { sides: Err(e), .. } => Some(e),
-            _ => None,
-        }
+        sheet::problems(std::slice::from_ref(&out)).into_iter().next()
     }
 
     /// Why the cell at the cursor cannot be edited, if it cannot.
     pub(super) fn calc_edit_problem(&self) -> Option<&'static str> {
-        (self.view.cursor.1 != 0).then_some("the calculation is computed – edit the input on the left")
+        let (r, c) = self.view.cursor;
+        let line = self.calc_rows().get(r).and_then(|row| self.calc_source(*row)).map(|s| sheet::expr::parse_line(s));
+        match (c, line) {
+            (CALCULATION, _) => Some("the calculation is computed – edit the input"),
+            (NAME | COMMENT, Some(Line::Heading { .. } | Line::Mode(_))) => Some("a heading or a #mode line has no name and no comment"),
+            (COMMENT, Some(Line::Stmt { stmt: None, .. })) => Some("the line is a comment – edit it under Input"),
+            _ => None,
+        }
     }
 
     pub(super) fn commit_calc(&mut self, text: String) {
-        let r = self.view.cursor.0;
-        let line = tidy_input(text.trim_end());
-        match self.calc_rows().get(r).copied() {
+        let (r, c) = self.view.cursor;
+        let row = self.calc_rows().get(r).copied();
+        let old = row.and_then(|row| self.calc_source(row)).map(|s| Parts::of(s)).unwrap_or_default();
+        let text = text.trim().to_string();
+        let parts = match c {
+            NAME => Parts { label: Some(text), ..old },
+            COMMENT => Parts { comment: Some(text), ..old },
+            _ => {
+                // Typed with a label or a comment, those win.
+                let typed = Parts::of(&tidy_input(&text));
+                match sheet::expr::parse_line(&typed.code) {
+                    // Headings and #mode lines stand alone.
+                    Line::Heading { .. } | Line::Mode(_) if typed.label.is_none() => typed,
+                    // A comment line drops the comment it had beside.
+                    Line::Stmt { stmt: None, .. } => Parts { label: typed.label.or(old.label), ..typed },
+                    _ if typed.comment.is_some() => Parts { label: typed.label.or(old.label), ..typed },
+                    _ => Parts { label: typed.label.or(old.label), code: typed.code, ..old },
+                }
+            }
+        };
+        let line = parts.line();
+        match row {
             Some(CalcRow::Line { block, line: i }) => self.with_doc(|doc| {
                 if let Block::Code { body, .. } = &mut doc.blocks[block] {
                     body[i] = line;
@@ -362,11 +400,22 @@ impl App {
                         body.insert(line + 1, String::new());
                     }
                 });
-                self.view.cursor = (r + 1, 0);
+                self.view.cursor = (r + 1, INPUT);
             }
-            _ => self.view.cursor = (r, 0),
+            _ => self.view.cursor = (r, INPUT),
         }
         self.start_edit(None);
+    }
+
+    /// Del: in Name or Comment it clears them, elsewhere it deletes the lines.
+    pub(super) fn clear_calc(&mut self) {
+        if !self.has_range() && matches!(self.view.cursor.1, NAME | COMMENT) {
+            return match self.calc_edit_problem() {
+                Some(p) => self.error(p),
+                None => self.commit_calc(String::new()),
+            };
+        }
+        self.delete_calc_lines()
     }
 
     pub(super) fn delete_calc_lines(&mut self) {
@@ -406,5 +455,6 @@ mod tests {
         assert_eq!(tidy_input("n_Ed <= f_d / gamma_M"), "n_Ed ≤ f_d / γ_M");
         assert_eq!(tidy_input("s = N/A -> N/mm^2 ' x*y"), "s = N/A → N/mm^2 ' x*y");
         assert_eq!(tidy_input("a = \"My*sheet\"!B2"), "a = \"My*sheet\"!B2");
+        assert_eq!(tidy_input("[beta check, 1,5] b = 1,5*beta"), "[beta check, 1,5] b = 1.5·β");
     }
 }

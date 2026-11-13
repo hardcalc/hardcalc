@@ -838,8 +838,14 @@ f_yd   = f_yk / γ_M
 | `… → unit` | show the result in this unit |
 | `## Text` | heading |
 | `' Text` | comment (also at the end of a line) |
+| `[Name] …` | label of the line at its start (`[Eq. 3.1] q_d = …`, `[Bending] σ_Ed ≤ f_yd`): shown before the line when printed, in the report and in `hardcalc calc`; it does not take part in the calculation |
+| `name(a; b) = expression` | own function (`M_ss(q; L) = q·L^2/8`), usable in the lines below it: `M = M_ss(q_d; L)` |
+| `plot(y[; y2 …][; x: x][; type: t][; title: text])` | chart of ranges (see below); with `[Name]` it is the chart `Name` |
 | `#full`, `#formula`, `#result` | display of the following lines: full way to the result (default) / formula and result / result only; at the end of a line for that line only |
 
+- **Labels** are text: no number in them is rewritten and no ASCII name
+  turned into a Greek letter. `[]` is no label; a heading or a mode line
+  has none.
 - **Numbers** with a decimal point; a decimal comma is read too and written
   with the point. **Arguments** are separated by `;`, as in formulas:
   `max(a; b)`. On
@@ -857,8 +863,39 @@ f_yd   = f_yk / γ_M
   tables (row name). The unit comes from the column type
   (`decimal(0) unit "cm³"`) or from the cell.
 - **Functions:** `sqrt`, `abs`, `min`, `max`, `round(x; n)`, `sin`, `cos`,
-  `tan` (angles in ° or rad), `asin`, `acos`, `atan` (result in °), `ln`,
-  `log`, `exp`; the constant `π`.
+  `tan`, `cot` (angles in ° or rad), `asin`, `acos`, `atan`, `atan2(y; x)`
+  (result in °), `sinh`, `cosh`, `tanh`, `ln`, `log`, `exp`; the constant
+  `π`. Built-in names are found whatever their case; own functions as
+  written.
+- **Integral and derivative:** `int(f; x; a; b)` is the integral of `f`
+  over `x` from `a` to `b` (Simpson's rule, 256 steps), `diff(f; x; x0)` the
+  derivative of `f` by `x` at `x0` (central difference). `x` is a name of
+  their own while `f` is evaluated; units multiply and divide
+  (`int(q; t; 0 m; L)` with `q` in kN/m → kN). Shown as ∫ and d/dx.
+- **Ranges:** `{1, 1.1,,, 2}` are the 11 values from 1 to 2 in steps of 0.1:
+  an empty item continues with the step of the two values before it, up to
+  the value after it; `{1, 2, 5}` lists values. Inside the braces a comma
+  separates (no decimal comma); a unit after `}` applies to all
+  (`x = {0, 0.5,,, 5} m`). A line that uses a range is calculated for every
+  value (`M = q·x·(L - x)/2`) and shows the smallest and largest value and
+  how many: `M = 0 … 31.3 kN·m (11)`; it runs over the range variable it
+  came from. Ranges in one line have the same length. `min(M)`, `max(M)` of
+  one range give a single value. A check over a range holds when it holds
+  for every value; it shows the decisive point, the highest utilisation
+  (among the failing points, if any):
+  `M = 31.3 kN·m ≤ M_Rd = 40.0 kNm   max η = 0.78 at x = 2.50 m ✓`.
+- **Charts:** `[Moments] plot(M)` draws `M` over the range it runs over
+  (`x: …` names other x values). Curves of one chart are of one kind. A plot
+  is a chart like a ```` ```chart ```` block: in the window **▥ Moments**,
+  in layouts (`chart Moments`) and printed after its block; the report
+  draws it. Without a label it is called `plot 1`, `plot 2` …
+- **Formula library:** every sheet knows the formulas hardcalc brings
+  along (beams, cross sections, stresses, buckling, geometry) and those in
+  `formulas.hcmd` in the hardcalc configuration folder
+  (`$XDG_CONFIG_HOME/hardcalc`, `%APPDATA%\hardcalc` or
+  `~/.config/hardcalc`; `HARDCALC_FORMULAS` names another file). That file
+  is a hardcalc document: a heading per group, one definition per line,
+  `[Title] name(params) = formula   ' note`. A definition in the sheet wins.
 - **ASCII input:** `gamma_M` → γ_M, `*` → ·, `<=` → ≤, `>=` → ≥, `->` → →.
   The tab **∑ calc** rewrites input this way; both are read.
 

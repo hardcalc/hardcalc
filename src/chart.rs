@@ -370,6 +370,55 @@ pub fn sparkline(values: &[f64]) -> String {
         .collect()
 }
 
+/// A chart drawn in a calculation sheet (`[Moments] plot(M)`), as the
+/// charts of tables are drawn. All curves are shown in the unit of the first.
+pub fn from_plot(name: &str, p: &crate::sheet::Plot, decimal_comma: bool) -> Result<ChartData, String> {
+    let kind = match p.kind.as_str() {
+        "area" => ChartType::Area,
+        "bar" => ChartType::Bar,
+        "scatter" => ChartType::Scatter,
+        _ => ChartType::Line,
+    };
+    let first = &p.ys[0].1;
+    let unit = first.span().and_then(|(_, hi)| hi.shown().1);
+    let in_unit = |q: &crate::quantity::Quantity, u: &Option<Unit>| -> Result<f64, String> {
+        match u {
+            Some(u) => q.convert(u).map(|c| c.shown().0),
+            None if q.dim.is_none() => Ok(q.value),
+            None => Err("the curves of a chart must be of the same kind".to_string()),
+        }
+    };
+    let mut series = Vec::new();
+    for (label, s) in &p.ys {
+        let values = s.items.iter().map(|q| in_unit(q, &unit).map(Some)).collect::<Result<_, _>>()?;
+        series.push(Series { name: label.clone(), values });
+    }
+    let n = first.items.len();
+    let (categories, xs, x_unit) = match &p.x {
+        Some((_, xs)) => {
+            let xu = xs.span().and_then(|(_, hi)| hi.shown().1);
+            let values: Vec<f64> = xs.items.iter().map(|q| in_unit(q, &xu)).collect::<Result<_, _>>()?;
+            let labels = values.iter().map(|v| crate::quantity::format_sig(*v, 3, decimal_comma)).collect();
+            (labels, Some(values), xu.unwrap_or_default())
+        }
+        None => ((1..=n).map(|i| i.to_string()).collect(), None, Unit::none()),
+    };
+    Ok(ChartData {
+        title: p.title.clone().unwrap_or_else(|| name.to_string()),
+        kind,
+        categories,
+        xs,
+        series,
+        unit: unit.unwrap_or_default(),
+        x_unit,
+        // Not from a table.
+        sheet: usize::MAX,
+        rows_are_categories: false,
+        x_column: None,
+        decimal_comma,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

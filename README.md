@@ -316,9 +316,32 @@ f_yd = f_yk/γ_M = 235/1.1 = 214 N/mm²
 ```
 
 Unit errors (`kN + m`) are detected, `kN` and `N` are converted. The tab
-**∑ calc** (`:calc`, menu *View*) shows the input on the left and the way to
-the result on the right; ASCII input is rewritten (`gamma_M` → γ_M, `*` → ·,
-`<=` → ≤). Example: [examples/beam.hcmd](examples/beam.hcmd), syntax in
+**∑ calc** (`:calc`, menu *View*) shows four columns: **Name**, **Input**,
+the way to the result (**Calculation**) and **Comment**. A name labels a
+line – `[Bending] σ_Ed <= f_yd` in the file – and stands before it when
+printed and in the report; the comment is the `' …` at the end of the line.
+Del in Name or Comment clears it, elsewhere it deletes the line. ASCII input
+is rewritten (`gamma_M` → γ_M, `*` → ·, `<=` → ≤).
+
+More in a sheet:
+
+````markdown
+```hardcalc
+x = {0, 0.5,,, 5} m                  ' a range: 11 values
+[Eq. 1] M = q·x·(L - x)/2            ' calculated for each x
+M ≤ M_Rd                             ' max η = 0.78 at x = 2.50 m ✓
+V = diff(q·t·(L - t)/2; t; x)        ' derivative; int(f; t; a; b) integrates
+M_ss(q; L) = q·L^2/8                 ' an own function
+[Moments] plot(M)                    ' a chart: ▥ Moments, layouts, print, report
+```
+````
+
+**F6** (`:library`) opens the formula library – beams, cross sections,
+stresses, buckling, geometry, and your own formulas in `formulas.hcmd` in the
+hardcalc configuration folder; Enter inserts the formula with a line for each
+input still missing. **F7** (`:plot`) edits the chart on the cursor line
+(name, curves, x, type, title) or starts one for the variable there. All of it in one example:
+[examples/calc-features.hcmd](examples/calc-features.hcmd). Example: [examples/beam.hcmd](examples/beam.hcmd), syntax in
 [SPEC.md](SPEC.md) section 10.
 
 In the right window, **∑ preview** (`:preview`) shows the sheet typeset –

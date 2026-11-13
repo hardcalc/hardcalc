@@ -1,0 +1,89 @@
+<!-- hardcalc 1 -->
+
+# Roof beam – calculation sheet features
+
+A simply supported steel beam under a uniform load. The sheet shows what a
+calculation sheet can do: names and comments beside the lines, ranges of
+values, checks over a range, own functions and the formula library,
+integrals and derivatives, angle functions and charts. Open it with
+`hardcalc examples/calc-features.hcmd`, then `:calc` (F6: formula library,
+F7: chart settings) and `:report` for the typeset report.
+
+## Profiles :: matrix
+
+| Profile | W_y:decimal(0) unit "cm³" | I_y:decimal(0) unit "cm⁴" |
+|---|--:|--:|
+| IPE 240 | 324 | 3890 |
+| IPE 270 | 429 | 5790 |
+| IPE 300 | 557 | 8360 |
+
+```hardcalc
+## System and loads
+[Eq. 1]  f_yk = 235 N/mm²              ' yield strength S235
+         γ_M  = 1.1                    ' partial factor
+         E    = 210000 N/mm²           ' modulus of elasticity
+         L    = 6.0 m                  ' span
+         g_k  = 4.0 kN/m               ' dead load
+         q_k  = 3.0 kN/m               ' imposed load
+[Eq. 2]  q_d  = 1.35·g_k + 1.5·q_k     ' design load
+         W_y  = Profiles["IPE 270", W_y]   ' from the table
+         I_y  = Profiles["IPE 270", I_y]
+         f_yd = f_yk/γ_M
+
+## Internal forces along the beam
+x = {0, 0.5,,, 6} m                    ' 13 points, every 0.5 m
+[Eq. 3] M = M_ss_x(q_d; L; x)          ' formula library (F6)
+[Eq. 4] V = diff(M_ss_x(q_d; L; t); t; x)   ' shear force = dM/dx
+M_max = max(M)
+V_max = max(V)
+[Moments] plot(M; title: Bending moment M)
+[Shear] plot(V; type: area; title: Shear force V)
+
+## Bending check at every point
+σ = M/W_y → N/mm²
+[Bending] σ ≤ f_yd                     ' decisive point and η
+
+## Deflection with an own function
+w_x(q; L; E; I; x) = q·x·(L^3 - 2·L·x^2 + x^3)/(24·E·I)   ' deflection line
+w = w_x(g_k + q_k; L; E; I_y; x) → mm
+w_max = max(w) → mm
+w_mid = w_ss(g_k + q_k; L; E; I_y) → mm   ' library: the same at midspan
+w_lim = L/300 → mm
+[Serviceability] w_max ≤ w_lim         ' limit L/300
+[Deflection] plot(w; title: Deflection line w)
+
+## Equilibrium by integration
+R = int(q_d; t; 0 m; L)                ' total load: integral of q_d
+A = V_ss(q_d; L)                       ' support force, formula library
+[Equilibrium] 2·A ≥ R                  ' η = 1.00: both supports carry R
+
+## Load factor study
+k = {1, 1.1,,, 2}                      ' 11 factors from 1 to 2, step 0.1
+σ_k = k·max(σ)
+[Reserve] σ_k ≤ f_yd                   ' decisive: the highest factor
+[Factors] plot(σ_k; x: k; type: bar; title: Stress over the load factor)
+
+## Roof slope with angle functions
+h = 1.2 m                              ' rise
+l = 4.0 m                              ' run
+α = atan2(h; l)                        ' angle of the slope
+s = l/cos(α)                           ' length of the rafter
+c = sqrt(h^2 + l^2)                    ' the same by Pythagoras
+g_slope = g_k·cos(α)                   ' dead load across the rafter
+```
+
+## Overview
+
+The layout below puts the charts of the sheet next to the profile table.
+
+```layout Overview
+page: A4 landscape
+font: 9
+grid: 12
+1-12 / 1-2    heading  Roof beam IPE 270
+1-4  / 4-10   table    Profiles
+5-12 / 4-14   chart    Moments
+1-6  / 16-26  chart    Shear
+7-12 / 16-26  chart    Deflection
+1-12 / 28-29  note     Charts from the calculation sheet: plot(M), plot(V), plot(w).
+```

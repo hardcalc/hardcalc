@@ -36,11 +36,13 @@ mod point;
 mod search;
 mod shape;
 mod sources;
+mod calc_dialogs;
 mod values;
 mod views;
 pub use functions_view::{FnRow, FN_COLS};
-pub use calc_view::{CalcRow, FormulaStyle, PreviewKind, CALC_COLS};
+pub use calc_view::{CalcRow, FormulaStyle, PreviewKind, CALCULATION, CALC_COLS};
 pub use context_menu::{ContextMenu, CONTEXT_MENU};
+pub use calc_dialogs::{LibraryDialog, PlotDialog, PLOT_TYPES};
 pub use values::{ValueItem, ValueList};
 use crate::tui::keymap::{self, Cap, Cond};
 
@@ -438,6 +440,10 @@ pub struct App {
     pub last_find: Option<String>,
     /// The open value list of a column (filter by ticking values).
     pub values: Option<ValueList>,
+    /// The settings of a chart in the calculation sheet, while edited (F7).
+    pub plot_dialog: Option<PlotDialog>,
+    /// The formula library, while a formula is picked (F6).
+    pub library: Option<LibraryDialog>,
     /// Which conditional inputs work in this terminal.
     pub caps: keymap::Caps,
     /// Where observed capabilities are remembered.
@@ -889,6 +895,8 @@ impl App {
             bundle: None,
             context: None,
             values: None,
+            plot_dialog: None,
+            library: None,
             last_find: None,
             caps: keymap::Caps::default(),
             caps_path: None,
@@ -1106,16 +1114,31 @@ impl App {
 
     // ------------------------------------------------------------ charts
 
-    /// (name, lines) of all ```chart blocks in document order.
+    /// (name, lines) of all charts: the ```chart blocks in document order,
+    /// then the plots of the calculation sheet (`[Moments] plot(M)`, no lines).
     pub fn chart_blocks(&self) -> Vec<(String, Vec<String>)> {
-        self.doc
-            .blocks
-            .iter()
-            .filter_map(|b| if let Block::Chart { name, lines } = b { Some((name.clone(), lines.clone())) } else { None })
-            .collect()
+        let mut charts: Vec<(String, Vec<String>)> =
+            self.doc.blocks.iter().filter_map(|b| if let Block::Chart { name, lines } = b { Some((name.clone(), lines.clone())) } else { None }).collect();
+        charts.extend(crate::sheet::plot_names(&self.doc).into_iter().map(|n| (n, Vec::new())));
+        charts
+    }
+
+    /// Number of ```chart blocks; the charts after them are plots.
+    fn chart_block_count(&self) -> usize {
+        self.doc.blocks.iter().filter(|b| matches!(b, Block::Chart { .. })).count()
     }
 
     pub fn chart_data(&mut self, i: usize) -> Result<ChartData, String> {
+        let n = self.chart_block_count();
+        if i >= n {
+            let comma = self.wb.decimal_comma;
+            let plot = self.calc_results().iter().filter(|o| matches!(o, crate::sheet::Out::Plot { .. })).nth(i - n).cloned();
+            return match plot {
+                Some(crate::sheet::Out::Plot { name, plot: Ok(p), .. }) => chart::from_plot(&name, &p, comma),
+                Some(crate::sheet::Out::Plot { plot: Err(e), .. }) => Err(e),
+                _ => Err("chart no longer exists".into()),
+            };
+        }
         let (name, lines) = self.chart_blocks().into_iter().nth(i).ok_or("chart no longer exists")?;
         let spec = ChartSpec::parse(&name, &lines)?;
         chart::resolve(&spec, &mut self.wb)
@@ -1157,8 +1180,18 @@ impl App {
         }
     }
 
-    /// Sets `key: value` in chart block `i` (one undoable step).
+    /// Sets `key: value` in chart block `i` (one undoable step); for a plot
+    /// the option of its line.
     fn set_chart_prop(&mut self, i: usize, key: &str, value: &str) {
+        let n = self.chart_block_count();
+        if i >= n {
+            let plot_type = match value {
+                "area" | "bar" | "scatter" => value,
+                _ => "line",
+            };
+            let value = if key == "type" { plot_type } else { value };
+            return self.set_plot_option(i - n, key, value);
+        }
         let line = format!("{key}: {value}");
         self.with_doc(|doc| {
             let block = doc.blocks.iter_mut().filter(|b| matches!(b, Block::Chart { .. })).nth(i);
@@ -2343,7 +2376,7 @@ impl App {
         let (goto, ins_row, ins_col, sort, delete) = match main.kind {
             ViewKind::Layout(_) => return LAYOUT_FKEYS,
             ViewKind::Types | ViewKind::Functions => ("", "New", "", "", "Delete"),
-            ViewKind::Calc => ("", "InsLine", "", "", "DelLine"),
+            ViewKind::Calc => ("", "InsLine", "Library", "Chart", "DelLine"),
             _ if main.pivot.is_some() => ("", "", "", "", ""),
             _ => {
                 // The cursor decides what F8 deletes and where a second F7 leads.
@@ -2402,7 +2435,7 @@ impl App {
     /// its charts. Tables look as on screen; charts with errors are left out.
     pub fn print_items(&mut self, all: bool) -> Vec<PrintItem> {
         let mut items = Vec::new();
-        let (mut sheet, mut chart, mut footnote) = (0, 0, 0);
+        let (mut sheet, mut chart, mut footnote, mut plot) = (0, 0, 0, 0);
         // Calculation sheets print with the way to each result.
         let mut calc = crate::sheet::render_blocks(&self.doc.clone(), &mut self.wb, crate::sheet::Render::default());
         for (i, block) in self.doc.blocks.clone().into_iter().enumerate() {
@@ -2432,9 +2465,17 @@ impl App {
                     items.push(PrintItem::Text(lines));
                 }
                 // The standard PDF fonts have no Greek letters, ≤ or ✓.
-                Block::Code { .. } if all && calc.contains_key(&i) => {
+                Block::Code { ref body, .. } if all && calc.contains_key(&i) => {
                     let lines = calc.remove(&i).unwrap_or_default();
                     items.push(PrintItem::Code(lines.iter().map(|l| crate::sheet::expr::latin1(l)).collect()));
+                    // The plots of the block follow it.
+                    let plots = body.iter().filter(|l| crate::sheet::is_plot_line(l)).count();
+                    for _ in 0..plots {
+                        if let Ok(data) = self.chart_data(self.chart_block_count() + plot) {
+                            items.push(PrintItem::Chart(data));
+                        }
+                        plot += 1;
+                    }
                 }
                 Block::Code { body, .. } if all => items.push(PrintItem::Code(body)),
                 _ => {}
@@ -4177,7 +4218,7 @@ impl App {
             return self.error("F8 deletes a function");
         }
         if self.calc_view() {
-            return self.delete_calc_lines();
+            return self.clear_calc();
         }
         if self.solo_rule_layer().is_some() {
             return self.commit_value(String::new());
@@ -4675,6 +4716,9 @@ impl App {
     /// Shows `kind` (for tables: sheet `sheet`) in the focused window.
     pub fn set_view(&mut self, kind: ViewKind, sheet: usize) {
         self.view = View::new(kind, sheet);
+        if kind == ViewKind::Calc {
+            self.view.cursor.1 = calc_view::INPUT;
+        }
         if kind == ViewKind::Table {
             self.view.layer = self.levels.get(&sheet).copied().unwrap_or(0);
             self.clamp_view();
@@ -4827,6 +4871,12 @@ impl App {
         }
         if self.values.is_some() {
             return self.key_values(key);
+        }
+        if self.plot_dialog.is_some() {
+            return self.key_plot_dialog(key);
+        }
+        if self.library.is_some() {
+            return self.key_library(key);
         }
         if self.show_help {
             return self.key_help(key);
@@ -5084,7 +5134,7 @@ impl App {
     }
 
     /// A menu or dialog is open above the windows.
-    fn overlay_open(&self) -> bool {
+    pub fn overlay_open(&self) -> bool {
         self.key_test.is_some()
             || self.context.is_some()
             || self.values.is_some()
@@ -5093,6 +5143,8 @@ impl App {
             || self.menu.is_some()
             || self.file_dialog.is_some()
             || self.paper_menu.is_some()
+            || self.plot_dialog.is_some()
+            || self.library.is_some()
     }
 
     /// The function key whose label is at `pos` and not hidden by a dialog.
@@ -5505,6 +5557,9 @@ impl App {
 
     /// F6: a new column right of the cursor; the command line asks for its name.
     pub(super) fn insert_column_key(&mut self) {
+        if self.calc_view() {
+            return self.open_library();
+        }
         if self.view.kind == ViewKind::Table && self.view.pivot.is_none() {
             self.ask_argument("addcol ");
         } else {
@@ -5603,7 +5658,9 @@ impl App {
             match cmd {
                 "delrow" => return self.delete_calc_lines(),
                 "addrow" => return self.insert_calc_line(),
-                "addcol" | "delcol" | "sort" | "sortcol" | "pivot" => {
+                "sort" | "plot" => return self.open_plot_dialog(),
+                "addcol" | "library" => return self.open_library(),
+                "delcol" | "sortcol" | "pivot" => {
                     return self.error(format!(":{cmd} is not available in the calculation view"));
                 }
                 _ => {}
@@ -5765,6 +5822,8 @@ impl App {
             },
             "functions" => self.show_helper(ViewKind::Functions),
             "calc" => self.show_helper(ViewKind::Calc),
+            "plot" => self.open_plot_dialog(),
+            "library" => self.open_library(),
             "preview" => self.show_helper(ViewKind::CalcPreview),
             "formulas" => match args.first().and_then(|a| FormulaStyle::parse(a)) {
                 Some(st) => {
