@@ -280,7 +280,8 @@ fn macos_install(exe: &Path, done: &mut Vec<String>) -> Result<(), String> {
 
     let script = env::temp_dir().join(format!("hardcalc-launcher-{}.applescript", std::process::id()));
     fs::write(&script, applescript(exe)).map_err(|e| format!("{}: {e}", script.display()))?;
-    let compiled = run("osacompile", &["-o", &app_s, &script.to_string_lossy()]);
+    // -s: stay open, so the idle handler can close finished windows.
+    let compiled = run("osacompile", &["-s", "-o", &app_s, &script.to_string_lossy()]);
     let _ = fs::remove_file(&script);
     compiled?;
 
@@ -300,6 +301,8 @@ fn macos_install(exe: &Path, done: &mut Vec<String>) -> Result<(), String> {
         ("CFBundleName", "-string", "hardcalc".to_string()),
         ("CFBundleShortVersionString", "-string", version.to_string()),
         ("CFBundleIconFile", "-string", "applet".to_string()),
+        // No Dock icon while the launcher waits for its windows.
+        ("LSUIElement", "-bool", "true".to_string()),
         ("CFBundleDocumentTypes", "-json", document_types_json()),
         ("UTExportedTypeDeclarations", "-json", exported_types_json()),
     ] {
@@ -347,10 +350,17 @@ fn macos_uninstall(done: &mut Vec<String>) -> Result<(), String> {
 }
 
 /// The launcher: runs hardcalc in a new Terminal window, once per opened file.
+///
+/// It is a stay-open applet without a Dock icon: it remembers the tabs it
+/// started (by their tty) and closes a window once hardcalc in it has ended –
+/// Terminal's own profiles leave it open by default – then quits when no tab
+/// is left to watch.
 pub fn applescript(exe: &Path) -> String {
     let command = format!("clear; exec {}", sh_quote(&exe.to_string_lossy()));
     format!(
-        r#"on run
+        r#"global watched
+
+on run
 	launch_hardcalc("")
 end run
 
@@ -361,12 +371,17 @@ on open theFiles
 end open
 
 on launch_hardcalc(arg)
+	try
+		watched
+	on error
+		set watched to {{}}
+	end try
 	set cmd to "{}" & arg
 	set wasRunning to application "Terminal" is running
 	tell application "Terminal"
 		activate
 		if wasRunning then
-			do script cmd
+			set t to do script cmd
 		else
 			-- Terminal opens a window when it starts; use it instead of a second one.
 			repeat 50 times
@@ -374,13 +389,57 @@ on launch_hardcalc(arg)
 				delay 0.1
 			end repeat
 			if (count of windows) > 0 then
-				do script cmd in window 1
+				set t to do script cmd in window 1
 			else
-				do script cmd
+				set t to do script cmd
 			end if
 		end if
+		try
+			set end of watched to (tty of t)
+		end try
 	end tell
 end launch_hardcalc
+
+-- Closes the windows whose hardcalc has ended; quits when none is left.
+on idle
+	try
+		watched
+	on error
+		set watched to {{}}
+	end try
+	set still to {{}}
+	if application "Terminal" is running then
+		repeat with x in watched
+			set x to contents of x
+			try
+				if tab_running(x) then set end of still to x
+			end try
+		end repeat
+	end if
+	set watched to still
+	if (count of watched) is 0 then
+		tell me to quit
+		return 60
+	end if
+	return 1
+end idle
+
+-- Whether hardcalc still runs in the tab with this tty; closes its window
+-- when it has ended and the tab is the window's only one.
+on tab_running(x)
+	tell application "Terminal"
+		repeat with w in windows
+			repeat with tb in tabs of w
+				if tty of tb is x then
+					if (count of processes of tb) > 0 then return true
+					if (count of tabs of w) is 1 then close w
+					return false
+				end if
+			end repeat
+		end repeat
+	end tell
+	return false
+end tab_running
 "#,
         applescript_string(&command)
     )
@@ -548,6 +607,15 @@ mod tests {
     fn applescript_quotes_the_path_for_shell_and_applescript() {
         let script = applescript(Path::new("/Users/o'neil/bin/hard\"calc"));
         assert!(script.contains(r#"set cmd to "clear; exec '/Users/o'\\''neil/bin/hard\"calc'" & arg"#), "{script}");
+    }
+
+    #[test]
+    fn applescript_watches_its_tabs_and_closes_them() {
+        let script = applescript(Path::new("/usr/local/bin/hardcalc"));
+        assert!(script.contains("set end of watched to (tty of t)"), "{script}");
+        assert!(script.contains("on idle"), "{script}");
+        assert!(script.contains("if (count of tabs of w) is 1 then close w"), "{script}");
+        assert!(!script.contains("{{}}"), "format! braces must collapse: {script}");
     }
 
     #[test]
