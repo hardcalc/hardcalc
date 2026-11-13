@@ -718,8 +718,8 @@ fn prepare(doc: &Document) -> (Workbook, Vec<SheetOut>, ExportReport) {
         report.notes += cells.iter().flatten().filter(|c| c.note.is_some()).count();
         // enum types → lists; validate rules → comparisons and lists.
         let mut validations = Vec::new();
-        for c in 0..cols {
-            if let Base::Enum(options) = &wb.sheets[s].columns[c].ty.base
+        for (c, column) in wb.sheets[s].columns.iter().enumerate().take(cols) {
+            if let Base::Enum(options) = &column.ty.base
                 && rows > 0
             {
                 validations.push(((0, c, rows - 1, c), Validation::List(options.clone())));
@@ -1248,8 +1248,8 @@ pub fn export_ods(doc: &Document, path: &Path) -> Result<ExportReport, String> {
 
         tables.push_str(&format!("<table:table table:name=\"{}\">", xml(&sheet.name)));
         if sheet.hidden_cols.contains(&true) {
-            for c in 0..sheet.headers.len() {
-                tables.push_str(if sheet.hidden_cols[c] { "<table:table-column table:visibility=\"collapse\"/>" } else { "<table:table-column/>" });
+            for hidden in sheet.hidden_cols.iter().take(sheet.headers.len()) {
+                tables.push_str(if *hidden { "<table:table-column table:visibility=\"collapse\"/>" } else { "<table:table-column/>" });
             }
         } else {
             tables.push_str(&format!("<table:table-column table:number-columns-repeated=\"{}\"/>", sheet.headers.len().max(1)));

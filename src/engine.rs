@@ -1102,7 +1102,7 @@ impl Evaluator<'_> {
                     return call(name, all);
                 }
                 let rest = &args[1..];
-                for pair in rest.chunks_exact(2) {
+                for pair in rest.as_chunks::<2>().0 {
                     let case = self.eval(&pair[0], sheet);
                     if crate::builtins::values_equal(&expr, &case) {
                         return self.eval(&pair[1], sheet);

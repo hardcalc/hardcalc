@@ -482,7 +482,7 @@ pub fn call(name: &str, args: Vec<Value>) -> Value {
             if rest.len() < 2 {
                 return Value::err("switch needs at least one case and value");
             }
-            for pair in rest.chunks_exact(2) {
+            for pair in rest.as_chunks::<2>().0 {
                 if values_equal(expr, &pair[0]) {
                     return pair[1].clone();
                 }

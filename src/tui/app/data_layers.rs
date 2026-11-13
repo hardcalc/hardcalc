@@ -117,8 +117,8 @@ impl App {
                 // The table's calculated columns reach the new rows too.
                 for c in 0..names.len() {
                     if let Some((base, src)) = column_formula(&t.rows, c, &names, None) {
-                        for r in rows..need_rows {
-                            t.rows[r][c] = formula_in_row(&src, base, r, &names);
+                        for (r, row) in t.rows.iter_mut().enumerate().take(need_rows).skip(rows) {
+                            row[c] = formula_in_row(&src, base, r, &names);
                         }
                     }
                 }

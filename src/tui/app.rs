@@ -3268,9 +3268,9 @@ impl App {
         let mut row = 4;
         let charts: Vec<(String, Option<usize>)> =
             (0..self.chart_blocks().len()).map(|c| (self.chart_blocks()[c].0.clone(), self.chart_data(c).ok().map(|d| d.sheet))).collect();
-        for s in 0..self.wb.sheets.len() {
-            let Some(table) = self.wb.sheets[s].name.clone() else { continue };
-            let h = (self.wb.sheets[s].cells.len() + self.wb.sheets[s].footer.len() + 2).clamp(4, 20);
+        for (s, sheet) in self.wb.sheets.iter().enumerate() {
+            let Some(table) = sheet.name.clone() else { continue };
+            let h = (sheet.cells.len() + sheet.footer.len() + 2).clamp(4, 20);
             let chart = charts.iter().find(|(_, sheet)| *sheet == Some(s)).map(|(n, _)| n.clone());
             match chart {
                 Some(chart) => {
