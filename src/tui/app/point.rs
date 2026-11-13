@@ -79,7 +79,8 @@ impl App {
         // After `B1:` the second corner starts at B1 (as in Excel).
         let from = active.map_or_else(|| self.range_start().unwrap_or(self.view.cursor), |p| p.cell);
         let r = self.step_row(from.0, dr);
-        let c = (from.1 as isize + dc).clamp(0, cols.saturating_sub(1) as isize) as usize;
+        let _ = cols;
+        let c = self.step_col(from.1, dc);
         let anchor = if extend { Some(active.and_then(|p| p.anchor).unwrap_or(from)) } else { None };
         self.point_at((r, c), anchor);
     }

@@ -112,6 +112,8 @@ pub struct Element {
     pub z: Option<String>,
     /// Tables: the rows to show.
     pub pick: RowPick,
+    /// Tables: only the rows that meet this (`where: Status = open`).
+    pub filter: Option<String>,
     /// `height: auto`: as tall as the content needs; `rows` is the designed
     /// size, and what lies below keeps its distance to the real one.
     pub auto: bool,
@@ -144,7 +146,7 @@ impl Element {
     fn option_keys(kind: ElementKind) -> &'static [&'static str] {
         match kind {
             // A value or chart keeps the options of a table, so that F6 (kind) loses nothing.
-            ElementKind::Table | ElementKind::Value | ElementKind::Chart => &["columns:", "rows:", "label:", "z:", "height:"],
+            ElementKind::Table | ElementKind::Value | ElementKind::Chart => &["columns:", "rows:", "where:", "label:", "z:", "height:"],
             // Running text: only a closing `height: auto`, so that a colon in the text stays text.
             ElementKind::Heading | ElementKind::Text | ElementKind::Note => &[],
         }
@@ -154,7 +156,7 @@ impl Element {
     /// the file and typed in the editor: `Expenses columns: Item z: b`.
     pub fn set_text(&mut self, text: &str) -> Result<(), String> {
         let mut content = text.trim().to_string();
-        (self.columns, self.label, self.z, self.pick, self.auto) = (Vec::new(), None, None, RowPick::All, false);
+        (self.columns, self.label, self.z, self.pick, self.auto, self.filter) = (Vec::new(), None, None, RowPick::All, false, None);
         if matches!(self.kind, ElementKind::Heading | ElementKind::Text | ElementKind::Note) {
             let words: Vec<&str> = content.split_whitespace().collect();
             if let [.., "height:", "auto"] = words.as_slice() {
@@ -177,6 +179,7 @@ impl Element {
                 "z:" => self.z = Some(value.to_string()).filter(|v| !v.is_empty()),
                 "label:" => self.label = Some(value.to_string()),
                 "rows:" => self.pick = RowPick::parse(value)?,
+                "where:" => self.filter = Some(value.to_string()).filter(|v| !v.is_empty()),
                 "height:" if value == "auto" => self.auto = true,
                 "height:" if value == "fixed" || value.is_empty() => {}
                 "height:" => return Err(format!("height: expected `auto`, not '{value}'")),
@@ -207,6 +210,9 @@ impl Element {
         }
         if let Some(rows) = self.pick.text().filter(|_| !text_kind) {
             add("rows:", &rows);
+        }
+        if let Some(w) = self.filter.as_ref().filter(|_| !text_kind) {
+            add("where:", w);
         }
         if let Some(l) = self.label.as_ref().filter(|_| !text_kind) {
             add("label:", l);

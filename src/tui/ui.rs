@@ -1173,7 +1173,9 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         }
     }
     app.view.scroll.0 = app.view.scroll.0.min(rows.saturating_sub(1));
-    app.view.scroll.1 = app.view.scroll.1.min(cols.saturating_sub(1));
+    // Frozen columns stay at the left; the others scroll behind them.
+    let frozen = app.frozen_cols().min(cols.saturating_sub(1));
+    app.view.scroll.1 = app.view.scroll.1.min(cols.saturating_sub(1)).max(frozen);
 
     // Filling tables get Excel-like column widths.
     let min_col = if app.fills() { FILL_MIN_COL } else { MIN_COL };
@@ -1211,6 +1213,8 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 .max()
                 .unwrap_or(0)
                 .clamp(min_col, widest);
+            // A width set in the view layer wins over what the content needs.
+            let w = app.col_width(c).unwrap_or(w);
             cache.insert(c, (w, views));
             w
         };
@@ -1218,9 +1222,13 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         let layout = |app: &mut App, column: &mut dyn FnMut(&mut App, usize) -> usize, start: usize| {
             let mut out = Vec::new();
             let mut x = 0;
-            for c in start..cols {
+            // The frozen columns first, then from `start`; hidden ones are left out.
+            for c in (0..frozen).chain(start.max(frozen)..cols) {
                 if x >= avail {
                     break;
+                }
+                if !app.col_shown(c) {
+                    continue;
                 }
                 let w = column(app, c);
                 out.push((c, x, w.min(avail - x), x + w <= avail));
@@ -1231,7 +1239,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
 
         // Horizontal scrolling: move right until the cursor column fits completely.
         if app.view.follow {
-            if focus.1 < app.view.scroll.1 {
+            if focus.1 < app.view.scroll.1 && focus.1 >= frozen {
                 app.view.scroll.1 = focus.1;
             }
             while app.view.scroll.1 < focus.1 {
@@ -1247,7 +1255,8 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         // Height of each row in lines; the rows that fit on the screen.
         // Every column counts, also those scrolled out of view, so that a row
         // keeps its height while scrolling sideways.
-        let all: Vec<(usize, usize)> = (0..cols).map(|c| (c, column(app, c))).collect();
+        let drawn: Vec<usize> = (0..cols).filter(|&c| app.col_shown(c)).collect();
+        let all: Vec<(usize, usize)> = drawn.into_iter().map(|c| (c, column(app, c))).collect();
         let mut heights = Vec::new();
         let mut used = 0;
         for (i, &r) in row_list.iter().enumerate() {
@@ -1473,6 +1482,17 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             }
         }
     }
+    // A line behind the frozen columns.
+    if frozen > 0
+        && let Some(&(_, x, w, _)) = visible.iter().rfind(|v| v.0 < frozen)
+    {
+        let sx = area.x + (gutter + x + w) as u16;
+        if sx < area.right() {
+            for y in area.y..(area.y + HEADER_LINES + y_off).min(area.bottom()) {
+                f.buffer_mut()[(sx, y)].set_symbol("│").set_fg(Color::DarkGray);
+            }
+        }
+    }
     // Data flows from the sources to the formula cell; from sources out of
     // sight it comes in at the edge on their side.
     if !sources.cells.is_empty() && app.anim.enabled && !visible.is_empty() {
@@ -1622,10 +1642,24 @@ fn draw_layers(f: &mut Frame, app: &mut App, area: Rect) {
         // The filter says how many rows it shows: `filter 2/6`.
         let count = match app.hidden_count().filter(|_| name == crate::tui::app::FILTER) {
             Some((hidden, all)) => format!(" {}/{all}", all - hidden),
+            // The view says how many columns it hides: `view −2`.
+            None if name == crate::tui::app::VIEW && app.hidden_cols() > 0 => format!(" −{}", app.hidden_cols()),
             None => String::new(),
         };
         items.push((format!(" {mark} {name}{local}{count} "), style, Some(Hit::Layer(i))));
         items.push((" ".into(), Style::new().bg(Color::Black), None));
+    }
+    // Too many for the line: layers without rules for this table make room
+    // (`:layer new` still adds them), the last ones first.
+    let width = |items: &[(String, Style, Option<Hit>)]| items.iter().map(|(t, ..)| t.width()).sum::<usize>();
+    while width(&items) > area.width as usize {
+        let empty = items.iter().rposition(|(text, _, hit)| matches!(hit, Some(Hit::Layer(_))) && text.starts_with(" ○ "));
+        match empty {
+            Some(k) => {
+                items.drain(k..=(k + 1).min(items.len() - 1));
+            }
+            None => break,
+        }
     }
     chips(f, area, items, &mut app.hits);
 

@@ -32,6 +32,12 @@ with the Python that LibreOffice brings along.
   What Calc cannot do (slices and scenarios, footer references, `spark`,
   recursion) stays in the cell as text `=…`, with a comment; it is written
   back unchanged when saving.
+- The **`filter` layer** becomes the autofilter of the sheet: Calc hides the
+  rows and shows the filter buttons (comparisons, `in(…)`, `contains(…)`,
+  `empty`, `required`). Columns hidden by the **`view` layer** are hidden in
+  Calc. Both layers stay in the file as they are when saving – a filter
+  changed in Calc is not written back. A rule Calc cannot take leaves the
+  sheet unfiltered (see the log).
 - Everything except the tables – running text, `types`, `functions`, layers,
   footer rows, slices, charts, layouts, calculation sheets – is not visible in
   Calc but is carried along in the document (custom document property

@@ -124,7 +124,14 @@ pub fn footer_cell(raw: &str, column: &SheetColumn) -> Cell {
         let expr = if FOOTER_AGGREGATES.contains(&lower.as_str()) {
             Ok(Expr::Call(lower, vec![Expr::Name(column.name.clone())]))
         } else {
-            parse_formula(src)
+            // `=subtotal(sum)`: the aggregate over the rows of the column the filter shows.
+            parse_formula(src).map(|e| match e {
+                Expr::Call(name, mut args) if name == "subtotal" && args.len() == 1 => {
+                    args.push(Expr::Name(column.name.clone()));
+                    Expr::Call(name, args)
+                }
+                e => e,
+            })
         };
         return Cell::Formula { src: raw.to_string(), expr };
     }
@@ -136,7 +143,12 @@ pub fn footer_cell(raw: &str, column: &SheetColumn) -> Cell {
 
 /// Whether a footer cell counts (its result is no amount of the column).
 fn counts(cell: &Cell) -> bool {
-    matches!(cell, Cell::Formula { expr: Ok(Expr::Call(name, _)), .. } if name.starts_with("count") || name == "anzahl")
+    let counting = |name: &str| name.starts_with("count") || name == "anzahl";
+    match cell {
+        Cell::Formula { expr: Ok(Expr::Call(name, args)), .. } if name == "subtotal" => matches!(args.first(), Some(Expr::Name(f)) if counting(&f.to_lowercase())),
+        Cell::Formula { expr: Ok(Expr::Call(name, _)), .. } => counting(name),
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,7 +177,44 @@ pub struct Workbook {
     pub functions: HashMap<String, UserFn>,
     /// Whether the document writes decimals with `,`.
     pub decimal_comma: bool,
+    /// The rules of the `filter` layers: (table, column, conditions). A row
+    /// that does not meet them is left out by `subtotal`.
+    filters: Vec<(usize, usize, Vec<crate::layers::Check>)>,
+    /// Tables whose filter is switched off (all rows count for `subtotal`).
+    filter_off: HashSet<usize>,
     state: EvalState,
+}
+
+/// The rules of the `filter` layers of `doc`, each bound to its table (the
+/// one named with `@`, else the nearest above) and column.
+fn filter_rules(doc: &Document, sheets: &[Sheet]) -> Vec<(usize, usize, Vec<crate::layers::Check>)> {
+    let mut out = Vec::new();
+    let mut last = None;
+    for block in &doc.blocks {
+        match block {
+            Block::Table(_) => last = Some(last.map_or(0, |i: usize| i + 1)),
+            Block::Layer(l) if l.name == crate::layers::FILTER => {
+                let sheet = match &l.target {
+                    Some(name) => sheets.iter().position(|s| s.name.as_deref() == Some(name.as_str())),
+                    None => last,
+                };
+                let Some(sheet) = sheet else { continue };
+                for rule in &l.rules {
+                    let crate::model::Rule::Rule { target, body } = rule else { continue };
+                    let cols = &sheets[sheet].columns;
+                    let col = cols.iter().position(|c| c.name == *target).or_else(|| letters_to_col(target).filter(|&c| c < cols.len() && target.chars().all(|ch| ch.is_ascii_uppercase())));
+                    if let (Some(col), Ok(checks)) = (col, crate::layers::Check::parse_all(body))
+                        && !checks.is_empty()
+                        && !checks.contains(&crate::layers::Check::Unique)
+                    {
+                        out.push((sheet, col, checks));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 impl Workbook {
@@ -322,8 +371,18 @@ impl Workbook {
                 }
             }
         }
-        let wb = Workbook { types, sheets, functions, decimal_comma: crate::locale::decimal_comma(), state: EvalState::default() };
+        let filters = filter_rules(doc, &sheets);
+        let wb = Workbook { types, sheets, functions, decimal_comma: crate::locale::decimal_comma(), filters, filter_off: HashSet::new(), state: EvalState::default() };
         (wb, diags)
+    }
+
+    /// Switches the filter of table `sheet` off or on for `subtotal` (a view
+    /// that shows all rows also counts them all). Everything is recalculated.
+    pub fn set_filter_off(&mut self, sheet: usize, off: bool) {
+        let changed = if off { self.filter_off.insert(sheet) } else { self.filter_off.remove(&sheet) };
+        if changed && self.filters.iter().any(|(s, ..)| *s == sheet) {
+            self.state = EvalState::default();
+        }
     }
 
     pub fn sheet_index(&self, name: &str) -> Option<usize> {
@@ -332,7 +391,7 @@ impl Workbook {
 
     /// The (computed) value of a cell.
     pub fn value(&mut self, id: CellId) -> Value {
-        let mut ev = Evaluator { sheets: &self.sheets, functions: &self.functions, state: &mut self.state, current: None, env: Vec::new(), layer: 0, pinned: false };
+        let mut ev = Evaluator { sheets: &self.sheets, functions: &self.functions, state: &mut self.state, filters: &self.filters, filter_off: &self.filter_off, current: None, env: Vec::new(), layer: 0, pinned: false };
         ev.cell(id)
     }
 
@@ -346,7 +405,7 @@ impl Workbook {
             Ok(e) => e,
             Err(e) => return Value::err(format!("syntax: {e}")),
         };
-        let mut ev = Evaluator { sheets: &self.sheets, functions: &self.functions, state: &mut self.state, current: None, env: Vec::new(), layer: 0, pinned: false };
+        let mut ev = Evaluator { sheets: &self.sheets, functions: &self.functions, state: &mut self.state, filters: &self.filters, filter_off: &self.filter_off, current: None, env: Vec::new(), layer: 0, pinned: false };
         match ev.eval(&expr, sheet.min(self.sheets.len() - 1)) {
             Value::Vector(mut items) if items.len() == 1 => items.remove(0),
             v => v,
@@ -359,7 +418,7 @@ impl Workbook {
             Ok(e) => e,
             Err(e) => return Value::err(format!("syntax: {e}")),
         };
-        let mut ev = Evaluator { sheets: &self.sheets, functions: &self.functions, state: &mut self.state, current: None, env: Vec::new(), layer: z, pinned: false };
+        let mut ev = Evaluator { sheets: &self.sheets, functions: &self.functions, state: &mut self.state, filters: &self.filters, filter_off: &self.filter_off, current: None, env: Vec::new(), layer: z, pinned: false };
         match ev.eval(&expr, sheet) {
             Value::Vector(mut items) if items.len() == 1 => items.remove(0),
             v => v,
@@ -666,6 +725,8 @@ struct Evaluator<'a> {
     functions: &'a HashMap<String, UserFn>,
     state: &'a mut EvalState,
     current: Option<CellId>,
+    filters: &'a [(usize, usize, Vec<crate::layers::Check>)],
+    filter_off: &'a HashSet<usize>,
     /// Parameters of the user functions being evaluated (innermost last).
     env: Vec<HashMap<String, Value>>,
     /// The data layer references without one read (that of the formula).
@@ -784,6 +845,25 @@ impl Evaluator<'_> {
         let rows = self.sheets[sheet].cells.len();
         let col = in_layer(col, self.layer);
         Value::Vector((0..rows).map(|r| self.cell((sheet, r, col))).collect())
+    }
+
+    /// Per data row of `sheet`, whether its filter hides it on data layer
+    /// `z`; empty without a filter (or with the filter switched off).
+    fn filtered_out(&mut self, sheet: usize, z: usize) -> Vec<bool> {
+        let filters = self.filters;
+        if self.filter_off.contains(&sheet) || !filters.iter().any(|(s, ..)| *s == sheet) {
+            return Vec::new();
+        }
+        let mut hidden = vec![false; self.sheets[sheet].cells.len()];
+        for (_, col, checks) in filters.iter().filter(|(s, ..)| *s == sheet) {
+            for (r, h) in hidden.iter_mut().enumerate() {
+                if !*h {
+                    let v = self.cell((sheet, r, in_layer(*col, z)));
+                    *h = !checks.iter().all(|check| check.holds(&v));
+                }
+            }
+        }
+        hidden
     }
 
     /// Evaluates `e` with references reading data layer `z`.
@@ -1029,6 +1109,28 @@ impl Evaluator<'_> {
                     }
                 }
                 if !rest.len().is_multiple_of(2) { self.eval(&rest[rest.len() - 1], sheet) } else { Value::err("switch: no case matches") }
+            }
+            // subtotal(sum; Amount): the aggregate over the rows the filter shows.
+            Expr::Call(name, args) if name == "subtotal" && args.len() == 2 && !self.functions.contains_key(name) => {
+                let function = match &args[0] {
+                    Expr::Name(f) if FOOTER_AGGREGATES.contains(&f.to_lowercase().as_str()) => f.to_lowercase(),
+                    _ => return Value::err(format!("subtotal: the first argument is one of {}", FOOTER_AGGREGATES.join(", "))),
+                };
+                let table = self.sheet_of(&args[1], sheet);
+                let items = match self.eval(&args[1], sheet) {
+                    Value::Vector(items) => items,
+                    v => return call(&function, vec![v]),
+                };
+                let z = if table == sheet || self.pinned { self.layer } else { 0 };
+                let hidden = self.filtered_out(table, z);
+                if hidden.is_empty() {
+                    return call(&function, vec![Value::Vector(items)]);
+                }
+                if items.len() != hidden.len() {
+                    return Value::err("subtotal takes a whole column of a filtered table (Amount, B, Expenses!Amount)");
+                }
+                let shown = items.into_iter().zip(hidden).filter(|(_, h)| !h).map(|(v, _)| v).collect();
+                call(&function, vec![Value::Vector(shown)])
             }
             Expr::Call(name, args) => {
                 let args: Vec<Value> = args.iter().map(|a| self.eval(a, sheet)).collect();

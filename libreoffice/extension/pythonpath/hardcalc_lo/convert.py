@@ -212,6 +212,10 @@ class SheetPlan(object):
         self.kept = []          # formulas Calc holds as text (not computed there)
         # Formatting to apply in order: (r0, r1, c0, c1, parts) in data rows.
         self.format_ops = []
+        # The `filter` layer: [(column, [(operator, value)])] – see parse_checks.
+        self.filters = []
+        # Columns the `view` layer hides.
+        self.hidden_columns = []
 
 
 _LAYER = re.compile(r"^layer\s+([^\s@]+)[^@]*(?:@(.*))?$")
@@ -220,6 +224,11 @@ _LAYER = re.compile(r"^layer\s+([^\s@]+)[^@]*(?:@(.*))?$")
 def format_blocks(segments):
     """`layer format` blocks: [(segment index, first line, last line, table index)].
     A block belongs to its `@Table` or the last table above it."""
+    return layer_blocks(segments, "format")
+
+
+def layer_blocks(segments, layer):
+    """The blocks of layer `layer`, as format_blocks gives those of `format`."""
     tables = [s for s in segments if isinstance(s, markdown.Table)]
     by_name = dict((t.name, i) for i, t in enumerate(tables) if t.name is not None)
     out = []
@@ -230,7 +239,7 @@ def format_blocks(segments):
             continue
         for start, end, info in markdown.fences(seg.lines):
             m = _LAYER.match(info)
-            if not m or m.group(1) != "format":
+            if not m or m.group(1) != layer:
                 continue
             owner = by_name.get(m.group(2).strip()) if m.group(2) else (ti if ti >= 0 else None)
             if owner is not None:
@@ -244,6 +253,136 @@ def format_rules(segments):
     for k, start, end, owner in format_blocks(segments):
         body = segments[k].lines[start + 1:end]
         out.setdefault(owner, []).extend(markdown.layer_rules(body))
+    return out
+
+
+def layer_rules_by_table(segments, layer):
+    """Table index → [(target, body)] of its layer `layer`, in document order."""
+    out = {}
+    for k, start, end, owner in layer_blocks(segments, layer):
+        body = segments[k].lines[start + 1:end]
+        out.setdefault(owner, []).extend(markdown.layer_rules(body))
+    return out
+
+
+_OPERATORS = ("<=", ">=", "<>", "!=", "=", "<", ">")
+
+
+def _take_value(s):
+    """A word or a "quoted text" ("" for a quote inside) at the start of `s`
+    and the rest; None if a quote is not closed."""
+    if not s.startswith('"'):
+        end = 0
+        while end < len(s) and not s[end].isspace():
+            end += 1
+        return s[:end], s[end:]
+    out = []
+    i = 1
+    while i < len(s):
+        if s[i] == '"':
+            if s[i + 1:i + 2] == '"':
+                out.append('"')
+                i += 2
+                continue
+            return "".join(out), s[i + 1:]
+        out.append(s[i])
+        i += 1
+    return None
+
+
+def _take_list(s):
+    """The values of `a, "b, c", d)` up to the closing bracket and the rest."""
+    out = []
+    rest = s
+    while True:
+        rest = rest.lstrip()
+        if rest.startswith('"'):
+            taken = _take_value(rest)
+            if taken is None:
+                return None
+            value, after = taken
+        else:
+            ends = [i for i in (rest.find(","), rest.find(")")) if i >= 0]
+            if not ends:
+                return None
+            value, after = rest[:min(ends)].strip(), rest[min(ends):]
+        out.append(value)
+        after = after.lstrip()
+        if after.startswith(")"):
+            return out, after[1:]
+        if not after.startswith(","):
+            return None
+        rest = after[1:]
+
+
+def parse_checks(body):
+    """The conditions of a filter rule as hardcalc reads them:
+    `>= 50 < 1000` → [(">=", "50"), ("<", "1000")], `in(a, "b c")` →
+    [("in", ["a", "b c"])], also ("contains", text), ("empty", None),
+    ("required", None). None if the rule cannot be read."""
+    out = []
+    rest = body.strip()
+    while rest:
+        if rest.startswith("required"):
+            out.append(("required", None))
+            rest = rest[len("required"):].lstrip()
+        elif rest == "empty" or rest.startswith("empty "):
+            out.append(("empty", None))
+            rest = rest[len("empty"):].lstrip()
+        elif rest.startswith("in(") or rest.startswith("contains("):
+            name = rest[:rest.index("(")]
+            taken = _take_list(rest[len(name) + 1:])
+            if taken is None or (name == "contains" and len(taken[0]) != 1):
+                return None
+            out.append(("in", taken[0]) if name == "in" else ("contains", taken[0][0]))
+            rest = taken[1].lstrip()
+        else:
+            op = next((o for o in _OPERATORS if rest.startswith(o)), None)
+            if op is None:
+                return None
+            after = rest[len(op):].lstrip()
+            taken = _take_value(after)
+            if taken is None or (taken[0] == "" and not after.startswith('"')):
+                return None
+            out.append(("<>" if op == "!=" else op, taken[0]))
+            rest = taken[1].lstrip()
+    return out or None
+
+
+def _column_of(target, columns):
+    """The column a rule target names: by name, else by its letters."""
+    if target in columns:
+        return columns.index(target)
+    if target and all("A" <= ch <= "Z" for ch in target):
+        c = 0
+        for ch in target:
+            c = c * 26 + ord(ch) - ord("A") + 1
+        return c - 1 if c - 1 < len(columns) else None
+    return None
+
+
+def filter_plan(rules, columns):
+    """The rules of a `filter` layer as [(column, checks)]. A rule that
+    cannot be read makes the whole filter unknown: None (nothing is hidden)."""
+    out = []
+    for target, body in rules:
+        c = _column_of(target, columns)
+        if c is None:
+            continue
+        checks = parse_checks(body)
+        if checks is None:
+            return None
+        out.append((c, checks))
+    return out
+
+
+def hidden_columns(rules, columns):
+    """The columns a `view` layer hides."""
+    out = []
+    for target, body in rules:
+        c = _column_of(target, columns)
+        if c is not None and "hide" in body.split() and c not in out:
+            out.append(c)
     return out
 
 
@@ -279,12 +418,16 @@ def plan_import(src):
             sheets.append(_unique(sheet_name(t.name), taken))
     book = _book(segments, tables, sheets, functions)
     rules_by_table = format_rules(segments)
+    filters_by_table = layer_rules_by_table(segments, "filter")
+    views_by_table = layer_rules_by_table(segments, "view")
 
     plans = []
     state_sheets = []
     for ti, (t, sheet) in enumerate(zip(tables, sheets)):
         plan = SheetPlan(sheet, list(t.header))
         plan.format_ops = styles.operations(rules_by_table.get(ti, []), book.tables[ti].columns, len(t.rows))
+        plan.filters = filter_plan(filters_by_table.get(ti, []), book.tables[ti].columns) or []
+        plan.hidden_columns = hidden_columns(views_by_table.get(ti, []), book.tables[ti].columns)
         kinds, decimals = [], []
         for h in t.header:
             _, ty = markdown.split_header(h)

@@ -332,6 +332,21 @@ impl Translator<'_> {
                 _ => return Err(format!("{name} over a filter")),
             });
         }
+        // subtotal(sum; Amount) → SUBTOTAL(109,range): the rows the autofilter shows.
+        if let ("subtotal", [Expr::Name(function), range]) = (name, args) {
+            let code = match crate::builtins::find(&function.to_lowercase()).map(|b| b.name) {
+                Some("avg") => 101,
+                Some("count") => 102,
+                Some("counta") => 103,
+                Some("max") => 104,
+                Some("min") => 105,
+                Some("product") => 106,
+                Some("stdev") => 107,
+                Some("sum") => 109,
+                _ => return Err(format!("subtotal({function}) has no Excel equivalent")),
+            };
+            return Ok(format!("SUBTOTAL({code},{})", self.expr(range, row, true)?));
+        }
         let builtin = crate::builtins::find(name).ok_or_else(|| format!("unknown function {name}"))?;
         let excel = builtin.excel.ok_or_else(|| format!("function {name} has no Excel equivalent"))?;
         // Range arguments take whole columns, the others this row's cell.
@@ -434,7 +449,7 @@ fn target_area(t: &Target, wb: &Workbook, sheet: usize) -> Option<(usize, usize,
         Target::Row(n) => (*n >= 1 && *n <= rows).then(|| (n - 1, 0, n - 1, cols - 1)),
         Target::Cell(r, c) => (*r < rows && *c < cols).then_some((*r, *c, *r, *c)),
         Target::Range((c1, r1), (c2, r2)) => Some(((*r1).min(*r2), (*c1).min(*c2), (*r1).max(*r2).min(rows - 1), (*c1).max(*c2).min(cols - 1))),
-        Target::RowWhere { .. } => None,
+        Target::RowWhere { .. } | Target::ColumnWhere { .. } => None,
     }
 }
 
@@ -474,6 +489,9 @@ struct SheetOut {
     /// Data area (rows, cols inclusive) and rule.
     validations: Vec<((usize, usize, usize, usize), Validation)>,
     filter: Option<FilterOut>,
+    /// Per column: hidden by the `view` layer, and its width there.
+    hidden_cols: Vec<bool>,
+    widths: Vec<Option<u16>>,
 }
 
 /// The `filter` layer of a table: an autofilter over header and data rows
@@ -596,6 +614,7 @@ fn prepare(doc: &Document) -> (Workbook, Vec<SheetOut>, ExportReport) {
     let attached: Vec<Attached> = layers::attach(doc, &wb);
     let formats = Formats::new(&attached, "format");
     let filters = layers::Filters::new(&attached, layers::FILTER);
+    let views = layers::Views::new(&attached, layers::VIEW);
     let names = sheet_names(&wb);
     let mut report = ExportReport::default();
     let mut sheets = Vec::new();
@@ -721,7 +740,8 @@ fn prepare(doc: &Document) -> (Workbook, Vec<SheetOut>, ExportReport) {
         let headers = wb.sheets[s].columns.iter().map(|c| c.name.clone()).collect();
         let filter = filter_out(&filters, &mut wb, s);
         report.filters += usize::from(filter.is_some());
-        sheets.push(SheetOut { name: names[s].clone(), headers, cells, validations, filter });
+        let view = views.columns(&wb, s);
+        sheets.push(SheetOut { name: names[s].clone(), headers, cells, validations, filter, hidden_cols: view.hidden, widths: view.width });
         report.sheets += 1;
     }
     (wb, sheets, report)
@@ -845,6 +865,15 @@ pub fn export_xlsx(doc: &Document, path: &Path) -> Result<ExportReport, String> 
                 .collect();
             if let Some(width) = wrapped.iter().map(|&(n, len)| len.min(n)).max() {
                 ws.set_column_width(c as u16, (width.max(sheet.headers[c].chars().count()) + 2) as f64).map_err(err)?;
+            }
+        }
+        // The view layer: widths in characters, hidden columns.
+        for c in 0..sheet.headers.len() {
+            if let Some(Some(w)) = sheet.widths.get(c) {
+                ws.set_column_width(c as u16, *w as f64 + 1.0).map_err(err)?;
+            }
+            if sheet.hidden_cols.get(c) == Some(&true) {
+                ws.set_column_hidden(c as u16).map_err(err)?;
             }
         }
     }
@@ -1218,7 +1247,13 @@ pub fn export_ods(doc: &Document, path: &Path) -> Result<ExportReport, String> {
         }
 
         tables.push_str(&format!("<table:table table:name=\"{}\">", xml(&sheet.name)));
-        tables.push_str(&format!("<table:table-column table:number-columns-repeated=\"{}\"/>", sheet.headers.len().max(1)));
+        if sheet.hidden_cols.contains(&true) {
+            for c in 0..sheet.headers.len() {
+                tables.push_str(if sheet.hidden_cols[c] { "<table:table-column table:visibility=\"collapse\"/>" } else { "<table:table-column/>" });
+            }
+        } else {
+            tables.push_str(&format!("<table:table-column table:number-columns-repeated=\"{}\"/>", sheet.headers.len().max(1)));
+        }
         let header_style = styles.cell(&CellStyle::default(), None, true).unwrap();
         tables.push_str("<table:table-row>");
         for h in &sheet.headers {

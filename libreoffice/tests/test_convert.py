@@ -461,3 +461,39 @@ class MaskedEquals(unittest.TestCase):
         del state["sheets"][0]["kept"]
         sheets = [convert.SheetData("T", [["k", "v"], ["=sum(B)", 1.0]], {}, {}, None)]
         self.assertIn("| =sum(B) | 1 |", convert.export(sheets, state))
+
+
+class FilterAndView(unittest.TestCase):
+    SRC = (
+        "## Journal :: matrix\n\n| Item | Amount | Status |\n|---|--:|---|\n"
+        "| Rent | 1200 | paid |\n| Power | 85.5 | open |\n\n"
+        "```layer filter\nStatus: in(open, \"due soon\")\nB: >= 50 < 1000\nItem: contains(r)\n```\n\n"
+        "```layer view\nAmount: hide\nItem: width 20 freeze\n```\n"
+    )
+
+    def test_conditions_as_hardcalc_reads_them(self):
+        self.assertEqual(convert.parse_checks(">= 50 < 1000"), [(">=", "50"), ("<", "1000")])
+        self.assertEqual(convert.parse_checks('in(open, "a, b", "say ""hi""")'), [("in", ["open", "a, b", 'say "hi"'])])
+        self.assertEqual(convert.parse_checks('= "due soon" required'), [("=", "due soon"), ("required", None)])
+        self.assertEqual(convert.parse_checks("contains(rent) empty"), [("contains", "rent"), ("empty", None)])
+        self.assertEqual(convert.parse_checks('!= ""'), [("<>", "")])
+        for bad in ("big", "in(a, b", '= "open', ">=", ""):
+            self.assertIsNone(convert.parse_checks(bad), bad)
+
+    def test_plan_holds_filter_and_hidden_columns(self):
+        plans, _ = convert.plan_import(self.SRC)
+        self.assertEqual(
+            plans[0].filters,
+            [(2, [("in", ["open", "due soon"])]), (1, [(">=", "50"), ("<", "1000")]), (0, [("contains", "r")])],
+        )
+        self.assertEqual(plans[0].hidden_columns, [1])
+        # A rule that cannot be read: no filter at all rather than a wrong one.
+        plans, _ = convert.plan_import(self.SRC.replace("contains(r)", "something"))
+        self.assertEqual(plans[0].filters, [])
+
+    def test_layers_stay_in_the_file(self):
+        plans, state = convert.plan_import(self.SRC)
+        out = convert.export(calc(plans, state), state)
+        self.assertIn('```layer filter\nStatus: in(open, "due soon")\nB: >= 50 < 1000\nItem: contains(r)\n```', out)
+        self.assertIn("```layer view\nAmount: hide\nItem: width 20 freeze\n```", out)
+        self.assertIn("| Rent | 1200 | paid |", out)

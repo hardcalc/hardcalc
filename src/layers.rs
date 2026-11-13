@@ -125,6 +125,8 @@ pub enum Target {
     Cell(usize, usize),
     Range((usize, usize), (usize, usize)),
     RowWhere { column: String, op: CmpOp, value: String },
+    /// The cells of a column that meet conditions: `Amount[> 1000]`.
+    ColumnWhere { column: String, checks: Vec<Check> },
 }
 
 impl Target {
@@ -137,6 +139,15 @@ impl Target {
             && let Some((column, op, value)) = split_comparison(cond)
         {
             return Target::RowWhere { column: column.into(), op, value: value.into() };
+        }
+        // `Amount[> 1000]`, `Status[in(open, due)]`: the cells of the column that meet it.
+        if let Some((column, cond)) = s.strip_suffix(']').and_then(|r| r.split_once('['))
+            && !column.trim().is_empty()
+            && let Ok(checks) = Check::parse_all(cond)
+            && !checks.is_empty()
+            && !checks.contains(&Check::Unique)
+        {
+            return Target::ColumnWhere { column: column.trim().to_string(), checks };
         }
         if let Ok(n) = s.parse::<usize>() {
             return Target::Row(n);
@@ -168,6 +179,12 @@ impl Target {
                 }
                 None => false,
             },
+            Target::ColumnWhere { column, checks } => {
+                column_index(wb, sheet, column) == Some(col) && {
+                    let v = wb.value((sheet, row, col));
+                    checks.iter().all(|check| check.holds(&v))
+                }
+            }
         }
     }
 }
@@ -182,7 +199,7 @@ pub fn target_problem(wb: &Workbook, sheet: usize, target: &str, open: bool) -> 
     let size = format!("the table has {rows} rows and {cols} columns");
     match Target::parse(target) {
         Target::All => None,
-        Target::Column(name) | Target::RowWhere { column: name, .. } => {
+        Target::Column(name) | Target::RowWhere { column: name, .. } | Target::ColumnWhere { column: name, .. } => {
             let letters = !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase());
             match column_index(wb, sheet, &name) {
                 Some(_) => None,
@@ -759,6 +776,147 @@ impl Filters {
     }
 }
 
+/// A condition as typed, in the form the layer keeps: `open` → `= open`,
+/// `= due soon` → `= "due soon"`.
+pub fn normalize_condition(body: &str) -> Result<String, String> {
+    let ok = |b: &str| Check::parse_all(b).is_ok_and(|c| !c.is_empty() && !c.contains(&Check::Unique));
+    if ok(body) {
+        return Ok(body.to_string());
+    }
+    let ops = ["<=", ">=", "<>", "!=", "=", "<", ">"];
+    let candidate = match ops.iter().find(|op| body.starts_with(**op)) {
+        Some(op) => format!("{op} {}", quote_value(body[op.len()..].trim())),
+        None => format!("= {}", quote_value(body)),
+    };
+    if ok(&candidate) { Ok(candidate) } else { Err(format!("'{body}' is no condition – e.g. = open, >= 100, in(a, b), contains(text), empty, required")) }
+}
+
+
+/// `Status = open`, `Amount >= 100`: a column of `sheet` and the conditions
+/// behind it (the longest beginning that names a column is the column).
+pub fn row_condition(wb: &Workbook, sheet: usize, text: &str) -> Result<(usize, Vec<Check>), String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let named = (1..=words.len()).rev().find_map(|k| column_index(wb, sheet, &words[..k].join(" ")).map(|c| (c, words[k..].join(" "))));
+    let split = || {
+        let i = text.find(['<', '>', '=', '!'])?;
+        column_index(wb, sheet, text[..i].trim()).map(|c| (c, text[i..].to_string()))
+    };
+    let (c, body) = named.or_else(split).ok_or_else(|| format!("'{text}' does not start with a column of the table"))?;
+    if body.trim().is_empty() {
+        return Err(format!("'{text}': a condition is missing, e.g. = open, >= 100"));
+    }
+    let checks = Check::parse_all(&normalize_condition(body.trim())?)?;
+    Ok((c, checks))
+}
+
+/// Per data row of `sheet` on data layer `z`, whether it fails `checks` in column `col`.
+pub fn failing_rows(wb: &mut Workbook, sheet: usize, z: usize, col: usize, checks: &[Check]) -> Vec<bool> {
+    (0..wb.sheets[sheet].cells.len())
+        .map(|r| {
+            let v = wb.value((sheet, r, crate::engine::in_layer(col, z)));
+            !checks.iter().all(|check| check.holds(&v))
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------- view
+
+/// Name of the layer that says how columns are shown.
+pub const VIEW: &str = "view";
+
+/// How the columns of one table are shown.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ColumnView {
+    /// Per column, whether it is hidden.
+    pub hidden: Vec<bool>,
+    /// Per column, its fixed width in characters.
+    pub width: Vec<Option<u16>>,
+    /// The first columns that stay in place while scrolling sideways.
+    pub frozen: usize,
+}
+
+impl ColumnView {
+    pub fn is_hidden(&self, c: usize) -> bool {
+        self.hidden.get(c) == Some(&true)
+    }
+
+    pub fn hidden_count(&self) -> usize {
+        self.hidden.iter().filter(|h| **h).count()
+    }
+}
+
+/// The rules of all `view` layers: `Note: hide`, `Item: width 20`,
+/// `B: freeze` (the columns up to B stay while scrolling sideways).
+#[derive(Debug, Default)]
+pub struct Views {
+    /// (sheet, column as written, setting)
+    rules: Vec<(usize, String, ViewSetting)>,
+    pub errors: Vec<LayerError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ViewSetting {
+    Hide,
+    Width(u16),
+    Freeze,
+}
+
+impl Views {
+    pub fn new(attached: &[Attached], layer: &str) -> Views {
+        let mut v = Views::default();
+        for a in attached.iter().filter(|a| a.layer.name == layer) {
+            for (i, rule) in a.layer.rules.iter().enumerate() {
+                let Rule::Rule { target, body } = rule else { continue };
+                let mut error = |message: String| {
+                    v.errors.push(LayerError { line: a.layer.line.0 + 1 + i, sheet: a.sheet, layer: layer.to_string(), message: format!("{target}: {message}") })
+                };
+                let Target::Column(column) = Target::parse(target) else {
+                    error("a view rule names a column, e.g. `Note: hide`".to_string());
+                    continue;
+                };
+                let mut words = body.split_whitespace().peekable();
+                if words.peek().is_none() {
+                    error("missing setting: hide, width n or freeze".to_string());
+                }
+                while let Some(w) = words.next() {
+                    let setting = match w {
+                        "hide" => Some(ViewSetting::Hide),
+                        "freeze" => Some(ViewSetting::Freeze),
+                        "width" => words.next().and_then(|n| n.parse::<u16>().ok()).filter(|n| *n >= 1).map(ViewSetting::Width),
+                        _ => None,
+                    };
+                    match setting {
+                        Some(s) => v.rules.push((a.sheet, column.clone(), s)),
+                        None if w == "width" => error("width: a number of characters is missing, e.g. `width 20`".to_string()),
+                        None => error(format!("unknown setting '{w}' – hide, width n or freeze")),
+                    }
+                }
+            }
+        }
+        v
+    }
+
+    pub fn applies(&self, sheet: usize) -> bool {
+        self.rules.iter().any(|(s, ..)| *s == sheet)
+    }
+
+    /// How the columns of `sheet` are shown. Rules for columns the table
+    /// does not have do nothing.
+    pub fn columns(&self, wb: &Workbook, sheet: usize) -> ColumnView {
+        let cols = wb.sheets[sheet].columns.len();
+        let mut view = ColumnView { hidden: vec![false; cols], width: vec![None; cols], frozen: 0 };
+        for (_, name, setting) in self.rules.iter().filter(|(s, ..)| *s == sheet) {
+            let Some(c) = column_index(wb, sheet, name) else { continue };
+            match setting {
+                ViewSetting::Hide => view.hidden[c] = true,
+                ViewSetting::Width(n) => view.width[c] = Some(*n),
+                ViewSetting::Freeze => view.frozen = view.frozen.max(c + 1),
+            }
+        }
+        view
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,6 +959,14 @@ Status: in(open, zu)
             Target::parse("row[Status=open]"),
             Target::RowWhere { column: "Status".into(), op: CmpOp::Eq, value: "open".into() }
         );
+        assert_eq!(Target::parse("Value[> 3]"), Target::ColumnWhere { column: "Value".into(), checks: vec![Check::Compare(CmpOp::Gt, "3".into())] });
+        assert_eq!(Target::parse("Status[in(open, zu)]"), Target::ColumnWhere { column: "Status".into(), checks: vec![Check::OneOf(vec!["open".into(), "zu".into()])] });
+        assert_eq!(Target::parse("Value[what]"), Target::Column("Value[what]".into()), "no condition: a column name");
+        let (att, mut wb) = setup();
+        let _ = att;
+        let t = Target::parse("Value[> 3]");
+        assert!(t.matches(&mut wb, (0, 0, 1)) && !t.matches(&mut wb, (0, 1, 1)) && !t.matches(&mut wb, (0, 0, 0)));
+        assert!(!t.matches(&mut wb, (0, 2, 1)), "an empty cell is not larger than 3");
     }
 
     #[test]
@@ -862,6 +1028,31 @@ Status: in(open, zu)
     fn bad_checks() {
         assert!(Check::parse_all("positive").is_err());
         assert_eq!(Check::parse_all(">=0").unwrap(), vec![Check::Compare(CmpOp::Ge, "0".into())]);
+    }
+
+    #[test]
+    fn view_rules() {
+        let src = "\
+| Name | Value | Status | Note |
+|------|------|--------|---|
+| a | 5 | open | x |
+
+```layer view
+Name: freeze width 12
+D: hide
+Status: hide
+B2: hide
+Value: wide
+Value: width
+Nowhere: hide
+```
+";
+        let doc = parse(src).unwrap();
+        let (wb, _) = Workbook::from_document(&doc);
+        let v = Views::new(&attach(&doc, &wb), VIEW);
+        let view = v.columns(&wb, 0);
+        assert_eq!(view, ColumnView { hidden: vec![false, false, true, true], width: vec![Some(12), None, None, None], frozen: 1 });
+        assert_eq!(v.errors.len(), 3, "{:?}", v.errors);
     }
 
     #[test]

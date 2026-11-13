@@ -73,7 +73,8 @@ impl App {
         let Mode::Command { buf } = &self.mode else { return Vec::new() };
         commands::suggestions(buf, |cmd| match cmd {
             "layer" | "solo" => self.layer_names.clone(),
-            "sort" | "sortcol" | "filter" | "values" => self.wb.sheets[self.view.sheet].columns.iter().map(|c| c.name.clone()).collect(),
+            "view" if self.view.kind == super::ViewKind::Table && self.view.pivot.is_none() => self.view_names(),
+            "sort" | "sortcol" | "filter" | "values" | "hide" | "unhide" | "freeze" | "when" | "duplicates" | "dedupe" | "group" => self.wb.sheets[self.view.sheet].columns.iter().map(|c| c.name.clone()).collect(),
             // Own types besides the built-in ones.
             "type" => self
                 .type_rows()
@@ -107,7 +108,15 @@ impl App {
     /// Tab (or Enter on a chosen suggestion): completes the command line.
     /// Returns whether a suggestion was applied.
     pub(super) fn apply_suggestion(&mut self) -> bool {
-        let list = self.command_suggestions();
+        let mut list = self.command_suggestions();
+        // What begins with the typed text goes first: `th` completes to
+        // `theme`, although `width` contains it too.
+        if let (None, Mode::Command { buf }) = (self.cmd_choice, &self.mode) {
+            let starts: Vec<_> = list.iter().filter(|(done, ..)| done.starts_with(buf.as_str())).cloned().collect();
+            if !starts.is_empty() {
+                list = starts;
+            }
+        }
         let done = match (self.cmd_choice, list.as_slice()) {
             (Some(i), _) if i < list.len() => list[i].0.clone(),
             (_, [(only, ..)]) => only.clone(),

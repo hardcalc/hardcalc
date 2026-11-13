@@ -239,3 +239,59 @@ fn whole_column_ranges_sum_columns() {
     assert_eq!(wb.eval_formula("sum(C:A)", 0), Value::num(21.0));
     assert!(wb.eval_formula("sum(B:2)", 0).is_error());
 }
+
+#[test]
+fn subtotal_counts_the_rows_the_filter_shows() {
+    let src = "\
+## Journal :: matrix
+
+| Item | Amount | Status |
+|---|--:|---|
+| Rent | 1200 | paid |
+| Power | 85.5 | open |
+| Phone | 20 | open |
+
+```footer
+| | Item | Amount |
+|---|---|---|
+| Total | =subtotal(counta) | =sum |
+| Shown | | =subtotal(sum) |
+```
+
+```layer filter
+Status: = open
+```
+
+## Summary :: matrix
+
+| What | Value |
+|---|---|
+| open | =subtotal(sum; Journal!Amount) |
+| mean | =subtotal(avg; Journal!B) |
+| part | =subtotal(sum; Journal!B1:B2) |
+| own | =subtotal(max; Value) |
+";
+    let doc = parse(src).unwrap();
+    let (mut wb, diags) = Workbook::from_document(&doc);
+    assert!(diags.is_empty(), "{diags:?}");
+    let footer = hardcalc::engine::FOOTER_ROW;
+    assert_eq!(wb.value((0, footer, 1)), Value::num(1305.5), "sum counts every row");
+    assert_eq!(wb.value((0, footer + 1, 1)), Value::num(105.5));
+    assert_eq!(wb.value((0, footer, 0)), Value::num(2.0));
+    assert_eq!(wb.value((1, 0, 1)), Value::num(105.5));
+    assert_eq!(wb.value((1, 1, 1)), Value::num(52.75));
+    assert!(wb.value((1, 2, 1)).is_error(), "a part of a column has no rows to match");
+    // A row that starts to meet the filter counts at once.
+    wb.set_cell((0, 0, 2), "open");
+    assert_eq!(wb.value((0, footer + 1, 1)), Value::num(1305.5));
+    assert_eq!(wb.value((1, 0, 1)), Value::num(1305.5));
+    wb.set_cell((0, 0, 2), "paid");
+    // With the filter switched off (the view shows all rows) all rows count.
+    wb.set_filter_off(0, true);
+    assert_eq!(wb.value((0, footer + 1, 1)), Value::num(1305.5));
+    wb.set_filter_off(0, false);
+    assert_eq!(wb.value((0, footer + 1, 1)), Value::num(105.5));
+    // Excel: SUBTOTAL over the column.
+    let names = vec!["Journal".to_string(), "Summary".to_string()];
+    assert_eq!(hardcalc::export::formula_to_excel(&wb, &names, 1, 0, "subtotal(sum; Journal!Amount)").unwrap(), "=SUBTOTAL(109,'Journal'!$B$2:$B$4)");
+}

@@ -225,6 +225,82 @@ def fill_sheet(doc, index, sheet, plan):
         address.Sheet, address.Column, address.Row = index, c, r
         annotations.insertNew(address, text)
     sheet.getCellRangeByPosition(0, 0, ncols - 1, nrows - 1).getColumns().OptimalWidth = True
+    try:
+        apply_view(doc, index, sheet, plan, ncols, nrows)
+    except Exception:
+        log("hardcalc: filter / view not applied\n" + traceback.format_exc())
+
+
+def filter_fields(plan):
+    """The filter of the plan as TableFilterField3 structs (all must hold)."""
+    from com.sun.star.sheet.FilterConnection import AND
+    operator = lambda name: uno.getConstantByName("com.sun.star.sheet.FilterOperator2." + name)
+    names = {"=": "EQUAL", "<>": "NOT_EQUAL", "<": "LESS", "<=": "LESS_EQUAL", ">": "GREATER", ">=": "GREATER_EQUAL"}
+
+    def value(text):
+        v = uno.createUnoStruct("com.sun.star.sheet.FilterFieldValue")
+        number = convert.parse_number(text)
+        if number is not None:
+            v.IsNumeric = True
+            v.NumericValue = float(number[0])
+        else:
+            v.IsNumeric = False
+        v.StringValue = text
+        return v
+
+    fields = []
+    for col, checks in plan.filters:
+        for op, operand in checks:
+            field = uno.createUnoStruct("com.sun.star.sheet.TableFilterField3")
+            field.Connection = AND
+            field.Field = col
+            if op in ("empty", "required") or (op in ("=", "<>") and operand == ""):
+                field.Operator = operator("EMPTY" if op in ("empty", "=") else "NOT_EMPTY")
+                field.Values = ()
+            elif op == "in":
+                field.Operator = operator("EQUAL")
+                field.Values = tuple(value(v) for v in operand)
+            elif op == "contains":
+                field.Operator = operator("CONTAINS")
+                field.Values = (value(operand),)
+            else:
+                field.Operator = operator(names[op])
+                field.Values = (value(operand),)
+            fields.append(field)
+    return tuple(fields)
+
+
+def apply_view(doc, index, sheet, plan, ncols, nrows):
+    """The `view` and `filter` layers: hidden columns, and the filter as the
+    sheet's autofilter – Calc hides the rows and shows the filter buttons.
+    Nothing here changes what is saved: the layers stay in the text."""
+    columns = sheet.getColumns()
+    for c in plan.hidden_columns:
+        if c < ncols:
+            columns.getByIndex(c).IsVisible = False
+    if not plan.filters or nrows < 2:
+        return
+    fields = filter_fields(plan)
+    rng = sheet.getCellRangeByPosition(0, 0, ncols - 1, nrows - 1)
+    try:
+        ranges = doc.DatabaseRanges
+        name = "hardcalc_filter_%d" % index
+        if ranges.hasByName(name):
+            ranges.removeByName(name)
+        ranges.addNewByName(name, rng.getRangeAddress())
+        area = ranges.getByName(name)
+        area.AutoFilter = True
+        descriptor = area.getFilterDescriptor()
+        descriptor.ContainsHeader = True
+        descriptor.setFilterFields3(fields)
+        area.refresh()
+    except Exception:
+        # No autofilter then: the plain filter still hides the rows.
+        log("hardcalc: autofilter not set\n" + traceback.format_exc())
+        descriptor = rng.createFilterDescriptor(True)
+        descriptor.ContainsHeader = True
+        descriptor.setFilterFields3(fields)
+        rng.filter(descriptor)
 
 
 def import_document(doc, data):

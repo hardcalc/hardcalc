@@ -236,6 +236,9 @@ fn main() -> ExitCode {
             for e in &hardcalc::layers::Filters::new(&attached, hardcalc::layers::FILTER).errors {
                 findings.push(layer_finding(e, &wb));
             }
+            for e in &hardcalc::layers::Views::new(&attached, hardcalc::layers::VIEW).errors {
+                findings.push(layer_finding(e, &wb));
+            }
             let (violations, rule_errors) = hardcalc::layers::validate(&attached, &mut wb, "validate");
             for e in &rule_errors {
                 findings.push(layer_finding(e, &wb));
@@ -295,7 +298,9 @@ fn main() -> ExitCode {
                 .collect();
             for a in &attached {
                 for (i, rule) in a.layer.rules.iter().enumerate() {
-                    if let hardcalc::model::Rule::Rule { target, .. } = rule
+                    // The targets of `views` are the names of saved views.
+                    if a.layer.name != "views"
+                        && let hardcalc::model::Rule::Rule { target, .. } = rule
                         && let Some(problem) = hardcalc::layers::target_problem(&wb, a.sheet, target, open.get(a.sheet).copied().unwrap_or(false))
                     {
                         findings.push(Finding {

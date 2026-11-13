@@ -21,6 +21,7 @@ mod autofill;
 mod context_menu;
 mod calc_column;
 mod calc_view;
+mod columns;
 mod data_layers;
 mod file_dialog;
 mod files;
@@ -32,9 +33,11 @@ mod menu;
 pub use file_dialog::{is_document as file_dialog_is_document, FileDialog, Purpose};
 mod functions_view;
 mod point;
+mod search;
 mod shape;
 mod sources;
 mod values;
+mod views;
 pub use functions_view::{FnRow, FN_COLS};
 pub use calc_view::{CalcRow, FormulaStyle, PreviewKind, CALC_COLS};
 pub use context_menu::{ContextMenu, CONTEXT_MENU};
@@ -50,6 +53,8 @@ pub const COMMENTS: &str = "comments";
 /// Layer with links (`A2: Expenses[Rent, Amount]`): ↗ in the cell, a click or F4 jumps.
 pub const LINKS: &str = crate::links::LAYER;
 /// The layers that act; the layer bar always shows them, in this order.
+/// Layer that says how columns are shown (`Note: hide`, `Item: width 20`, `B: freeze`).
+pub const VIEW: &str = layers::VIEW;
 /// Layer whose rules hide rows (`Status: = open`).
 pub const FILTER: &str = layers::FILTER;
 pub const PREDEFINED_LAYERS: [&str; 6] = [FORMULAS, FORMAT, VALIDATE, FILTER, COMMENTS, LINKS];
@@ -410,8 +415,13 @@ pub struct App {
     pub violations: HashMap<CellId, String>,
     /// The rules of the `filter` layers.
     filters: layers::Filters,
+    /// The rules of the `view` layers, and per table what they say.
+    views: layers::Views,
+    column_views: HashMap<usize, layers::ColumnView>,
     /// (sheet, data layer) → per data row, whether the filter hides it.
     hidden_rows: HashMap<(usize, usize), Vec<bool>>,
+    /// While a layout element with `where:` is placed: its table and the rows it leaves out.
+    print_where: Option<(usize, Vec<bool>)>,
     /// Cells with a link and their destination (shown layers only).
     pub links: HashMap<CellId, String>,
     /// The evaluated calculation sheet, until the document changes.
@@ -424,6 +434,8 @@ pub struct App {
     pub bundle: Option<crate::bundle::Bundle>,
     /// The open context menu.
     pub context: Option<ContextMenu>,
+    /// The text last searched for (`:find`), for Ctrl+G.
+    pub last_find: Option<String>,
     /// The open value list of a column (filter by ticking values).
     pub values: Option<ValueList>,
     /// Which conditional inputs work in this terminal.
@@ -866,7 +878,10 @@ impl App {
             comment_rules: Vec::new(),
             violations: HashMap::new(),
             filters: layers::Filters::default(),
+            views: layers::Views::default(),
+            column_views: HashMap::new(),
             hidden_rows: HashMap::new(),
+            print_where: None,
             links: HashMap::new(),
             calc_cache: None,
             formula_style: FormulaStyle::default(),
@@ -874,6 +889,7 @@ impl App {
             bundle: None,
             context: None,
             values: None,
+            last_find: None,
             caps: keymap::Caps::default(),
             caps_path: None,
             key_test: None,
@@ -952,6 +968,8 @@ impl App {
         self.formats = Formats::new(&self.attached, FORMAT);
         self.formula_formats = Formats::new(&self.attached, FORMULAS);
         self.filters = layers::Filters::new(&self.attached, FILTER);
+        self.views = layers::Views::new(&self.attached, VIEW);
+        self.column_views = (0..self.wb.sheets.len()).filter(|&s| self.views.applies(s)).map(|s| (s, self.views.columns(&self.wb, s))).collect();
         self.comment_rules = self
             .attached
             .iter()
@@ -1490,6 +1508,7 @@ impl App {
     }
 
     fn revalidate(&mut self) {
+        self.sync_filter_switch();
         self.violations.clear();
         let (violations, _) = layers::validate(&self.attached, &mut self.wb, VALIDATE);
         for v in violations {
@@ -1555,6 +1574,9 @@ impl App {
         self.revalidate();
         if name == FILTER {
             self.snap_to_shown();
+        }
+        if name == VIEW {
+            self.snap_to_shown_col();
         }
     }
 
@@ -2389,7 +2411,9 @@ impl App {
                     if all || sheet == self.view.sheet {
                         // Each table as last shown: its slice or scenario.
                         let z = if sheet == self.view.sheet { self.shown_layer() } else { self.levels.get(&sheet).copied().unwrap_or(0) };
-                        items.push(PrintItem::Table(self.print_table(sheet, z, &mut footnote)));
+                        let mut table = self.print_table(sheet, z, &mut footnote);
+                        self.drop_hidden_columns(&mut table, sheet);
+                        items.push(PrintItem::Table(table));
                     }
                     sheet += 1;
                 }
@@ -2430,14 +2454,38 @@ impl App {
         table
     }
 
+    /// Takes the columns the view of table `s` hides out of a printed table
+    /// (while the view layer is switched on), with their footnotes.
+    fn drop_hidden_columns(&self, t: &mut PrintTable, s: usize) {
+        let Some(view) = self.column_views.get(&s).filter(|v| v.hidden_count() > 0 && self.layer_visible_in(VIEW, s)) else { return };
+        let keep = |c: &usize| !view.is_hidden(*c);
+        let strip = |cells: &mut Vec<PrintCell>| {
+            let mut c = 0;
+            cells.retain(|_| {
+                c += 1;
+                keep(&(c - 1))
+            });
+        };
+        let mut c = 0;
+        t.headers.retain(|_| {
+            c += 1;
+            keep(&(c - 1))
+        });
+        t.rows.iter_mut().for_each(strip);
+        let (headers, rows) = (&t.headers, &t.rows);
+        t.footnotes.retain(|note| {
+            let marker = note.split_whitespace().next().unwrap_or_default();
+            headers.iter().any(|h| h.ends_with(marker)) || rows.iter().flatten().any(|c| c.text.ends_with(marker))
+        });
+    }
+
     /// The data rows of table `s` that are printed on level `z`: all, or
     /// those its filter shows (while the filter layer is switched on).
     fn print_rows(&self, s: usize, z: usize) -> Vec<usize> {
         let rows = self.wb.sheets[s].cells.len();
-        match self.hidden_rows.get(&(s, z)).filter(|_| self.layer_visible_in(FILTER, s)) {
-            Some(hidden) => (0..rows).filter(|&r| hidden.get(r) != Some(&true)).collect(),
-            None => (0..rows).collect(),
-        }
+        let filtered = self.hidden_rows.get(&(s, z)).filter(|_| self.layer_visible_in(FILTER, s));
+        let element = self.print_where.as_ref().filter(|(sheet, _)| *sheet == s).map(|(_, out)| out);
+        (0..rows).filter(|&r| filtered.is_none_or(|h| h.get(r) != Some(&true)) && element.is_none_or(|out| out.get(r) != Some(&true))).collect()
     }
 
     fn print_table_inner(&mut self, s: usize, z: usize, footnote: &mut usize) -> PrintTable {
@@ -3047,11 +3095,29 @@ impl App {
                     };
                     match z {
                         Some(z) => {
+                            // `where: Status = open`: only the rows that meet it.
+                            let condition = e.filter.as_ref().map(|text| layers::row_condition(&self.wb, sheet, text));
+                            if let Some(Ok((col, checks))) = &condition {
+                                self.print_where = Some((sheet, layers::failing_rows(&mut self.wb, sheet, z, *col, checks)));
+                            }
                             // Bands follow the rows shown, not the rows of the table.
                             let bands = std::mem::take(&mut self.bands);
                             let mut t = self.print_table(sheet, z, footnote);
                             self.bands = bands;
-                            match self.pick_rows(&mut t, sheet, z, &e.pick) {
+                            if let Some(text) = &e.filter {
+                                t.title.push_str(&format!(" · {text}"));
+                            }
+                            let where_error = condition.and_then(|c| c.err()).map(|msg| format!("where: {msg}"));
+                            // Without `columns:` the element shows what the view shows.
+                            if e.columns.is_empty() {
+                                self.drop_hidden_columns(&mut t, sheet);
+                            }
+                            let picked = match where_error {
+                                Some(msg) => Err(msg),
+                                None => self.pick_rows(&mut t, sheet, z, &e.pick),
+                            };
+                            self.print_where = None;
+                            match picked {
                                 Ok(()) => {
                                     let data = t.rows.len() - t.footer_rows;
                                     for (r, row) in t.rows.iter_mut().take(data).enumerate() {
@@ -3578,10 +3644,12 @@ impl App {
             self.info(format!("layer {name} exists for this table – layer view: typing edits its rules · Esc back"));
         } else if name == FORMULAS {
             // set_solo explained the view already.
+        } else if name == VIEW {
+            self.info("layer view added – type into a column: hide, width 20, freeze (the columns up to it stay while scrolling) · Esc back");
         } else if name == FILTER {
             self.info("layer filter added – type a condition into a column: = open, >= 100, in(a, b), contains(text), empty · Esc back");
-        } else if !matches!(name, FORMAT | VALIDATE | COMMENTS | LINKS) {
-            self.info(format!("layer {name} added – its rules are kept and shown, but only format, validate, filter, comments and links act · Esc back"));
+        } else if !matches!(name, FORMAT | VALIDATE | COMMENTS | LINKS | VIEW) {
+            self.info(format!("layer {name} added – its rules are kept and shown, but only format, validate, filter, view, comments and links act · Esc back"));
         } else {
             self.info(format!("layer {name} added – type a rule into a cell or selection · Esc back"));
         }
@@ -3605,9 +3673,9 @@ impl App {
     /// Rule target for the cursor: the cell (`B2`) or the selected range (`B2:D4`).
     fn solo_target(&self) -> String {
         let a1 = |(r, c): (usize, usize)| format!("{}{}", col_letters(c), r + 1);
-        // A filter rule belongs to a column.
-        if self.solo.as_deref() == Some(FILTER) {
-            return self.filter_target(self.view.cursor.1);
+        // A filter or view rule belongs to a column.
+        if let Some(layer @ (FILTER | VIEW)) = self.solo.as_deref() {
+            return self.column_target(layer, self.view.cursor.1);
         }
         let (from, to) = self.selection();
         if from == to { a1(from) } else { format!("{}:{}", a1(from), a1(to)) }
@@ -4061,7 +4129,7 @@ impl App {
                     Ok(()) => {
                         e.z = e.z.filter(|z| z != "a");
                         self.update_element(i, n, |old| {
-                            (old.content, old.columns, old.label, old.z, old.pick, old.auto) = (e.content, e.columns, e.label, e.z, e.pick, e.auto)
+                            (old.content, old.columns, old.label, old.z, old.pick, old.auto, old.filter) = (e.content, e.columns, e.label, e.z, e.pick, e.auto, e.filter)
                         });
                     }
                     Err(msg) => self.error(msg),
@@ -4283,11 +4351,10 @@ impl App {
         } else {
             self.view.anchor = None;
         }
-        let (_, cols) = self.view_dims();
-        // Rows hidden by the filter are stepped over.
+        // Rows hidden by the filter and hidden columns are stepped over.
         let r = self.step_row(self.view.cursor.0, dr);
-        let c = (self.view.cursor.1 as isize + dc).clamp(0, cols.saturating_sub(1) as isize);
-        self.view.cursor = (r, c as usize);
+        let c = self.step_col(self.view.cursor.1, dc);
+        self.view.cursor = (r, c);
         self.view.follow = true;
     }
 
@@ -4301,7 +4368,6 @@ impl App {
         // window of a filling table.
         let (rows, cols) = self.view_dims();
         let (r, c) = self.view.cursor;
-        let along = |pos: usize, d: isize, n: usize| (pos as isize + d).clamp(0, n.saturating_sub(1) as isize) as usize;
         match self.view.header {
             Some(Header::Corner) if dc > 0 && cols > 0 => self.enter_header(Header::Column, 0, 0),
             // With data layers the origin is their head: ↑/↓ go through the stack.
@@ -4316,7 +4382,7 @@ impl App {
             Some(Header::Row) if dc > 0 => self.leave_header(),
             Some(Header::Column) if dc != 0 => {
                 self.extend_header(extend);
-                self.view.cursor.1 = along(c, dc, cols);
+                self.view.cursor.1 = self.step_col(c, dc);
             }
             Some(Header::Row) if dr != 0 => {
                 self.extend_header(extend);
@@ -4842,6 +4908,12 @@ impl App {
                     _ => self.move_lines(d, 0),
                 }
             }
+            // Ctrl+F asks for a text to find, Ctrl+G goes to the next match.
+            KeyCode::Char('f') if ctrl && self.view.is_data() => {
+                self.mode = Mode::Command { buf: "find ".into() };
+                self.cmd_choice = None;
+            }
+            KeyCode::Char('g') if ctrl => self.find(None, false),
             // On a column header, Space opens its value list (the filter).
             KeyCode::Char(' ') if !ctrl && !alt && self.on_header() == Some(Header::Column) && self.view.cursor.1 < self.dims().1 => self.open_values(None),
             KeyCode::Up if alt && self.view.kind == ViewKind::Table => self.step_layer(-1),
@@ -4866,8 +4938,16 @@ impl App {
                     self.view.cursor.0 = self.step_row(self.view.cursor.0, -1);
                 }
             }
-            KeyCode::Home => self.move_to(self.view.cursor.0, 0),
-            KeyCode::End => self.move_to(self.view.cursor.0, self.dims().1.saturating_sub(1)),
+            KeyCode::Home => {
+                self.move_to(self.view.cursor.0, 0);
+                self.snap_to_shown_col();
+            }
+            KeyCode::End => {
+                self.move_to(self.view.cursor.0, self.dims().1.saturating_sub(1));
+                if self.col_hidden(self.view.cursor.1) {
+                    self.view.cursor.1 = self.step_col(self.view.cursor.1, -1);
+                }
+            }
             KeyCode::Esc if !self.has_range() && self.solo.is_some() => self.set_solo(None),
             // Out of a data layer back to the table itself.
             KeyCode::Esc if !self.has_range() && self.shown_layer() > 0 => self.set_layer(0),
@@ -5817,31 +5897,7 @@ impl App {
                 let r1 = r1.min(rows - 1);
                 // Rows the filter hides stay.
                 let doomed = self.shown_in(r0, r1);
-                // References and format rules follow the rows below; those of the deleted rows go.
-                let mut kept = 0;
-                let moved: Vec<usize> = (0..rows)
-                    .map(|r| {
-                        if doomed.contains(&r) {
-                            crate::refs::GONE
-                        } else {
-                            kept += 1;
-                            kept - 1
-                        }
-                    })
-                    .collect();
-                let same: Vec<usize> = (0..self.dims().1).collect();
-                let sheet = self.view.sheet;
-                self.with_doc(|doc| {
-                    crate::refs::update_document(doc, sheet, &crate::refs::Moves { rows: &moved, cols: &same });
-                    if let Some(t) = table_mut(doc, sheet) {
-                        data_layers::pad_layers(t);
-                        for grid in t.grids_mut() {
-                            for &r in doomed.iter().rev() {
-                                grid.remove(r);
-                            }
-                        }
-                    }
-                });
+                self.delete_rows(&doomed);
                 self.view.anchor = None;
                 if self.on_header().is_some() {
                     self.view.cursor.0 = r0;
@@ -5918,9 +5974,28 @@ impl App {
                 // rows); `:sortcol` sorts each column on its own. Repeating it flips to descending.
                 let single = cmd == "sortcol";
                 let (rows, cols) = self.dims();
-                let col = match args.first() {
-                    Some(a) => self.find_column(a),
-                    None => (self.view.cursor.1 < cols).then_some(self.view.cursor.1),
+                // Several keys, separated by commas: `:sort Status, Amount desc` (or `-Amount`).
+                let text = args.join(" ");
+                let mut more_keys: Vec<(usize, bool)> = Vec::new();
+                if !single && text.contains(',') {
+                    for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                        let (name, down) = match (part.strip_prefix('-'), part.rsplit_once(' ')) {
+                            (Some(name), _) => (name.trim(), true),
+                            (None, Some((name, dir))) if dir.starts_with("desc") => (name.trim(), true),
+                            (None, Some((name, dir))) if dir.starts_with("asc") => (name.trim(), false),
+                            _ => (part, false),
+                        };
+                        match self.find_column(name) {
+                            Some(c) => more_keys.push((c, down)),
+                            None => return self.error(format!("no column '{name}' – :sort Status, Amount desc")),
+                        }
+                    }
+                }
+                let args: Vec<&str> = if more_keys.is_empty() { args } else { Vec::new() };
+                let col = match (more_keys.first(), args.first()) {
+                    (Some((c, _)), _) => Some(*c),
+                    (None, Some(a)) => self.find_column(a),
+                    (None, None) => (self.view.cursor.1 < cols).then_some(self.view.cursor.1),
                 };
                 let Some(col) = col else {
                     return self.error(format!("usage: :{cmd} [column] [desc] – or place the cursor in a data column"));
@@ -5938,29 +6013,39 @@ impl App {
                 let first = if single { c0 } else { col };
                 let desc = match args.get(1) {
                     Some(a) => a.starts_with("desc"),
-                    None => args.is_empty() && self.last_sort == Some((self.view.sheet, first, false, single)),
+                    None => more_keys.is_empty() && args.is_empty() && self.last_sort == Some((self.view.sheet, first, false, single)),
                 };
                 let s = self.view.sheet;
+                let compare = |x: &Value, y: &Value, desc: bool| {
+                    use std::cmp::Ordering;
+                    let o = match (x, y) {
+                        (Value::Null, Value::Null) => Ordering::Equal,
+                        // Empty cells always go last.
+                        (Value::Null, _) => return Ordering::Greater,
+                        (_, Value::Null) => return Ordering::Less,
+                        (Value::Num(x, _), Value::Num(y, _)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+                        (Value::Date(x), Value::Date(y)) => x.cmp(y),
+                        (x, y) => x.display(None, false).cmp(&y.display(None, false)),
+                    };
+                    if desc { o.reverse() } else { o }
+                };
                 // The order of rows r0..=r1 by one column: order[new] = old (relative to r0).
                 let order_by = |keys: Vec<Value>| -> Vec<usize> {
                     let mut order: Vec<usize> = (0..keys.len()).collect();
-                    order.sort_by(|&a, &b| {
-                        use std::cmp::Ordering;
-                        let o = match (&keys[a], &keys[b]) {
-                            (Value::Null, Value::Null) => Ordering::Equal,
-                            // Empty cells always go last.
-                            (Value::Null, _) => return Ordering::Greater,
-                            (_, Value::Null) => return Ordering::Less,
-                            (Value::Num(x, _), Value::Num(y, _)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
-                            (Value::Date(x), Value::Date(y)) => x.cmp(y),
-                            (x, y) => x.display(None, false).cmp(&y.display(None, false)),
-                        };
-                        if desc { o.reverse() } else { o }
-                    });
+                    order.sort_by(|&a, &b| compare(&keys[a], &keys[b], desc));
+                    order
+                };
+                // By several columns: the first decides, the next ones break its ties.
+                let order_by_keys = |keys: Vec<(Vec<Value>, bool)>| -> Vec<usize> {
+                    let mut order: Vec<usize> = (0..keys.first().map_or(0, |k| k.0.len())).collect();
+                    order.sort_by(|&a, &b| keys.iter().map(|(k, down)| compare(&k[a], &k[b], *down)).find(|o| o.is_ne()).unwrap_or(std::cmp::Ordering::Equal));
                     order
                 };
                 // (column range, order) pairs to apply.
-                let jobs: Vec<(usize, usize, Vec<usize>)> = if single {
+                let jobs: Vec<(usize, usize, Vec<usize>)> = if !more_keys.is_empty() {
+                    let keys = more_keys.iter().map(|&(c, down)| ((r0..=r1).map(|r| self.wb.value((s, r, c))).collect(), down)).collect();
+                    vec![(c0, c1, order_by_keys(keys))]
+                } else if single {
                     (c0..=c1).map(|c| (c, c, order_by((r0..=r1).map(|r| self.wb.value((s, r, c))).collect()))).collect()
                 } else {
                     vec![(c0, c1, order_by((r0..=r1).map(|r| self.wb.value((s, r, col))).collect()))]
@@ -6010,6 +6095,12 @@ impl App {
                     }
                 });
                 self.last_sort = Some((self.view.sheet, first, desc, single));
+                if !more_keys.is_empty() {
+                    self.last_sort = None;
+                    let cols = &self.wb.sheets[self.view.sheet].columns;
+                    let keys: Vec<String> = more_keys.iter().map(|&(c, down)| format!("{}{}", cols[c].name, if down { " ↓" } else { " ↑" })).collect();
+                    return self.info(format!("sorted by {}", keys.join(", then ")));
+                }
                 let name = self.wb.sheets[self.view.sheet].columns[first].name.clone();
                 let what = if single && c1 > c0 { "columns sorted individually".to_string() } else { format!("sorted by {name}") };
                 let dir = if desc { "descending" } else { "ascending – again for descending" };
@@ -6035,7 +6126,20 @@ impl App {
                 self.rebuild();
                 self.switch_sheet(self.wb.sheets.len() - 1);
             }
+            "hide" => self.hide_columns(&args),
+            "unhide" => self.unhide_columns(&args),
+            "width" => self.set_width(&args),
+            "freeze" => self.freeze_columns(&args),
+            "find" => self.find(Some(line.trim_start()[cmd.len()..].trim().to_string()), false),
+            "next" => self.find(None, false),
+            "prev" => self.find(None, true),
+            "replace" => self.replace(&search::split_args(&line.trim_start()[cmd.len()..])),
             "filter" => self.filter_command(&args),
+            "when" => self.when_command(&args),
+            "view" => self.view_command(&args),
+            "duplicates" => self.show_duplicates(&args),
+            "group" => self.group_by(&args),
+            "dedupe" => self.dedupe(&args),
             "values" if args.is_empty() => self.open_values(None),
             "values" => match self.find_column(&args.join(" ")) {
                 Some(c) => self.open_values(Some(c)),

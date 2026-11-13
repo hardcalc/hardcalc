@@ -88,7 +88,8 @@ without administrator rights. hardcalc opens in a terminal window:
 - **Windows**: a shortcut in the start menu and the file type `hardcalc.hcmd`
   below `HKCU\Software\Classes`; it opens in your default terminal.
 - **macOS**: a small app `~/Applications/hardcalc.app` that runs hardcalc in
-  Terminal. On first use macOS asks once whether it may control Terminal.
+  Terminal and closes the window when hardcalc ends. On first use macOS asks
+  once whether it may control Terminal.
 
 Run it again after moving hardcalc. If the LibreOffice extension is installed
 as well, both appear under *Open with*.
@@ -158,8 +159,15 @@ layer and column names.
 | Ctrl+C / Ctrl+X / Ctrl+V         | copy / cut / paste (also tab-separated from Excel and the like) |
 | Ctrl+Z / Ctrl+Y                  | undo / redo                                                   |
 | F7, F7 again                     | sort the rows by the current column ascending, then descending; with a selection only its rows |
+| `:sort Status, Amount desc`      | sort by several columns: the first decides, the next break its ties (`-Amount` is descending too) |
 | `:sortcol`, menu *Edit*          | sort the column on its own (a selection: each of its columns) |
 | `:filter`, `:filter Status = open`, `:filter off` | column filter: show only the rows with the value at the cursor / that meet a condition; remove it (see *Column filters*) |
+| Ctrl+F, `:find text`             | go to the next cell containing the text – in what cells show and in their formulas, on through all tables; **Ctrl+G** (`:next`) the next match, `:prev` the one before |
+| `:replace old new`               | replace a text in the selection, else in the whole table (values and formulas, one undo step); words with spaces in quotes: `:replace "due soon" open` |
+| `:hide`, `:unhide`, `:width 20`, `:freeze` | hide columns, set their width, keep the first columns in place while scrolling sideways (see *Column view*) |
+| `:duplicates [Column]`           | show the rows whose value in the column occurs more than once (as a filter) |
+| `:dedupe [Column …]`             | delete the rows that repeat an earlier one – in the named columns, else in all of them; the first stays |
+| `:group [Column]`                | new table with one row per value of the column: the number of rows and the sums of all number columns, as formulas that follow the data |
 | F3 or Ctrl+E                     | open a file                                                   |
 | F4                               | go to a cell (`B5`)                                           |
 | F5 or Ins / F6                   | insert a row below / a column to the right (asks for `Name` or `Name:Type`) |
@@ -333,6 +341,13 @@ Text color…, Fill color…, Plain*, as does the menu *Edit*. As commands:
 selection breaks into several lines; width in characters, default 40) and `:plain`. If
 the terminal intercepts Ctrl+B (e.g. tmux), `:bold` remains.
 
+**By condition:** `:when Amount > 1000 fg red bold` formats the cells of a
+column that meet a condition (`:when Status = open bg yellow`;
+`:when Amount > 1000 off` removes the rule). In the file this is the rule
+`Amount[> 1000]: fg red bold`, with the conditions of the filter
+(`=`, `<>`, `<`, `>`, `in(a, b)`, `contains(text)`, `empty`, `required`). It
+colours the cell alone; `row[Status=open]: fg yellow` colours the whole row.
+
 This is saved as a rule in the table's `format` layer – readable and with a
 clean diff: a whole column becomes `B: bold`, a row `3: italic`, the whole
 table `*`, otherwise the cell or the range (`B2:D4: fg red`). An exception in
@@ -396,17 +411,66 @@ counts the rows shown (`■ filter 2/6`), and row numbers keep their gaps.
 - Arrows, PgUp/PgDn and the mouse wheel step over hidden rows. Clearing,
   copying, cutting, pasting and deleting rows leave hidden rows alone; a
   selection across hidden rows applies to the shown ones. Filling (Ctrl+D,
-  the handle) and moving rows ask for all rows to be shown first.
+  the handle) fills the shown rows – a series runs on over them, formulas
+  move their references by the real distance. `:replace` leaves hidden rows
+  alone too; `:dedupe`, `:duplicates` and `:group` look at all rows. Moving
+  rows asks for all rows to be shown first.
 - The row with the cursor is always shown: a new row can be typed in full
   before the filter hides it, and F4 or a link reaches a hidden row.
 - Formulas and footer rows calculate over **all** rows (`sum(B)` does not
-  change with the filter).
+  change with the filter). For the rows shown there is `subtotal`: a footer
+  cell `=subtotal(sum)` (or `avg`, `count`, `min`, `max` …), in formulas
+  `subtotal(sum; Amount)` or `subtotal(avg; Journal!Amount)`.
 - The print preview, PDF and grid layouts show the filtered rows (`rows:`
-  picks from them); with the layer switched off, all of them.
+  picks from them); with the layer switched off, all of them. A layout
+  element can narrow further on its own: `where: Status = open`.
 - In slices and scenarios the filter judges the values of the level shown.
 - Exports to xlsx and ods contain all rows and the filter as the autofilter
   of the sheet, with the same rows hidden – Excel and LibreOffice show the
   filter buttons and can change or clear it. csv and tsv hold all rows.
+
+### Column view
+
+Which columns are shown and how is a layer too, `view` – one rule per column,
+nothing in the data changes:
+
+````markdown
+```layer view
+Item: freeze width 24
+Note: hide
+```
+````
+
+| Input                         | Effect                                                    |
+|-------------------------------|-----------------------------------------------------------|
+| `:hide`, `:hide Note Remark`  | hide the columns of the selection / the named ones (also `/ C H`, menu *View*) |
+| `:unhide`, `:unhide Note`     | show all hidden columns / the named ones again            |
+| `:width 20`, `:width auto`    | width of the selected columns in characters / as the content needs |
+| `:freeze`, `:freeze Item`, `:freeze off` | the columns up to the cursor column / the named one stay in place while scrolling sideways (a line marks them) |
+| click on **■ view** in the layer bar | show everything as it is for now, and back         |
+
+The cursor steps over hidden columns; the layer bar counts them (`■ view −2`).
+Hidden columns stay in the file, in formulas and in selections across them
+(copying or clearing a range takes them along). They are left out of the
+print preview and the PDF, and of layout tables that do not name their
+`columns:`; xlsx and ods exports mark them hidden and take the widths (xlsx).
+The header row with the column names always stays in sight.
+
+### Named views
+
+A view is the filter and the column settings of a table under a name:
+
+| Input                   | Effect                                                        |
+|-------------------------|---------------------------------------------------------------|
+| `:view save open items` | save the current filter and column view as *open items*       |
+| `:view open items`      | show it again: its rules replace those of the `filter` and `view` layers (one undo step) |
+| `:view`                 | list the saved views (Tab completes their names)              |
+| `:view off`             | all rows and columns                                          |
+| `:view delete open items` | forget a view                                               |
+
+Views are kept in a layer `views`, one line each
+(`open items: filter Status: = open | view Note: hide`). The order of the
+rows is not part of a view – sorting changes the table itself.
 
 ### Split mode (as in Midnight Commander)
 
@@ -469,6 +533,7 @@ in the file:
 | `rows: last 12`            | the last 12 rows                                          |
 | `rows: top 5 by Amount`    | the 5 rows with the largest amount (`bottom`: smallest)   |
 | `rows: total`              | only the footer rows                                      |
+| `where: Status = open`     | only the rows that meet the condition (with `rows:` – the excerpt is taken from them) |
 | `height: auto`             | as tall as the data; what lies below moves along          |
 
 Footer rows (totals) are always shown and always sum the whole table. A
@@ -674,6 +739,12 @@ For power users; the help (F1) lists them all.
 | `:sort [column] [desc]` | sort (without arguments: the current column, again: descending) |
 | `:filter [Column [condition]]`, `:filter off [Column]` | column filter: only rows that meet the condition (without one: the value at the cursor); `off` removes it |
 | `:values [Column]` | the values of a column as a list to tick (the filter of the column) |
+| `:find text`, `:next`, `:prev`, `:replace old new` | find (Ctrl+F, Ctrl+G) and replace |
+| `:hide [Column …]`, `:unhide [Column …]`, `:width n\|auto`, `:freeze [Column\|off]` | column view: hide, width, frozen columns |
+| `:view [Name]`, `:view save Name`, `:view delete Name`, `:view off` | named views of filter and column settings |
+| `:when Column condition format` | format the cells of a column by a condition (`off` removes it) |
+| `:duplicates [Column]`, `:dedupe [Column …]` | show values that occur more than once · delete repeated rows |
+| `:group [Column]` | table with counts and sums per value of a column |
 | `:addrow`, `:delrow`, `:addcol Name[:Type]`, `:delcol` | rows / columns |
 | `:footer [Name]` | add a footer row below the table (a summary per column) |
 | menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, Ctrl+A all files, Ctrl+N / Ctrl+D sort by name / date (again: reverse); a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter; the sidebar starts with its own section **Recent** (the last 20 files opened or saved), also Ctrl+R in the dialog, menu *File → Recent files…* or `:recent` |

@@ -510,6 +510,12 @@ pub fn rename_column(doc: &mut Document, sheet: usize, old: &str, new: &str) {
                         && cond[old.len()..].trim_start().starts_with(['=', '<', '>', '!'])
                     {
                         *target = format!("row[{new}{}", &cond[old.len()..]);
+                    } else if let Some(cond) = target.trim().strip_prefix(old)
+                        && cond.starts_with('[')
+                        && cond.ends_with(']')
+                    {
+                        // `Amount[> 1000]`: the cells of the column that meet a condition.
+                        *target = format!("{new}{cond}");
                     }
                 }
             }
@@ -1297,13 +1303,14 @@ mod tests {
         assert_eq!(f("=@Amount + [@Amount] + Costs[@Amount]", true), "=@Total + [@Total] + Costs[@Total]");
 
         let src = "## Costs :: matrix[*, 2]\n\n| Item | Amount |\n|---|---|\n| a | 1 |\n\n\
-                   ```layer format\nAmount: bold\nrow[Amount>0]: fg red\n```\n\n\
+                   ```layer format\nAmount: bold\nrow[Amount>0]: fg red\nAmount[> 100]: bg yellow\n```\n\n\
                    ```chart K\ntype: bar\ndata: Costs.Amount\nlabels: Costs.Item\n```\n\n\
                    ```layout L\n1-6 / 1-5 table Costs   columns: Item, Amount\n```\n";
         let mut doc = crate::parse(src).unwrap();
         rename_column(&mut doc, 0, "Amount", "Total");
         let out = crate::write(&doc);
         assert!(out.contains("Total: bold") && out.contains("row[Total>0]: fg red"), "{out}");
+        assert!(out.contains("Total[> 100]: bg yellow"), "{out}");
         assert!(out.contains("data: Costs.Total") && out.contains("labels: Costs.Item"), "{out}");
         assert!(out.contains("columns: Item, Total"), "{out}");
     }

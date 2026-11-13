@@ -75,7 +75,7 @@ impl App {
             Target::Row(_) => return None,
             Target::Cell(r, c) => (Some((*r, *r)), Some((*c, *c))),
             Target::Range((c1, r1), (c2, r2)) => (Some((*r1.min(r2), *r1.max(r2))), Some((*c1.min(c2), *c1.max(c2)))),
-            Target::RowWhere { .. } => return None,
+            Target::RowWhere { .. } | Target::ColumnWhere { .. } => return None,
         })
     }
 

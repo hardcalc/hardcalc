@@ -4,12 +4,20 @@
 
 use super::{App, ViewKind, FILTER};
 use crate::engine::col_letters;
-use crate::layers::{self, Check};
+use crate::layers;
 use crate::value::Value;
 
 impl App {
     /// Recomputes which rows the filters hide – for every table with filter
     /// rules, on each of its levels (a slice is judged by its own values).
+    /// `subtotal` counts what the view shows: all rows while the filter layer
+    /// of a table is switched off.
+    pub(super) fn sync_filter_switch(&mut self) {
+        for sheet in 0..self.wb.sheets.len() {
+            self.wb.set_filter_off(sheet, !self.layer_visible_in(FILTER, sheet));
+        }
+    }
+
     pub(super) fn refilter(&mut self) {
         self.hidden_rows.clear();
         for sheet in 0..self.wb.sheets.len() {
@@ -100,11 +108,6 @@ impl App {
         (r0..=r1).filter(|&r| self.row_shown(r)).collect()
     }
 
-    /// Whether the filter hides rows between `r0` and `r1`.
-    pub(super) fn hides_between(&self, r0: usize, r1: usize) -> bool {
-        self.hidden_flags().is_some() && (r0..=r1).any(|r| !self.row_shown(r))
-    }
-
     /// Moves the cursor off a hidden row, to the next shown one (after the
     /// filter changed; a row reached on purpose – go to, a link – stays).
     pub(super) fn snap_to_shown(&mut self) {
@@ -118,20 +121,6 @@ impl App {
                 self.view.follow = true;
             }
         }
-    }
-
-    /// The target a filter rule for column `c` is written with: that of its
-    /// rule if there is one, else the column's name (or letter).
-    pub(super) fn filter_target(&self, c: usize) -> String {
-        let sheet = self.view.sheet;
-        let existing = self.attached.iter().filter(|a| a.sheet == sheet && a.layer.name == FILTER).flat_map(|a| &a.layer.rules).find_map(|r| match r {
-            crate::model::Rule::Rule { target, .. } if layers::column_of(&self.wb, sheet, target) == Some(c) => Some(target.clone()),
-            _ => None,
-        });
-        existing.unwrap_or_else(|| match self.wb.sheets[sheet].columns.get(c) {
-            Some(col) if layers::column_of(&self.wb, sheet, &col.name) == Some(c) => col.name.clone(),
-            _ => col_letters(c),
-        })
     }
 
     /// The condition that keeps the rows with the value of cell (r, c).
@@ -201,24 +190,53 @@ impl App {
     }
 }
 
-/// A condition as typed, in the form the layer keeps: `open` → `= open`,
-/// `= due soon` → `= "due soon"`.
-fn normalize(body: &str) -> Result<String, String> {
-    let ok = |b: &str| Check::parse_all(b).is_ok_and(|c| !c.is_empty() && !c.contains(&Check::Unique));
-    if ok(body) {
-        return Ok(body.to_string());
+impl App {
+    /// `:when Amount > 1000 fg red bold`: formats the cells of a column that
+    /// meet a condition (a rule `Amount[> 1000]: fg red bold` in the format
+    /// layer); `off` instead of a format removes the rule.
+    pub(super) fn when_command(&mut self, args: &[&str]) {
+        const USAGE: &str = "usage: :when Column condition format – e.g. :when Amount > 1000 fg red bold · :when Status = open bg yellow · :when Amount > 1000 off";
+        if self.view.kind != ViewKind::Table || self.view.pivot.is_some() {
+            return self.error(":when works in tables");
+        }
+        let Some((c, rest)) = (1..=args.len()).rev().find_map(|k| self.find_column(&args[..k].join(" ")).map(|c| (c, &args[k..]))) else {
+            return self.error(USAGE);
+        };
+        // The format begins with the first word that names one.
+        let is_format = |w: &str| matches!(w, "fg" | "bg" | "bold" | "italic" | "underline" | "align" | "wrap" | "off" | "none") || w.starts_with("percent") || w.starts_with("decimals") || w.starts_with("no");
+        let Some(k) = rest.iter().position(|w| is_format(w)).filter(|&k| k > 0) else { return self.error(USAGE) };
+        let condition = match normalize(&rest[..k].join(" ")) {
+            Ok(c) => c,
+            Err(e) => return self.error(e),
+        };
+        let format = rest[k..].join(" ");
+        let remove = matches!(format.as_str(), "off" | "none");
+        if !remove {
+            let (_, errors) = layers::CellStyle::parse(&format);
+            if let Some(e) = errors.first() {
+                return self.error(format!("{e} – formats: fg red, bg yellow, bold, italic, underline"));
+            }
+        }
+        let sheet = self.view.sheet;
+        let name = self.column_target(super::FORMAT, c);
+        let target = format!("{name}[{condition}]");
+        let had = self.layer_rule(super::FORMAT, sheet, &target).is_some();
+        if remove && !had {
+            return self.info(format!("no rule {target} to remove"));
+        }
+        self.set_layer_rules(super::FORMAT, sheet, &[(target.clone(), if remove { String::new() } else { format.clone() })]);
+        self.hidden_layers.remove(super::FORMAT);
+        self.layer_overrides.remove(&(sheet, super::FORMAT.to_string()));
+        self.revalidate();
+        self.info(if remove { format!("rule {target} removed") } else { format!("format rule {target}: {format} · :when … off removes it") });
     }
-    let ops = ["<=", ">=", "<>", "!=", "=", "<", ">"];
-    let candidate = match ops.iter().find(|op| body.starts_with(**op)) {
-        Some(op) => format!("{op} {}", layers::quote_value(body[op.len()..].trim())),
-        None => format!("= {}", layers::quote_value(body)),
-    };
-    if ok(&candidate) { Ok(candidate) } else { Err(format!("'{body}' is no condition – e.g. = open, >= 100, in(a, b), contains(text), empty, required")) }
 }
+
+use crate::layers::normalize_condition as normalize;
 
 #[cfg(test)]
 mod tests {
-    use super::normalize;
+    use crate::layers::normalize_condition as normalize;
 
     #[test]
     fn conditions_as_typed() {

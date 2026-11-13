@@ -104,6 +104,7 @@ pub const BUILTINS: &[Builtin] = &[
     b("exact", "EXACT", "exact(a; b)", "true if both texts are equal (case matters)", "v"),
     b("value", "VALUE", "value(text)", "the number in a text", "v"),
     b("text", "TEXT", "text(value; format)", "a number or date as text: \"0.00\", \"#,##0\", \"0%\", \"dd.mm.yyyy\"", "v"),
+    Builtin { name: "subtotal", excel: None, signature: "subtotal(function; column)", desc: "sum, avg, count, min, max … over the rows the filter of the table shows; in a footer row: =subtotal(sum)", args: "vr" },
     Builtin { name: "spark", excel: None, signature: "spark(values …)", desc: "sparkline ▁▃▅█ as text", args: "r" },
 ];
 

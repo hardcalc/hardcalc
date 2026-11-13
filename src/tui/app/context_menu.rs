@@ -87,6 +87,10 @@ pub static CONTEXT_MENU: &[Group] = &[
             c('N', "Filter by condition…", "filter "),
             c('R', "Remove filter", "filter off"),
             a('F', "Fill right", Action::FillRight),
+            c('H', "Hide", "hide"),
+            c('U', "Show all columns", "unhide"),
+            c('W', "Width…", "width "),
+            c('Z', "Freeze up to here", "freeze"),
         ],
     },
     Group {

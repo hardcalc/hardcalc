@@ -357,7 +357,7 @@ matter); the tab **ƒ functions** shows the complete list with descriptions:
 | Math | `abs`, `sqrt`, `round`, `roundup`, `rounddown`, `int`, `mod`, `power`, `sign`, `ceiling`, `floor`, `exp`, `ln`, `log`, `pi` |
 | Date | `today`, `date`, `year`, `month`, `day`, `weekday`, `edate`, `eomonth`, `datedif` |
 | Text | `len`, `left`, `right`, `mid`, `upper`, `lower`, `proper`, `trim`, `concat` (`concatenate`), `textjoin`, `substitute`, `find`, `search`, `rept`, `exact`, `value`, `text` |
-| hardcalc | `spark(values)` – sparkline as text |
+| hardcalc | `spark(values)` – sparkline as text · `subtotal(function; column)` – an aggregate over the rows the filter shows (section 6, `filter`) |
 
 Names, units and options are always English and do not depend on the
 language settings (`datedif(a; b; "YM")`, `text(d; "dd.mm.yyyy")`); where
@@ -454,6 +454,7 @@ Every line has the form `<target>: <rule>`. Targets:
 | `3`                | row 3                           |
 | `B2`, `B2:D5`      | cell / range                    |
 | `row[<condition>]` | rows that meet the condition    |
+| `Amount[<conditions>]` | the cells of the column that meet them: `Amount[> 1000]`, `Status[in(open, due)]` (conditions as in `filter`) |
 | `*`                | the whole table                 |
 
 ### `format`
@@ -520,7 +521,13 @@ ones a program shows. Hiding rows is the task of the program that displays
 or evaluates the table: hardcalc hides them on screen, in the print preview,
 the PDF and in grid layouts (`rows:` picks from the rows shown). Formulas,
 footer rows, charts and live values are **not** affected – `sum(Amount)` is
-the sum of all rows. Whether the layer is switched on is a view setting like
+the sum of all rows. Only `subtotal(function; column)` follows the filter:
+`subtotal(sum; Amount)`, `subtotal(avg; Journal!Amount)` aggregate the rows
+of the column that the filter of its table shows (functions: those a footer
+may name alone). In a footer row, `=subtotal(sum)` applies to its own column.
+The column is a whole column of the table; without a filter all rows count.
+While hardcalc shows all rows (filter layer switched off), `subtotal` counts
+all rows too. Exported as `SUBTOTAL(109, …)`. Whether the layer is switched on is a view setting like
 that of every layer and is not saved; a file opens with its filters on.
 
 The xlsx and ods exports pass the filter on as the autofilter of the sheet
@@ -541,6 +548,8 @@ Predefined layers:
 | `format`    | presentation (alignment, colors, number format)    |
 | `validate`  | rules (`>= 0`, `required`, `unique`, `in(…)`)      |
 | `filter`    | column filters: rows that do not meet them are hidden |
+| `view`      | how columns are shown: hidden, their width, frozen |
+| `views`     | named views: saved rules of `filter` and `view`    |
 | `comments`  | notes on cells (footnotes when printed, see 7)     |
 | `formulas`  | built in: highlights formula cells (default: cyan, italic); a block of your own changes the presentation |
 | `links`     | jumps to other places of the document (see below)  |
@@ -551,6 +560,47 @@ it) is kept and has no effect; `hardcalc check` reports it. It also warns
 about a rule whose target meets nothing – a column the table does not
 have, a row or cell beyond it (in a playground or a `fill` table, cells
 beyond the data are fine).
+
+### `view`
+
+How the columns of a table are shown. Every rule names a column; its
+settings are combined with spaces:
+
+````markdown
+```layer view
+Item: freeze width 24
+Note: hide
+```
+````
+
+| Setting   | Effect                                                              |
+|-----------|---------------------------------------------------------------------|
+| `hide`    | the column is not shown                                             |
+| `width n` | the column is n characters wide (longer content is cut on screen)   |
+| `freeze`  | this column and those left of it stay in place while scrolling sideways |
+
+Nothing in the data depends on it: hidden columns keep their place in
+formulas, references and letters. hardcalc leaves hidden columns out on
+screen, in the print preview, the PDF and in layout tables without
+`columns:`; the xlsx and ods exports mark them hidden. A rule with another
+target than a column or with an unknown setting does nothing and is reported
+by `hardcalc check`.
+
+### `views`
+
+Named views of a table: every rule is a name and the rules of the `filter`
+and `view` layers it stands for, separated by ` | `:
+
+````markdown
+```layer views
+open items: filter Status: = open | view Note: hide
+all of March: filter Date: >= 2026-03-01 < 2026-04-01
+```
+````
+
+Showing a view replaces the rules of the table's `filter` and `view` layers
+by these; the block itself has no effect on what is shown. A name contains no
+`:`, `|`, `[` or `]`.
 
 ### `links`
 
@@ -664,9 +714,13 @@ grid: 12
   7-12 / 1-10   table    Account   z: February
   ```
 - Options follow the content as `key: value`, in any order; hardcalc writes
-  them as `columns:`, `rows:`, `label:`, `z:`, `height:`. In `heading`,
+  them as `columns:`, `rows:`, `where:`, `label:`, `z:`, `height:`. In `heading`,
   `text` and `note` only a closing `height: auto` is an option; everything
   else there is text.
+- `where:` shows only the rows that meet a condition on a column, written
+  as in a `filter` rule: `where: Status = open`, `where: Amount >= 100`. It
+  adds to the filter of the table; `rows:` takes its excerpt from the rows
+  left. The title names it (`Expenses · Status = open`).
 - `rows:` shows a part of a table: `rows: 10` (or `first 10`), `rows: last
   10`, `rows: top 5 by Column`, `rows: bottom 5 by Column` (ranked by the
   numbers or dates of that column, largest or smallest first), `rows: total`

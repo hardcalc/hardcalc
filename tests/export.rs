@@ -252,3 +252,18 @@ fn filter_becomes_an_autofilter_in_ods() {
     let (wb, _) = Workbook::from_document(&doc);
     assert_eq!(wb.sheets[0].raw.len(), 7, "six rows and the footer row as data");
 }
+
+#[test]
+fn view_layer_hides_columns_in_exports() {
+    let src = format!("{FILTERED}\n```layer view\nNote: hide\nItem: width 30\n```\n");
+    let doc = parse(&src).unwrap();
+    let xlsx = temp("view.xlsx");
+    export_xlsx(&doc, &xlsx).unwrap();
+    let sheet = zipped(&xlsx, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains("<col min=\"4\" max=\"4\"") && sheet.contains("hidden=\"1\""), "{sheet}");
+    assert!(sheet.contains("<col min=\"1\" max=\"1\" width=\"31"), "{sheet}");
+    let ods = temp("view.ods");
+    hardcalc::export::export_ods(&doc, &ods).unwrap();
+    let content = zipped(&ods, "content.xml");
+    assert!(content.contains("<table:table-column/><table:table-column/><table:table-column/><table:table-column table:visibility=\"collapse\"/>"), "{content}");
+}

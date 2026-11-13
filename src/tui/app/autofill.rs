@@ -25,8 +25,11 @@ impl App {
     /// reaches further out). `smart`: continue series, else repeat.
     pub(super) fn autofill(&mut self, src: Rect, to: (usize, usize), smart: bool) {
         let ((r0, c0), (r1, c1)) = src;
-        if self.hides_between(r0.min(to.0), r1.max(to.0)) {
-            return self.error("the filter hides rows in between – filling works with all rows shown (switch the filter layer off)");
+        // Rows the filter hides neither give nor take: a series runs on
+        // over the rows that are shown.
+        let from_rows = self.shown_in(r0, r1);
+        if from_rows.is_empty() {
+            return;
         }
         let down = to.0.saturating_sub(r1);
         let up = r0.saturating_sub(to.0);
@@ -54,20 +57,16 @@ impl App {
             }
         };
         let filled: Rect = if down.max(up) >= right.max(left) && down.max(up) > 0 {
+            let targets: Vec<usize> = if down >= up { self.shown_in(r1 + 1, r1 + down) } else { self.shown_in(r0 - up, r0 - 1).into_iter().rev().collect() };
+            let from: Vec<usize> = if down >= up { from_rows.clone() } else { from_rows.iter().rev().copied().collect() };
             for c in c0..=c1 {
-                if down >= up {
-                    let source: Vec<String> = (r0..=r1).map(|r| self.raw_at(r, c)).collect();
-                    let fills = fill_line(source.clone(), down);
-                    put(fills, &source, (1..=down).map(|k| (r1 + k, c)).collect(), &|i| (r0 + i, c));
-                } else {
-                    let source: Vec<String> = (r0..=r1).rev().map(|r| self.raw_at(r, c)).collect();
-                    let fills = fill_line(source.clone(), up);
-                    put(fills, &source, (1..=up).map(|k| (r0 - k, c)).collect(), &|i| (r1 - i, c));
-                }
+                let source: Vec<String> = from.iter().map(|&r| self.raw_at(r, c)).collect();
+                let fills = fill_line(source.clone(), targets.len());
+                put(fills, &source, targets.iter().map(|&r| (r, c)).collect(), &|i| (from[i], c));
             }
             if down >= up { ((r0, c0), (r1 + down, c1)) } else { ((r0 - up, c0), (r1, c1)) }
         } else if right.max(left) > 0 {
-            for r in r0..=r1 {
+            for &r in &from_rows {
                 if right >= left {
                     let source: Vec<String> = (c0..=c1).map(|c| self.raw_at(r, c)).collect();
                     let fills = fill_line(source.clone(), right);

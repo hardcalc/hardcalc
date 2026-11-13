@@ -2085,7 +2085,7 @@ fn command_preview_like_helix() {
     let mut a = app();
     typ(&mut a, ":");
     let screen = render(&mut a);
-    assert!(screen.contains("autofill") && screen.contains("playground"), "all commands as a grid: {screen}");
+    assert!(screen.contains("export") && screen.contains("goto") && screen.contains("more ↓"), "all commands as a grid: {screen}");
     assert!(!screen.contains("write (save)"), "no documentation before anything is typed");
     typ(&mut a, "open");
     let screen = render(&mut a);
@@ -3898,4 +3898,275 @@ fn value_list_filters_by_ticking() {
     key(&mut a, KeyCode::Char(' '));
     key(&mut a, KeyCode::Esc);
     assert!(a.values.is_none() && hardcalc::write(&a.doc).contains("Amount: = 20\n"));
+}
+
+#[test]
+fn find_walks_through_matches_and_tables() {
+    let mut a = app();
+    a.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+    assert_eq!(a.mode, Mode::Command { buf: "find ".into() });
+    typ(&mut a, "north");
+    key(&mut a, KeyCode::Enter);
+    // Not in Expenses: the first match is in the next table.
+    assert_eq!((a.view.sheet, a.view.cursor), (1, (0, 1)));
+    assert_eq!(a.message.as_ref().unwrap().text, "'north': match 1 of 4 at Sales!B1 · Ctrl+G next · :prev back");
+    a.on_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert_eq!((a.view.sheet, a.view.cursor), (1, (2, 1)));
+    a.command("prev");
+    assert_eq!(a.view.cursor, (0, 1));
+    a.command("prev");
+    assert_ne!(a.view.sheet, 1, "before the first: around to the last, in a later table");
+    // Formulas are searched as written, values as shown.
+    a.command("find sum(B)");
+    assert_eq!((a.view.sheet, a.view.cursor), (0, (0, 3)));
+    a.command("find 90.5");
+    assert_eq!((a.view.sheet, a.view.cursor), (0, (0, 3)), "the only one: stays");
+    a.command("find nowhere to be found");
+    assert!(a.message.as_ref().unwrap().error);
+}
+
+#[test]
+fn replace_in_table_or_selection() {
+    let mut a = journal("");
+    a.command("replace paid settled");
+    assert_eq!(a.message.as_ref().unwrap().text, "replaced 3 × 'paid' by 'settled' in 3 cell(s) · Ctrl+Z takes it back");
+    let status = |a: &App| a.table().rows.iter().map(|r| r[2].clone()).collect::<Vec<_>>();
+    assert_eq!(status(&a), ["settled", "open", "settled", "open", "due soon", "settled"]);
+    ctrl(&mut a, 'z');
+    assert_eq!(status(&a)[0], "paid", "one undo step");
+    // Only in the selection; words with spaces in quotes.
+    a.view.cursor = (3, 2);
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    a.command("replace \"due soon\" OPEN");
+    a.command("replace open \"to do\"");
+    assert_eq!(status(&a), ["paid", "open", "paid", "to do", "to do", "paid"]);
+    a.command("replace nothing x");
+    assert!(a.message.as_ref().unwrap().error);
+}
+
+const WIDE: &str = "\
+## Wide :: matrix
+
+| Item | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec | A long remark column |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Rent | 11111111 | 22222222 | 33333333 | 44444444 | 55555555 | 66666666 | 77777777 | 88888888 | 99999999 | 10101010 | 11111112 | 12121212 | paid by standing order every month |
+| Power | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | meter read in June |
+";
+
+fn wide() -> App {
+    App::new(PathBuf::from("wide.hcmd"), hardcalc::parse(WIDE).unwrap())
+}
+
+#[test]
+fn hidden_columns_are_stepped_over() {
+    let mut a = wide();
+    a.view.cursor = (0, 1);
+    a.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    a.command("hide");
+    assert!(hardcalc::write(&a.doc).contains("```layer view\nJan: hide\nFeb: hide\n```"), "{}", hardcalc::write(&a.doc));
+    assert_eq!(a.view.cursor.1, 3, "the cursor leaves the hidden columns");
+    let screen = render(&mut a);
+    assert!(!screen.contains(" Jan ") && !screen.contains("22222222") && screen.contains("Mar"), "{screen}");
+    assert!(screen.contains("■ view −2"), "{screen}");
+    key(&mut a, KeyCode::Left);
+    assert_eq!(a.view.cursor.1, 0, "← steps over them");
+    key(&mut a, KeyCode::Right);
+    assert_eq!(a.view.cursor.1, 3);
+    // The data is untouched; the layer shows the columns for now.
+    assert!(hardcalc::write(&a.doc).contains("| Rent | 11111111 | 22222222 |"));
+    let i = a.layer_names.iter().position(|n| n == "view").unwrap();
+    click(&mut a, Hit::Layer(i));
+    assert!(render(&mut a).contains("Jan"));
+    click(&mut a, Hit::Layer(i));
+    a.command("unhide Feb");
+    assert!(hardcalc::write(&a.doc).contains("```layer view\nJan: hide\n```"));
+    a.command("unhide");
+    assert!(!hardcalc::write(&a.doc).contains("Jan: hide"));
+    assert!(render(&mut a).contains("Jan"));
+    a.command("hide Item Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec A long remark column");
+    assert!(a.message.as_ref().unwrap().error, "one column stays");
+}
+
+#[test]
+fn column_width_and_frozen_columns() {
+    let mut a = wide();
+    a.view.cursor = (0, 13);
+    let screen = render(&mut a);
+    assert!(!screen.contains("Rent"), "scrolled to the last column, the first is out of sight: {screen}");
+    a.command("freeze Item");
+    a.command("width 12");
+    assert!(hardcalc::write(&a.doc).contains("```layer view\nItem: freeze\nA long remark column: width 12\n```"), "{}", hardcalc::write(&a.doc));
+    let screen = render(&mut a);
+    assert!(screen.contains("Rent") && screen.contains("Power"), "the frozen column stays: {screen}");
+    assert!(screen.contains("Rent │"), "a line behind the frozen columns: {screen}");
+    assert!(screen.contains("paid by sta…") && !screen.contains("12121212 paid by standing"), "the remark is cut at 12 characters: {screen}");
+    // Freezing another column moves the rule; off removes it.
+    a.command("freeze B");
+    assert!(hardcalc::write(&a.doc).contains("Jan: freeze") && !hardcalc::write(&a.doc).contains("Item: freeze"));
+    a.command("freeze off");
+    a.command("width auto");
+    assert!(!hardcalc::write(&a.doc).contains("layer view\n"), "{}", hardcalc::write(&a.doc));
+    assert!(!render(&mut a).contains("Rent"));
+}
+
+#[test]
+fn hidden_columns_are_not_printed() {
+    let mut a = journal("");
+    a.command("hide Amount");
+    let items = a.print_items(true);
+    let hardcalc::print::PrintItem::Table(t) = &items.iter().find(|i| matches!(i, hardcalc::print::PrintItem::Table(_))).unwrap() else { unreachable!() };
+    assert_eq!(t.headers, ["Item", "Status"]);
+    assert!(t.rows.iter().all(|r| r.len() == 2));
+}
+
+#[test]
+fn sort_by_several_columns() {
+    let mut a = journal("");
+    a.command("sort Status, Amount desc");
+    assert_eq!(a.message.as_ref().unwrap().text, "sorted by Status ↑, then Amount ↓");
+    assert_eq!(journal_rows(&a), ["Car", "Power", "Phone", "Rent", "Books", "Internet"]);
+    a.command("sort -Status, Item");
+    assert_eq!(journal_rows(&a), ["Books", "Internet", "Rent", "Phone", "Power", "Car"]);
+    a.command("sort Status, Nothing");
+    assert!(a.message.as_ref().unwrap().error);
+    ctrl(&mut a, 'z');
+    assert_eq!(journal_rows(&a)[0], "Car", "each sort is one undo step");
+}
+
+#[test]
+fn cells_are_formatted_by_condition() {
+    let mut a = journal("");
+    a.command("when Amount > 100 fg red bold");
+    assert_eq!(a.message.as_ref().unwrap().text, "format rule Amount[> 100]: fg red bold · :when … off removes it");
+    assert!(hardcalc::write(&a.doc).contains("```layer format\nAmount[> 100]: fg red bold\n```"), "{}", hardcalc::write(&a.doc));
+    assert!(a.cell_view(0, 1).style.bold && !a.cell_view(1, 1).style.bold && !a.cell_view(0, 0).style.bold, "only the cell, not its row");
+    // The format follows the value.
+    a.view.cursor = (1, 1);
+    typ(&mut a, "500");
+    key(&mut a, KeyCode::Enter);
+    assert!(a.cell_view(1, 1).style.bold);
+    a.command("when Status due soon bg yellow");
+    assert!(hardcalc::write(&a.doc).contains("Status[= \"due soon\"]: bg yellow"), "{}", hardcalc::write(&a.doc));
+    assert!(a.cell_view(4, 2).style.bg.is_some() && a.cell_view(0, 2).style.bg.is_none());
+    a.command("when Amount > 100 off");
+    assert!(!hardcalc::write(&a.doc).contains("Amount[> 100]"));
+    a.command("when Amount > 100 fg nocolour");
+    assert!(a.message.as_ref().unwrap().error);
+}
+
+#[test]
+fn duplicates_are_shown_and_removed() {
+    let mut a = journal("");
+    a.command("duplicates Status");
+    assert!(hardcalc::write(&a.doc).contains("Status: in(paid, open)"), "{}", hardcalc::write(&a.doc));
+    assert!(!render(&mut a).contains("Car"), "due soon occurs once");
+    a.command("filter off");
+    a.command("duplicates Item");
+    assert_eq!(a.message.as_ref().unwrap().text, "no value occurs twice in Item");
+    // The first row of each status stays.
+    a.command("dedupe Status");
+    assert_eq!(journal_rows(&a), ["Rent", "Power", "Car"]);
+    assert_eq!(a.message.as_ref().unwrap().text, "deleted 3 row(s) that repeated an earlier one · Ctrl+Z takes it back");
+    ctrl(&mut a, 'z');
+    assert_eq!(journal_rows(&a).len(), 6);
+    a.command("dedupe");
+    assert_eq!(a.message.as_ref().unwrap().text, "no row repeats another");
+}
+
+#[test]
+fn group_table_counts_and_sums() {
+    let mut a = journal("");
+    a.command("group Status");
+    let saved = hardcalc::write(&a.doc);
+    assert!(saved.contains("## Journal by Status :: matrix\n\n| Status | Rows | Amount |"), "{saved}");
+    assert!(saved.contains("| paid | =countif(Journal!C; A1) | =sumif(Journal!C; A1; Journal!B) |"), "{saved}");
+    let screen = render(&mut a);
+    assert!(screen.contains("1284.99") && screen.contains("105.5") && screen.contains("1690.49"), "{screen}");
+    let s = a.view.sheet;
+    assert_eq!(a.wb.value((s, 0, 1)), Value::num(3.0));
+    assert_eq!(a.wb.value((s, 2, 2)), Value::num(300.0));
+    // The sums follow the data.
+    a.switch_sheet(0);
+    a.view.cursor = (4, 1);
+    typ(&mut a, "350");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(a.wb.value((s, 2, 2)), Value::num(350.0));
+    a.command("group Status");
+    assert!(hardcalc::write(&a.doc).contains("## Journal by Status 2 ::"));
+}
+
+#[test]
+fn named_views_keep_filter_and_columns() {
+    let mut a = journal("");
+    a.command("view save nothing");
+    assert!(a.message.as_ref().unwrap().error, "nothing to save yet");
+    a.command("filter Status = open");
+    a.command("hide Amount");
+    a.command("view save open items");
+    let saved = hardcalc::write(&a.doc);
+    assert!(saved.contains("```layer views\nopen items: filter Status: = open | view Amount: hide\n```"), "{saved}");
+    // Another view; then back to the saved one in a single step.
+    a.command("view off");
+    assert!(!hardcalc::write(&a.doc).contains("layer filter") && !hardcalc::write(&a.doc).contains("layer view\n"));
+    let screen = render(&mut a);
+    assert!(screen.contains("Rent") && screen.contains("Amount"), "{screen}");
+    a.command("filter Item contains(o)");
+    a.command("view open items");
+    assert_eq!(a.message.as_ref().unwrap().text, "view open items: 2 of 6 rows, 1 column(s) hidden");
+    let saved = hardcalc::write(&a.doc);
+    assert!(saved.contains("```layer filter\nStatus: = open\n```") && saved.contains("```layer view\nAmount: hide\n```") && !saved.contains("contains(o)"), "{saved}");
+    let screen = render(&mut a);
+    assert!(screen.contains("Power") && !screen.contains("Rent") && !screen.contains("85.5"), "{screen}");
+    ctrl(&mut a, 'z');
+    assert!(hardcalc::write(&a.doc).contains("Item: contains(o)") && !hardcalc::write(&a.doc).contains("```layer view\n"), "one undo step: {}", hardcalc::write(&a.doc));
+    a.command("view");
+    assert!(a.message.as_ref().unwrap().text.starts_with("views: open items"));
+    a.command("view delete open items");
+    assert!(!hardcalc::write(&a.doc).contains("layer views"));
+    a.command("view open items");
+    assert!(a.message.as_ref().unwrap().error);
+}
+
+#[test]
+fn filling_skips_rows_the_filter_hides() {
+    let mut a = journal("Status: = open");
+    // Power (row 2) … Phone (row 4): Ctrl+D copies into the shown row only.
+    a.view.cursor = (1, 1);
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    ctrl(&mut a, 'd');
+    let amounts: Vec<String> = a.table().rows.iter().map(|r| r[1].clone()).collect();
+    assert_eq!(amounts, ["1200", "85.5", "39.99", "85.5", "300", "45"], "Internet in between keeps its value");
+    // A formula moves its references by the real distance.
+    a.view.cursor = (1, 0);
+    a.view.anchor = None;
+    typ(&mut a, "=B2*2");
+    key(&mut a, KeyCode::Enter);
+    a.view.cursor = (1, 0);
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    ctrl(&mut a, 'd');
+    let items: Vec<String> = a.table().rows.iter().map(|r| r[0].clone()).collect();
+    assert_eq!(items[1..4], ["=B2*2", "Internet", "=B4*2"]);
+}
+
+#[test]
+fn layout_tables_pick_rows_by_condition() {
+    let mut a = long_table(
+        30,
+        "1-6 / 1-20 table Data where: Amount >= 100\n7-12 / 1-20 table Data rows: top 2 by Amount where: Amount < 100\n1-6 / 22-40 table Data where: Nothing = 1",
+    );
+    assert!(a.raster_spec(0).errors.is_empty(), "{:?}", a.raster_spec(0).errors);
+    let amount = |k: usize| (k * 37) % 100 + k;
+    let big: Vec<usize> = (1..=30).filter(|&k| amount(k) >= 100).collect();
+    let first = element_text(&mut a, 0);
+    assert_eq!(first[0], "Data · Amount >= 100");
+    assert_eq!(first.len(), big.len() + 3, "title, header, the rows, total: {first:?}");
+    assert!(first[2].starts_with(&format!("Item {} ", big[0])), "{first:?}");
+    // The ranking picks from the rows that meet the condition.
+    let mut small: Vec<usize> = (1..=30).filter(|&k| amount(k) < 100).collect();
+    small.sort_by_key(|&k| std::cmp::Reverse(amount(k)));
+    let top = element_text(&mut a, 1);
+    assert!(top[2].starts_with(&format!("Item {} ", small[0])) && top[3].starts_with(&format!("Item {} ", small[1])), "{top:?}");
+    assert!(element_text(&mut a, 2)[0].contains("where:"), "{:?}", element_text(&mut a, 2));
+    // Written back as typed.
+    assert_eq!(element(&a, 1).to_line().trim_end(), "7-12    / 1-20    table    Data   rows: top 2 by Amount   where: Amount < 100");
 }
