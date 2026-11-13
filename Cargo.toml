@@ -1,6 +1,6 @@
 [package]
 name = "hardcalc"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 description = "Universal terminal spreadsheet: vectors, matrices, tensors, typed cells and layers, stored as readable Markdown"
 license = "MIT"
