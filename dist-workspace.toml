@@ -17,6 +17,8 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# The license of the PDF font embedded in the binary (DejaVu Sans Mono)
+include = ["assets/fonts/THIRD-PARTY-FONTS.txt"]
 # Homebrew tap that receives the formula (`brew install hardcalc/tap/hardcalc`)
 tap = "hardcalc/homebrew-tap"
 # Publish jobs to run in CI (prereleases are not published to the tap)

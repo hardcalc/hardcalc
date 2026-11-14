@@ -103,6 +103,10 @@ pub fn for_light_background(c: Color) -> Color {
     }
 }
 
+/// Background of dialogs over the screen (the file dialog), set off from
+/// the sheet; light themes get [`light_surface`]'s counterpart.
+pub const DIALOG: Color = Color::Rgb(30, 38, 58);
+
 /// Light counterparts of the dark surfaces the UI is drawn with (bars,
 /// desk around the paper, highlighted source block).
 fn light_surface(bg: Color) -> Option<Color> {
@@ -110,6 +114,7 @@ fn light_surface(bg: Color) -> Option<Color> {
         Color::Black => Some(Color::Indexed(254)),
         Color::DarkGray => Some(Color::Indexed(251)),
         Color::Rgb(40, 44, 60) => Some(Color::Rgb(222, 228, 242)),
+        DIALOG => Some(Color::Rgb(232, 238, 250)),
         _ => None,
     }
 }

@@ -22,6 +22,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.hits.clear();
     app.image_slot = None;
     app.images.clear();
+    app.pictures.clear();
     // Kitty puts images over the text: none while something lies over the windows.
     // The commands shown above the command line may cover a chart too.
     app.images_allowed = app.graphics.is_some() && !app.overlay_open() && !matches!(app.mode, Mode::Command { .. });
@@ -131,6 +132,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     slide(f, app, "plot", plot, 0, draw_plot_dialog);
     let library = app.library.as_ref().map(|_| 0);
     slide(f, app, "library", library, 0, draw_library);
+    let symbols = app.symbols.as_ref().map(|_| 0);
+    slide(f, app, "symbols", symbols, 0, draw_symbols);
     let dialog = app.file_dialog.as_ref().map(|_| 0);
     slide(f, app, "files", dialog, 0, draw_file_dialog);
     let confirm = app.confirm.as_ref().map(|_| 0);
@@ -328,6 +331,36 @@ fn draw_plot_dialog(f: &mut Frame, app: &mut App) {
 }
 
 /// The formula library (F6): pick a formula to insert.
+/// The list of special characters: the character, its name, its LaTeX
+/// name and ASCII spellings; typing narrows it.
+fn draw_symbols(f: &mut Frame, app: &mut App) {
+    let shown = app.symbols_shown();
+    let Some(mut p) = app.symbols.clone() else { return };
+    let area = f.area();
+    let title = if p.query.is_empty() { " special characters – type a name, \\le or <= ".to_string() } else { format!(" special characters: {}▏ ", p.query) };
+    let rect = centered_box(f, 64.min(area.width), (area.height * 3 / 4).clamp(8, 24), title, " ↑↓ · Enter inserts · Esc ".into());
+    let inner = rect.width.saturating_sub(2) as usize;
+    let body = rect.height.saturating_sub(2) as usize;
+    p.selected = p.selected.min(shown.len().saturating_sub(1));
+    if p.selected < p.scroll {
+        p.scroll = p.selected;
+    } else if body > 0 && p.selected >= p.scroll + body {
+        p.scroll = p.selected + 1 - body;
+    }
+    for (k, s) in shown.iter().enumerate().skip(p.scroll).take(body) {
+        let y = rect.y + 1 + (k - p.scroll) as u16;
+        let latex: Vec<String> = s.latex.iter().map(|l| format!("\\{l}")).collect();
+        let text = format!("  {}   {:<26} {:<16} {}", s.ch, s.name, latex.join(" "), s.ascii.join(" "));
+        let style = if k == p.selected { Style::new().reversed() } else { Style::new() };
+        f.buffer_mut().set_stringn(rect.x + 1, y, fit(&clip(&text, inner), inner, Align::Left), inner, style);
+        app.hits.push((Rect::new(rect.x + 1, y, inner as u16, 1), Hit::Symbol(k)));
+    }
+    if shown.is_empty() {
+        f.buffer_mut().set_stringn(rect.x + 2, rect.y + 1, "(no character matches)", inner - 1, Style::new().fg(Color::DarkGray));
+    }
+    app.symbols = Some(p);
+}
+
 fn draw_library(f: &mut Frame, app: &mut App) {
     let Some(mut d) = app.library.clone() else { return };
     let area = f.area();
@@ -1257,6 +1290,34 @@ fn tab_order(kind: ViewKind) -> u32 {
 /// Colours of the sources of an edited formula, in the order they appear.
 const SOURCE_COLORS: [Color; 5] = [Color::LightBlue, Color::LightMagenta, Color::LightGreen, Color::LightYellow, Color::LightRed];
 
+/// Colour of a typeset calculation: that of its text, or one that reads on
+/// the highlight of the cursor or the selection.
+fn typeset_ink(style: Style, view: &CellView, light: bool) -> [u8; 3] {
+    if style.add_modifier.contains(Modifier::REVERSED) {
+        return if light { [250, 250, 250] } else { [28, 28, 30] };
+    }
+    match style.bg {
+        Some(Color::Blue) => return [255, 255, 255],
+        Some(Color::Cyan) | Some(Color::Yellow) => return [0, 0, 0],
+        _ => {}
+    }
+    let named = match &view.style.fg {
+        Some(crate::layers::Color::Named(n)) => n.as_str(),
+        _ => "",
+    };
+    match (named, light) {
+        _ if view.error => if light { [190, 0, 0] } else { [255, 110, 110] },
+        ("cyan", false) => [0, 190, 210],
+        ("cyan", true) => [0, 115, 145],
+        ("green", false) => [80, 200, 100],
+        ("green", true) => [0, 130, 40],
+        ("red", false) => [240, 95, 95],
+        ("red", true) => [190, 0, 0],
+        (_, false) => [220, 220, 220],
+        (_, true) => [20, 20, 20],
+    }
+}
+
 fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     // The cells the formula being edited refers to.
     let sources = if focused { app.formula_sources() } else { Default::default() };
@@ -1281,6 +1342,18 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
 
     // Filling tables get Excel-like column widths.
     let min_col = if app.fills() { FILL_MIN_COL } else { MIN_COL };
+    // The calculation sheet with typeset calculations: the formula of each row.
+    let cell_px = app.cell_px;
+    let typeset = app.calc_view() && app.typeset && app.images_allowed && crate::typeset::available();
+    let math: HashMap<usize, String> = if typeset {
+        let m: HashMap<usize, String> = (0..app.calc_rows().len()).filter_map(|r| app.calc_math(r).map(|m| (r, m))).collect();
+        let list: Vec<String> = m.values().cloned().collect();
+        app.typeset_formulas(&list, cell_px.1);
+        m
+    } else {
+        HashMap::new()
+    };
+    let calc_col = crate::tui::app::CALCULATION;
     // Rows with wrapped cells are several lines high, so fewer rows fit; the
     // scroll position moves on until the cursor row is shown completely.
     let (row_list, cache, visible, heights, gutter) = loop {
@@ -1388,6 +1461,13 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 })
                 .max()
                 .unwrap_or(1);
+            // A typeset calculation takes the lines its picture needs.
+            let typeset_h = math
+                .get(&r)
+                .zip(all.iter().find(|(c, _)| *c == calc_col))
+                .and_then(|(m, &(_, w))| app.typeset_fitted(m, cell_px.1, w * cell_px.0 as usize, [255, 255, 255]))
+                .map_or(1, |(_, lines)| lines as usize);
+            let h = h.max(typeset_h);
             if used + h > vis_rows && !heights.is_empty() {
                 break;
             }
@@ -1563,6 +1643,16 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             let marked = links_on && w >= 2 && !edited && app.links.contains_key(&(sheet, r, c));
             let tw = if marked { w - 1 } else { w };
             let wrapped = view.style.wrap.is_some() && !edited;
+            // The calculation typeset, in a colour that reads on the cell's background.
+            let picture = math.get(&r).filter(|_| c == calc_col && !edited).and_then(|m| {
+                let ink = typeset_ink(style, view, light);
+                app.typeset_fitted(m, cell_px.1, w * cell_px.0 as usize, ink).map(|(img, _)| {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    (m, ink, w).hash(&mut h);
+                    super::Picture { rect: Rect::new(x, y, w as u16, lines), key: h.finish(), image: img }
+                })
+            });
             let text = match &edit {
                 // While editing, the cell shows the input; if it is too long,
                 // the part around the cursor (normally the end).
@@ -1574,7 +1664,12 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 }
                 _ => fit(&view.text, tw, view.align) + if marked { " " } else { "" },
             };
-            if wrapped {
+            if let Some(p) = picture {
+                for extra in 0..lines {
+                    buf.set_stringn(x, y + extra, " ".repeat(w), w, style);
+                }
+                app.pictures.push(p);
+            } else if wrapped {
                 let mut parts = crate::text::wrap_plain(&view.text, tw).into_iter();
                 for extra in 0..lines {
                     let part = parts.next().unwrap_or_default();
@@ -1837,8 +1932,11 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect, helper: Option<&str>) {
             return;
         }
         Mode::Edit { .. } => {
-            let hint = "editing – Enter/Tab commit · Esc cancel";
-            f.buffer_mut().set_stringn(area.x, area.y, hint, area.width as usize, Style::new().fg(Color::Yellow));
+            let (hint, style) = match &app.message {
+                Some(m) if m.error => (m.text.clone(), Style::new().fg(Color::LightRed).bold()),
+                _ => ("editing – Enter/Tab commit · Esc cancel · Ctrl+G special characters (α ≤ ² →)".to_string(), Style::new().fg(Color::Yellow)),
+            };
+            f.buffer_mut().set_stringn(area.x, area.y, hint, area.width as usize, style);
             return;
         }
         Mode::Normal => {}
@@ -1985,6 +2083,41 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
         }
+    }
+
+    // Typeset formulas as pictures over the text standing in for them, where
+    // the terminal shows images and the picture is wholly in view.
+    if !app.images_allowed {
+        return;
+    }
+    let cw = crate::print::CHAR_W * l.font_size;
+    let wanted: Vec<(Rect, u64, std::sync::Arc<crate::typeset::Image>, f32)> = l
+        .pictures
+        .get(p.page)
+        .into_iter()
+        .flatten()
+        .filter_map(|pic| {
+            let (x, y) = (x0 + pic.col as i32, top + (my + pic.line) as i32);
+            let (w, h) = ((pic.width / cw).ceil() as i32, crate::print::picture_lines(pic.height, l.font_size) as i32);
+            let inside = x >= left as i32 && x + w <= right as i32 && y >= area.y as i32 && y + h <= area.bottom() as i32;
+            inside.then(|| (Rect::new(x as u16, y as u16, w as u16, h as u16), pic.key, pic.image.clone(), pic.width / cw))
+        })
+        .collect();
+    let cell = app.cell_px;
+    if app.typeset_preview.len() > 500 {
+        app.typeset_preview.clear();
+    }
+    for (rect, key, image, cells_wide) in wanted {
+        buf.set_style(rect, paper);
+        for y in rect.y..rect.bottom() {
+            buf.set_stringn(rect.x, y, " ".repeat(rect.width as usize), rect.width as usize, paper);
+        }
+        let shrunk = app
+            .typeset_preview
+            .entry((key, cell))
+            .or_insert_with(|| std::rc::Rc::new(image.shrink(cells_wide as f64 * cell.0 as f64 / image.width as f64)))
+            .clone();
+        app.pictures.push(super::Picture { rect, key, image: shrunk });
     }
 }
 

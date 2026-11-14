@@ -6,8 +6,14 @@ use std::path::{Path, PathBuf};
 /// How many files the list keeps.
 pub const MAX: usize = 20;
 
-/// Where the list lives; `HARDCALC_STATE_DIR` overrides the usual folder.
+/// Where the list lives.
 fn file() -> Option<PathBuf> {
+    Some(state_dir()?.join("recent.txt"))
+}
+
+/// hardcalc's own folder for what it keeps between runs (the list of recent
+/// files, the examples); `HARDCALC_STATE_DIR` overrides the usual folder.
+pub fn state_dir() -> Option<PathBuf> {
     let dir = if let Some(d) = std::env::var_os("HARDCALC_STATE_DIR").filter(|d| !d.is_empty()) {
         PathBuf::from(d)
     } else {
@@ -20,7 +26,7 @@ fn file() -> Option<PathBuf> {
             std::env::var_os("XDG_STATE_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(|| home.map(|h| h.join(".local/state")))?.join("hardcalc")
         }
     };
-    Some(dir.join("recent.txt"))
+    Some(dir)
 }
 
 /// The recent files that still exist, newest first.

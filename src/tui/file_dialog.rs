@@ -32,6 +32,8 @@ pub struct Entry {
 
 /// The "folder" that stands for the list of recent files.
 const RECENT: &str = "\u{0}recent";
+/// The "folder" that stands for the folders of the recent files.
+const RECENT_DIRS: &str = "\u{0}recent-dirs";
 
 /// A place in the sidebar, as in the Finder: a favourite folder or a location
 /// (disk, volume, cloud storage).
@@ -48,6 +50,7 @@ pub enum Section {
     Recent,
     Favorites,
     Locations,
+    Examples,
 }
 
 impl Section {
@@ -56,6 +59,7 @@ impl Section {
             Section::Recent => "Recent",
             Section::Favorites => "Favorites",
             Section::Locations => "Locations",
+            Section::Examples => "Examples",
         }
     }
 }
@@ -138,8 +142,10 @@ pub struct FileDialog {
     side_only: bool,
     /// Recently opened files, newest first; empty: no such list.
     recent: Vec<PathBuf>,
-    /// The folder shown before the list of recent files.
+    /// The folder shown before the list of recent files or folders.
     before_recent: PathBuf,
+    /// The folder with the examples; `None`: no such place.
+    examples: Option<PathBuf>,
     /// Chosen order (key, descending); `None`: by name, recent files by use.
     sort: Option<(SortKey, bool)>,
 }
@@ -164,6 +170,7 @@ impl FileDialog {
             side_only: false,
             recent: Vec::new(),
             before_recent: PathBuf::new(),
+            examples: None,
             sort: None,
         };
         probe::start(std::time::Duration::from_millis(150));
@@ -172,25 +179,67 @@ impl FileDialog {
         d
     }
 
-    /// Offers the list of recently opened files: a place "Recent" in the
-    /// sidebar and Ctrl+R. `show` opens the dialog on that list.
+    /// Offers the recently opened files: the places "Recent Files" and
+    /// "Recent Locations" (their folders) in the sidebar, and Ctrl+R.
+    /// `show` opens the dialog on the list of files.
     pub fn with_recent(mut self, recent: Vec<PathBuf>, show: bool) -> FileDialog {
         self.recent = recent;
-        self.add_recent_place();
+        self.add_own_places();
         if show && !self.recent.is_empty() {
             self.show_recent();
         }
         self
     }
 
-    fn add_recent_place(&mut self) {
-        if !self.recent.is_empty() && !self.places.iter().any(|p| p.path.as_os_str() == RECENT) {
-            self.places.insert(0, Place { name: "Recent".into(), path: PathBuf::from(RECENT), section: Section::Recent });
+    /// Offers the folder with the examples as a place of its own, below the locations.
+    pub fn with_examples(mut self, dir: Option<PathBuf>) -> FileDialog {
+        self.examples = dir.map(|d| plain(std::fs::canonicalize(&d).unwrap_or(d)));
+        self.add_own_places();
+        self
+    }
+
+    /// The places the program brings, around those the system has: the
+    /// recent files and folders first, the examples last.
+    fn add_own_places(&mut self) {
+        let has = |places: &[Place], path: &std::path::Path| places.iter().any(|p| p.path == path);
+        if !self.recent.is_empty() && !has(&self.places, std::path::Path::new(RECENT)) {
+            self.places.insert(0, Place { name: "Recent Files".into(), path: PathBuf::from(RECENT), section: Section::Recent });
+        }
+        if !self.recent_dirs().is_empty() && !has(&self.places, std::path::Path::new(RECENT_DIRS)) {
+            let at = usize::from(has(&self.places, std::path::Path::new(RECENT)));
+            self.places.insert(at, Place { name: "Recent Locations".into(), path: PathBuf::from(RECENT_DIRS), section: Section::Recent });
+        }
+        if let Some(dir) = &self.examples
+            && !self.places.iter().any(|p| p.section == Section::Examples)
+        {
+            self.places.push(Place { name: "Examples".into(), path: dir.clone(), section: Section::Examples });
         }
     }
 
+    /// The list of recent files is shown.
     fn in_recent(&self) -> bool {
         self.dir.as_os_str() == RECENT
+    }
+
+    /// The list of recent folders is shown.
+    fn in_recent_dirs(&self) -> bool {
+        self.dir.as_os_str() == RECENT_DIRS
+    }
+
+    /// One of the two lists is shown rather than a folder.
+    fn in_virtual(&self) -> bool {
+        self.in_recent() || self.in_recent_dirs()
+    }
+
+    /// The folders of the recent files that still exist, the most recently used first.
+    fn recent_dirs(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        for dir in self.recent.iter().filter_map(|p| p.parent()) {
+            if !out.iter().any(|d| d == dir) && dir.is_dir() {
+                out.push(dir.to_path_buf());
+            }
+        }
+        out
     }
 
     /// The labels of F1 … F10 while the dialog is open (empty: no function).
@@ -246,7 +295,7 @@ impl FileDialog {
     }
 
     fn show_recent(&mut self) {
-        if !self.in_recent() {
+        if !self.in_virtual() {
             self.before_recent = self.dir.clone();
         }
         self.dir = PathBuf::from(RECENT);
@@ -262,7 +311,7 @@ impl FileDialog {
             // The selected place stays selected if it is still there.
             let selected = self.places.get(self.place).map(|p| p.path.clone());
             self.places = places;
-            self.add_recent_place();
+            self.add_own_places();
             self.probed = Some(n);
             self.place = selected.and_then(|s| self.places.iter().position(|p| p.path == s)).unwrap_or(0);
             if self.places.is_empty() {
@@ -294,6 +343,21 @@ impl FileDialog {
     }
 
     fn read(&mut self) {
+        if self.in_recent_dirs() {
+            let home = home_dir();
+            self.entries = self
+                .recent_dirs()
+                .into_iter()
+                .map(|p| {
+                    let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+                    Entry { name: short_path(&p, home.as_deref()), dir: true, size: 0, modified, tag: None, path: Some(p) }
+                })
+                .collect();
+            self.sort_entries();
+            self.selected = 0;
+            self.scroll = 0;
+            return;
+        }
         if self.in_recent() {
             self.entries = self
                 .recent
@@ -338,7 +402,7 @@ impl FileDialog {
     /// Orders the entries: ".." and the folders first, then the files by the
     /// chosen key (recent files: by use unless a key was chosen).
     fn sort_entries(&mut self) {
-        let recent = self.in_recent();
+        let recent = self.in_virtual();
         let (key, desc) = match self.sort {
             Some(s) => s,
             None if recent => return,
@@ -373,7 +437,7 @@ impl FileDialog {
         match self.sort {
             Some((SortKey::Name, desc)) => format!("sorted by name {}", if desc { "↓" } else { "↑" }),
             Some((SortKey::Date, desc)) => format!("sorted by date {}", if desc { "newest first" } else { "oldest first" }),
-            None if self.in_recent() => "sorted by use".to_string(),
+            None if self.in_virtual() => "sorted by use".to_string(),
             None => "sorted by name ↑".to_string(),
         }
     }
@@ -422,6 +486,10 @@ impl FileDialog {
     pub fn go_place(&mut self, i: usize) {
         let Some(p) = self.places.get(i) else { return };
         self.place = i;
+        // F3 leads back from the recent lists to the folder shown before.
+        if !self.in_virtual() {
+            self.before_recent = self.dir.clone();
+        }
         self.dir = p.path.clone();
         self.filter.clear();
         self.in_places = false;
@@ -473,7 +541,7 @@ impl FileDialog {
     }
 
     fn up(&mut self) {
-        if self.in_recent() {
+        if self.in_virtual() {
             return;
         }
         if self.dir.parent().is_some() {
@@ -485,7 +553,15 @@ impl FileDialog {
     pub fn choose(&mut self) -> Action {
         let Some(entry) = self.current().filter(|e| self.takes(e)) else { return Action::None };
         if entry.dir {
-            self.enter_dir(&entry.name);
+            match entry.path {
+                // A recent folder: its whole path.
+                Some(path) => {
+                    self.dir = path;
+                    self.filter.clear();
+                    self.read();
+                }
+                None => self.enter_dir(&entry.name),
+            }
             return Action::None;
         }
         Action::Chosen(entry.path.unwrap_or_else(|| self.dir.join(&entry.name)))
@@ -583,6 +659,8 @@ impl FileDialog {
         let h = (area.height * 4 / 5).max(8.min(area.height));
         let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
         f.render_widget(Clear, rect);
+        // Set off from the screen below.
+        f.buffer_mut().set_style(rect, Style::new().bg(super::theme::DIALOG));
         f.render_widget(Block::bordered().title(title.to_string()), rect);
         let inner = Rect::new(rect.x + 1, rect.y + 1, rect.width.saturating_sub(2), rect.height.saturating_sub(2));
         let full_w = inner.width as usize;
@@ -592,7 +670,11 @@ impl FileDialog {
         }
         let buf = f.buffer_mut();
         // Folder, shortened from the left.
-        let dir = if self.in_recent() { "Recent files".to_string() } else { self.dir.display().to_string() };
+        let dir = match () {
+            _ if self.in_recent() => "Recent files".to_string(),
+            _ if self.in_recent_dirs() => "Recent locations".to_string(),
+            _ => self.dir.display().to_string(),
+        };
         let skip = dir.width().saturating_sub(full_w.saturating_sub(1));
         buf.set_stringn(inner.x, inner.y, format!(" {}", skip_width(&dir, skip)), full_w, Style::new().bold().fg(Color::Cyan));
         let rows = inner.height as usize - 3;
@@ -686,7 +768,7 @@ impl FileDialog {
         hits
     }
 
-    /// The sidebar: headings "Favorites" and "Locations" with their places.
+    /// The sidebar: headings ("Recent", "Favorites", "Locations", "Examples") with their places.
     fn draw_places(&self, buf: &mut ratatui::buffer::Buffer, area: Rect) -> Vec<(Rect, Spot)> {
         // Lines: a heading (`None`) or place `i`.
         let mut lines: Vec<Option<usize>> = Vec::new();
@@ -999,6 +1081,15 @@ pub fn plain(path: PathBuf) -> PathBuf {
     }
 }
 
+/// `path` with the home folder written as `~`.
+fn short_path(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    match home.and_then(|h| path.strip_prefix(h).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 /// `text` cut or padded to exactly `w` columns.
 fn pad(text: &str, w: usize) -> String {
     let tw = text.width();
@@ -1173,6 +1264,53 @@ mod tests {
         key(&mut d, KeyCode::F(4));
         assert_eq!(d.files, Files::Known);
         assert_eq!(d.current().unwrap().name, "c.md");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn recent_files_locations_and_examples_in_the_sidebar() {
+        let root = std::env::temp_dir().join(format!("hardcalc-recent-dirs-{}", std::process::id()));
+        for d in ["a", "b", "x"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for f in ["a/1.md", "b/2.md", "a/3.md"] {
+            std::fs::write(root.join(f), "").unwrap();
+        }
+        let recent = vec![root.join("a/1.md"), root.join("b/2.md"), root.join("a/3.md")];
+        let mut d = dialog(&root).with_recent(recent, false).with_examples(Some(root.join("x")));
+        let names: Vec<_> = d.places.iter().map(|p| (p.name.as_str(), p.section)).collect();
+        assert_eq!(names.first(), Some(&("Recent Files", Section::Recent)));
+        assert_eq!(names.get(1), Some(&("Recent Locations", Section::Recent)));
+        assert_eq!(names.last(), Some(&("Examples", Section::Examples)));
+        // Recent Locations: each folder once, the most recently used first.
+        d.go_place(1);
+        let dirs: Vec<_> = d.shown().iter().map(|e| (e.dir, e.path.clone())).collect();
+        assert_eq!(dirs, [(true, Some(root.join("a"))), (true, Some(root.join("b")))]);
+        // Enter goes into the folder; F3 leads to the recent files and back to where the dialog was.
+        key(&mut d, KeyCode::Down);
+        key(&mut d, KeyCode::Enter);
+        assert_eq!(d.dir, root.join("b"));
+        d.go_place(1);
+        key(&mut d, KeyCode::F(3));
+        assert!(d.in_recent());
+        key(&mut d, KeyCode::F(3));
+        assert_eq!(d.dir, root.join("b"));
+        let n = d.places.len();
+        d.go_place(n - 1);
+        assert_eq!(d.dir, plain(std::fs::canonicalize(root.join("x")).unwrap()));
+        // The sidebar shows the four groups; the dialog has a background of its own.
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24)).unwrap();
+        t.draw(|f| {
+            d.draw(f, " open file ", "documents");
+        })
+        .unwrap();
+        let buf = t.backend().buffer();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+        for heading in ["Recent", "Recent Locations", "Favorites", "Locations", "Examples"] {
+            assert!(text.contains(heading), "{heading}");
+        }
+        assert_eq!(buf[(50, 12)].bg, super::super::theme::DIALOG);
+        assert_eq!(buf[(0, 0)].bg, Color::Reset, "the screen around stays as it is");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

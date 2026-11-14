@@ -896,8 +896,13 @@ f_yd   = f_yk / γ_M
   `~/.config/hardcalc`; `HARDCALC_FORMULAS` names another file). That file
   is a hardcalc document: a heading per group, one definition per line,
   `[Title] name(params) = formula   ' note`. A definition in the sheet wins.
-- **ASCII input:** `gamma_M` → γ_M, `*` → ·, `<=` → ≤, `>=` → ≥, `->` → →.
-  The tab **∑ calc** rewrites input this way; both are read.
+- **ASCII input:** `*` → ·, `<=` → ≤, `>=` → ≥, `->` → →. The tab
+  **∑ calc** rewrites input this way; both are read.
+- **Greek letters in names:** written as such (`γ_M`) or by their LaTeX
+  name (`\gamma_M`, `\Delta`, `\varphi`); both are the same name, the
+  file keeps what was written. A spelled name (`gamma_M`) is a name of its
+  own and is not turned into a letter; `pi` is the constant π. An unknown
+  LaTeX name (`\foo`) is an error on its line.
 
 **Display** (full way to the result): formula, values inserted (inputs as
 written, without unit), result with 3 significant digits in the display
@@ -910,9 +915,10 @@ q_d = 1.35·g_k + 1.5·q_k = 1.35·4.0 + 1.5·3.0 = 9.90 kN/m
 
 `hardcalc calc file` prints the sheet this way (`--ascii`: ASCII only,
 always the decimal point), `hardcalc check` reports lines that cannot be calculated.
-When printed, the block appears with the way to the result; the standard PDF
-fonts know no Greek letters, so they are spelled out there (`gamma_M`, `<=`,
-`ok`).
+When printed, the block appears with the way to the result, the
+calculations typeset where Typst is available. The PDF embeds DejaVu Sans
+Mono (only the characters used), so Greek letters, `≤`, `✓` and arrows
+print as they are.
 
 **Typesetting:** the syntax tree is the single source of truth; from it come
 the one-line text (Unicode or ASCII), LaTeX (2D display in the terminal,

@@ -2494,17 +2494,18 @@ fn calc_tab_edits_the_sheet() {
     let mut a = app();
     a.command("calc");
     assert_eq!(a.view.kind, hardcalc::tui::app::ViewKind::Calc);
-    // The + row: typing adds lines to a new ```hardcalc block; ASCII input is tidied.
-    typ(&mut a, "gamma_M = 1,5");
+    // The + row: typing adds lines to a new ```hardcalc block; ASCII input is
+    // tidied, a LaTeX name stays as typed and means the letter.
+    typ(&mut a, "\\gamma_M = 1,5");
     key(&mut a, KeyCode::Enter);
-    typ(&mut a, "f = 30 kN/m^2 / gamma_M");
+    typ(&mut a, "f = 30 kN/m^2 / \\gamma_M");
     key(&mut a, KeyCode::Enter);
     typ(&mut a, "f <= 25 kN/m^2");
     key(&mut a, KeyCode::Enter);
     typ(&mut a, "m = Expenses!B1 * 2");
     key(&mut a, KeyCode::Enter);
     let body = hardcalc::sheet::source_lines(&a.doc);
-    assert_eq!(body[0], "γ_M = 1.5");
+    assert_eq!(body[0], "\\gamma_M = 1.5");
     assert_eq!(body[2], "f ≤ 25 kN/m^2");
     let screen = render(&mut a);
     for s in ["∑ calc", "Calculation", "f = 30 kN/m²/γ_M = 30/1.5 = 20.0 kN/m²", "η = 0.80 ✓"] {
@@ -2512,6 +2513,13 @@ fn calc_tab_edits_the_sheet() {
     }
     // The table's Rent (1200 €) – € is not a physical unit.
     assert!(screen.contains("unknown unit €"), "{screen}");
+    // A spelled Greek name is a name of its own: a hint, no rewriting.
+    typ(&mut a, "beta_w = 0,8");
+    key(&mut a, KeyCode::Enter);
+    assert!(a.message.as_ref().is_some_and(|m| m.text.contains("beta_w is a name of its own") && m.text.contains("\\beta_w")), "{:?}", a.message);
+    assert_eq!(hardcalc::sheet::source_lines(&a.doc)[4], "beta_w = 0.8");
+    key(&mut a, KeyCode::Up);
+    key(&mut a, KeyCode::Delete);
     // F8 deletes the line at the cursor.
     a.view.cursor = (3, 0);
     key(&mut a, KeyCode::F(8));
@@ -4358,4 +4366,125 @@ fn calc_features_example_calculates() {
     a.show_helper(hardcalc::tui::app::ViewKind::Layout(0));
     let screen = render(&mut a);
     assert!(screen.contains("Bending moment M") && screen.contains("IPE 270"), "{screen}");
+}
+
+#[test]
+fn calculation_sheet_prints_from_its_view() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    command(&mut a, "calc");
+    let items = a.print_items(false);
+    assert!(matches!(items.first(), Some(hardcalc::print::PrintItem::Calc(_))), "the sheet, not the table");
+    assert!(!items.iter().any(|i| matches!(i, hardcalc::print::PrintItem::Table(_))));
+    let plots = items.iter().filter(|i| matches!(i, hardcalc::print::PrintItem::Chart(_))).count();
+    assert_eq!(plots, 4, "with its plots");
+    assert_eq!(a.scope_name(a.print_setup.scope), "calculation sheet");
+}
+
+#[test]
+fn calculation_sheet_prints_typeset() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    command(&mut a, "calc");
+    let setup = a.print_setup.clone();
+    let layout = a.layout(&setup);
+    let pictures: usize = layout.pictures.iter().map(Vec::len).sum();
+    if !hardcalc::typeset::available() {
+        assert_eq!(pictures, 0, "without Typst the calculations print as text");
+        return;
+    }
+    assert!(pictures > 30, "the calculations typeset: {pictures}");
+    // Their text stands in for them only in the text preview.
+    let stand_ins = layout.pages.iter().flatten().flat_map(|l| &l.spans).filter(|s| s.style.stand_in).count();
+    assert_eq!(stand_ins, pictures);
+    let pdf = hardcalc::print::to_pdf(&layout, "t");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/Subtype /Image") && text.contains("/Im0 Do"), "pictures in the PDF");
+    assert!(!text.contains("(q_d = 1.35"), "the stand-in text is not on the page");
+}
+
+#[test]
+fn calculation_sheet_typeset_on_screen() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    command(&mut a, "calc");
+    a.graphics = Some(hardcalc::tui::graphics::Protocol::Kitty);
+    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    term.draw(|f| ui::draw(f, &mut a)).unwrap();
+    if !hardcalc::typeset::available() {
+        assert!(a.pictures.is_empty());
+        return;
+    }
+    assert!(!a.pictures.is_empty(), "calculations as pictures");
+    // A fraction takes two lines.
+    assert!(a.pictures.iter().any(|p| p.rect.height >= 2), "{:?}", a.pictures.iter().map(|p| p.rect).collect::<Vec<_>>());
+    // Switched off, or without images, the calculations are text.
+    command(&mut a, "typeset off");
+    term.draw(|f| ui::draw(f, &mut a)).unwrap();
+    assert!(a.pictures.is_empty());
+    let screen: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(screen.contains("q_d = 1.35·g_k + 1.5·q_k"), "{screen}");
+}
+
+#[test]
+fn special_characters_with_ctrl_g() {
+    use hardcalc::tui::app::Mode;
+    let buf = |a: &App| match &a.mode {
+        Mode::Edit { buf, .. } | Mode::Command { buf, .. } => buf.clone(),
+        Mode::Normal => String::new(),
+    };
+    let mut a = app();
+    key(&mut a, KeyCode::Enter);
+    let before = buf(&a);
+    // While typing: Ctrl+G, part of a name, Enter.
+    ctrl(&mut a, 'g');
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    term.draw(|f| ui::draw(f, &mut a)).unwrap();
+    let screen: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(screen.contains("special characters") && screen.contains("alpha"), "{screen}");
+    typ(&mut a, "Del");
+    key(&mut a, KeyCode::Enter);
+    // ASCII spellings and LaTeX names find them too.
+    ctrl(&mut a, 'g');
+    typ(&mut a, "<=");
+    key(&mut a, KeyCode::Enter);
+    ctrl(&mut a, 'g');
+    typ(&mut a, "\\infty");
+    key(&mut a, KeyCode::Enter);
+    // Esc closes the list, not the input; the last one picked comes first.
+    ctrl(&mut a, 'g');
+    assert_eq!(a.symbols_shown()[0].ch, "∞");
+    key(&mut a, KeyCode::Esc);
+    assert!(a.symbols.is_none());
+    assert_eq!(buf(&a), format!("{before}Δ≤∞"));
+    // In the command line too.
+    key(&mut a, KeyCode::Esc);
+    typ(&mut a, ":find ");
+    ctrl(&mut a, 'g');
+    typ(&mut a, "sigma");
+    key(&mut a, KeyCode::Enter);
+    assert_eq!(buf(&a), "find σ");
+    key(&mut a, KeyCode::Esc);
+    // :symbol Omega opens the cell with Ω at its end.
+    command(&mut a, "symbol Omega");
+    assert!(matches!(a.mode, Mode::Edit { .. }));
+    assert!(buf(&a).ends_with('Ω'), "{}", buf(&a));
+}
+
+#[test]
+fn calculation_headings_without_markdown() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    command(&mut a, "calc");
+    let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
+    term.draw(|f| ui::draw(f, &mut a)).unwrap();
+    let screen: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    // The Input column keeps "## …"; the Calculation column shows the title only.
+    assert_eq!(screen.matches("## Internal forces along the beam").count(), 1, "{screen}");
+    assert_eq!(screen.matches("Internal forces along the beam").count(), 2, "{screen}");
+    let setup = a.print_setup.clone();
+    let layout = a.layout(&setup);
+    let lines: Vec<&hardcalc::print::Line> = layout.pages.iter().flatten().collect();
+    assert!(lines.iter().any(|l| l.kind == hardcalc::print::LineKind::Title && l.plain() == "System and loads"));
+    assert!(!lines.iter().any(|l| l.plain().contains("## ")), "no Markdown marks in print");
 }

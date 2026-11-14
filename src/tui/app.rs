@@ -37,6 +37,8 @@ mod search;
 mod shape;
 mod sources;
 mod calc_dialogs;
+mod symbol_picker;
+pub use symbol_picker::{SymbolPicker, SymbolTarget};
 mod values;
 mod views;
 pub use functions_view::{FnRow, FN_COLS};
@@ -120,6 +122,8 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Hit {
     Tab(usize),
+    /// Character `n` of the list of special characters.
+    Symbol(usize),
     Cell(usize, usize),
     ColHeader(usize),
     RowHeader(usize),
@@ -471,6 +475,10 @@ pub struct App {
     /// Start of a possible `ESC ESC [ A` sequence (Alt+arrow in "Option as
     /// Meta" mode): time of the Esc, and whether `[` followed.
     esc_seq: Option<(Instant, bool)>,
+    /// The list of special characters (Ctrl+G while typing, `:symbol`).
+    pub symbols: Option<SymbolPicker>,
+    /// Characters picked from it, the last one first.
+    pub recent_symbols: Vec<String>,
     /// The focused window's view.
     pub view: View,
     /// The other window's view while the screen is split.
@@ -558,6 +566,19 @@ pub struct App {
     /// Charts may be images in this frame: the terminal shows images and no
     /// menu or dialog lies over them.
     pub images_allowed: bool,
+    /// Calculations in the calculation sheet typeset as images (`:typeset`), where the terminal shows images.
+    pub typeset: bool,
+    /// Typeset formulas drawn as pixel images in this frame (set while drawing).
+    pub pictures: Vec<super::Picture>,
+    /// Pixels of a terminal cell (set by the event loop; a usual size until then).
+    pub cell_px: (u16, u16),
+    /// Typeset formulas (their shape: alpha only) by formula and cell height;
+    /// `None`: Typst could not set it.
+    pub(crate) typeset_cache: HashMap<(String, u16), Option<std::rc::Rc<crate::typeset::Image>>>,
+    /// The same fitted to a width of pixels and coloured.
+    pub(crate) typeset_fit: HashMap<(String, u16, usize, [u8; 3]), Option<Fitted>>,
+    /// Typeset formulas of the print preview, by their key and the cell size.
+    pub(crate) typeset_preview: HashMap<(u64, (u16, u16)), std::rc::Rc<crate::typeset::Image>>,
     /// The terminal shows 24-bit colour (else the 256-colour palette is used).
     pub truecolor: bool,
     /// Soft animations (sliding menus and dialogs, cube turns, flowing formula sources).
@@ -917,6 +938,8 @@ impl App {
             bands: true,
             levels: HashMap::new(),
             esc_seq: None,
+            symbols: None,
+            recent_symbols: Vec::new(),
             view: View::new(ViewKind::Table, 0),
             other: None,
             left_focused: true,
@@ -966,6 +989,12 @@ impl App {
             image_slot: None,
             images: Vec::new(),
             images_allowed: false,
+            typeset: true,
+            pictures: Vec::new(),
+            cell_px: (10, 20),
+            typeset_cache: HashMap::new(),
+            typeset_fit: HashMap::new(),
+            typeset_preview: HashMap::new(),
             truecolor: false,
             anim: Default::default(),
             thumbnail: None,
@@ -2439,16 +2468,19 @@ impl App {
 
     /// What to print, in document order. `all`: the whole document (text,
     /// tables, charts, code) as flow layout; otherwise the current table with
-    /// its charts. Tables look as on screen; charts with errors are left out.
+    /// its charts, or – from the calculation sheet – the sheet with its plots.
+    /// Tables look as on screen; charts with errors are left out.
     pub fn print_items(&mut self, all: bool) -> Vec<PrintItem> {
         let mut items = Vec::new();
         let (mut sheet, mut chart, mut footnote, mut plot) = (0, 0, 0, 0);
+        // From the calculation sheet (or its preview): that sheet, not a table.
+        let calc_only = !all && self.calc_focused();
         // Calculation sheets print with the way to each result.
-        let mut calc = crate::sheet::render_blocks(&self.doc.clone(), &mut self.wb, crate::sheet::Render::default());
+        let mut calc = crate::sheet::outs_by_block(&self.doc.clone(), &mut self.wb);
         for (i, block) in self.doc.blocks.clone().into_iter().enumerate() {
             match block {
                 Block::Table(_) => {
-                    if all || sheet == self.view.sheet {
+                    if all || (!calc_only && sheet == self.view.sheet) {
                         // Each table as last shown: its slice or scenario.
                         let z = if sheet == self.view.sheet { self.shown_layer() } else { self.levels.get(&sheet).copied().unwrap_or(0) };
                         let mut table = self.print_table(sheet, z, &mut footnote);
@@ -2459,7 +2491,7 @@ impl App {
                 }
                 Block::Chart { .. } => {
                     if let Ok(data) = self.chart_data(chart)
-                        && (all || data.sheet == self.view.sheet)
+                        && (all || (!calc_only && data.sheet == self.view.sheet))
                     {
                         items.push(PrintItem::Chart(data));
                     }
@@ -2471,10 +2503,9 @@ impl App {
                     let lines = lines.iter().map(|l| crate::text::live_values(l, &mut self.wb, context)).collect();
                     items.push(PrintItem::Text(lines));
                 }
-                // The standard PDF fonts have no Greek letters, ≤ or ✓.
-                Block::Code { ref body, .. } if all && calc.contains_key(&i) => {
-                    let lines = calc.remove(&i).unwrap_or_default();
-                    items.push(PrintItem::Code(lines.iter().map(|l| crate::sheet::expr::latin1(l)).collect()));
+                Block::Code { ref body, .. } if (all || calc_only) && calc.contains_key(&i) => {
+                    let outs = calc.remove(&i).unwrap_or_default();
+                    items.push(PrintItem::Calc(outs.iter().map(calc_print_line).collect()));
                     // The plots of the block follow it.
                     let plots = body.iter().filter(|l| crate::sheet::is_plot_line(l)).count();
                     for _ in 0..plots {
@@ -2489,6 +2520,11 @@ impl App {
             }
         }
         items
+    }
+
+    /// Whether the window with the keys shows the calculation sheet or its preview.
+    pub(crate) fn calc_focused(&self) -> bool {
+        matches!(self.view.kind, ViewKind::Calc | ViewKind::CalcPreview)
     }
 
     /// One table for printing; comments become numbered footnotes.
@@ -2564,7 +2600,7 @@ impl App {
                             bg = Some((250, 205, 205));
                             color = Some((150, 0, 0));
                         }
-                        let style = SpanStyle { bold: v.style.bold, italic: v.style.italic, color, shade: false, bg, wrap: v.style.wrap };
+                        let style = SpanStyle { bold: v.style.bold, italic: v.style.italic, color, shade: false, bg, wrap: v.style.wrap, stand_in: false };
                         PrintCell { text: v.text, align: v.align, style }
                     })
                     .collect()
@@ -2616,7 +2652,7 @@ impl App {
                     let text = if v.is_error() { "#ERR".to_string() } else { self.wb.display(id) };
                     let align = if matches!(v, Value::Num(..) | Value::Date(_)) { Align::Right } else { Align::Left };
                     let color = v.is_error().then_some((190, 0, 0));
-                    PrintCell { text, align, style: SpanStyle { bold: true, italic: false, color, shade: false, bg: None, wrap: None } }
+                    PrintCell { text, align, style: SpanStyle { bold: true, italic: false, color, shade: false, bg: None, wrap: None, stand_in: false } }
                 })
                 .collect();
             if let Some(first) = line.first_mut() {
@@ -2671,6 +2707,7 @@ impl App {
     /// Human-readable name of a print scope.
     pub fn scope_name(&self, scope: Scope) -> String {
         match scope {
+            Scope::Table if self.calc_focused() => "calculation sheet".into(),
             Scope::Table => "current table".into(),
             Scope::Document => "whole document".into(),
             Scope::Layout(i) => format!("layout {}", self.layout_blocks().get(i).map(|(n, _)| n.as_str()).unwrap_or("?")),
@@ -2912,6 +2949,7 @@ impl App {
         let page = Layout {
             pages: vec![p.layout.pages[p.page].clone()],
             graphics: vec![p.layout.graphics[p.page].clone()],
+            pictures: vec![p.layout.pictures.get(p.page).cloned().unwrap_or_default()],
             ..p.layout.clone()
         };
         Some(print::to_pdf(&page, &self.doc_title()))
@@ -4885,6 +4923,9 @@ impl App {
         if self.library.is_some() {
             return self.key_library(key);
         }
+        if self.symbols.is_some() {
+            return self.key_symbols(key);
+        }
         if self.show_help {
             return self.key_help(key);
         }
@@ -4902,6 +4943,10 @@ impl App {
         }
         if self.preview.is_some() {
             return self.key_preview(key);
+        }
+        // Ctrl+G while typing: the list of special characters.
+        if !matches!(self.mode, Mode::Normal) && key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return self.open_symbols();
         }
         match self.mode {
             Mode::Normal => self.key_normal(key),
@@ -5152,6 +5197,7 @@ impl App {
             || self.paper_menu.is_some()
             || self.plot_dialog.is_some()
             || self.library.is_some()
+            || self.symbols.is_some()
     }
 
     /// The function key whose label is at `pos` and not hidden by a dialog.
@@ -5185,6 +5231,18 @@ impl App {
                     Some(Hit::ContextItem(i)) => self.choose_context(i),
                     _ => self.context = None,
                 }
+            }
+            return;
+        }
+        if self.symbols.is_some() {
+            match m.kind {
+                MouseEventKind::Down(_) => match self.hits.iter().rev().find(|(r, h)| r.contains(pos) && matches!(h, Hit::Symbol(_))).map(|(_, h)| *h) {
+                    Some(Hit::Symbol(i)) => self.pick_symbol(i),
+                    _ => self.symbols = None,
+                },
+                MouseEventKind::ScrollDown => self.key_symbols(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+                MouseEventKind::ScrollUp => self.key_symbols(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+                _ => {}
             }
             return;
         }
@@ -5417,7 +5475,7 @@ impl App {
                         self.fill_drag = Some(self.selection());
                         self.fill_to = None;
                     }
-                    Some(Hit::RowHeader(_) | Hit::File(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_) | Hit::ValueItem(_) | Hit::ValuesApply) => {}
+                    Some(Hit::RowHeader(_) | Hit::File(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_) | Hit::ValueItem(_) | Hit::ValuesApply | Hit::Symbol(_)) => {}
                     Some(Hit::Corner) => {
                         if matches!(self.mode, Mode::Edit { .. }) {
                             self.commit_edit(0, 0);
@@ -5831,6 +5889,8 @@ impl App {
             "calc" => self.show_helper(ViewKind::Calc),
             "plot" => self.open_plot_dialog(),
             "library" => self.open_library(),
+            "symbol" if args.is_empty() => self.open_symbols(),
+            "symbol" => self.insert_symbol_named(&args.join(" ")),
             "preview" => self.show_helper(ViewKind::CalcPreview),
             "formulas" => match args.first().and_then(|a| FormulaStyle::parse(a)) {
                 Some(st) => {
@@ -5859,6 +5919,19 @@ impl App {
             "recent" => self.open_recent_dialog(),
             "append" if args.is_empty() => self.open_file_dialog(Purpose::Append),
             "append" => self.append_file(&args.join(" ")),
+            "typeset" => {
+                self.typeset = match args.first().copied() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => !self.typeset,
+                };
+                let why = match (self.graphics.is_some(), crate::typeset::available()) {
+                    (_, false) => " – no Typst (install typst from typst.app): calculations stay text",
+                    (false, _) => " – the terminal shows no images: calculations stay text",
+                    _ => "",
+                };
+                self.info(if self.typeset { format!("typeset calculations on{why}") } else { "typeset calculations off".to_string() });
+            }
             "bands" => {
                 self.bands = match args.first().copied() {
                     Some("on") => true,
@@ -6313,4 +6386,36 @@ pub fn split_percent_at(body: Rect, x: u16) -> u16 {
     let rel = u32::from(x.saturating_sub(body.x));
     let pct = (rel * 100 + u32::from(body.width) / 2) / u32::from(body.width);
     pct.clamp(40, 60) as u16
+}
+
+/// A typeset formula fitted into a cell, and the lines it takes.
+pub(crate) type Fitted = (std::rc::Rc<crate::typeset::Image>, u16);
+
+/// A line of the calculation sheet for printing: the calculation as text
+/// and as Typst math.
+fn calc_print_line(o: &crate::sheet::Out) -> print::CalcLine {
+    use crate::sheet::{self, Out};
+    let failed = matches!(o, Out::Check { rel, sides: Ok((l, r)), .. } if !sheet::verdict(*rel, l, r).ok);
+    let ok = sheet::problems(std::slice::from_ref(o)).is_empty();
+    let math = match o {
+        Out::Assign { .. } | Out::Show { .. } | Out::Def { .. } | Out::Check { .. } if ok => sheet::notation::line(sheet::notation::Lang::Typst, o),
+        _ => None,
+    };
+    let text = match o {
+        Out::Heading { text, .. } => text.clone(),
+        Out::Comment(c) => c.clone(),
+        _ => sheet::Render::default().body(o),
+    };
+    print::CalcLine {
+        label: o.label().map(str::to_string),
+        text,
+        math,
+        comment: o.comment().map(str::to_string),
+        failed,
+        heading: match o {
+            Out::Heading { level, .. } => Some(*level),
+            _ => None,
+        },
+        note: matches!(o, Out::Comment(_)),
+    }
 }

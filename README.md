@@ -65,8 +65,20 @@ cargo install --git https://github.com/hardcalc/hardcalc
 cargo install --path .
 ```
 
-Both install `hardcalc` and `hardconf` (see below). Without installing, run it
-from the project folder:
+Both install `hardcalc` and `hardconf` (see below).
+
+**Optional: Typst for typeset formulas.** With [Typst](https://typst.app)
+installed, hardcalc shows the calculations of a calculation sheet as typeset
+formulas (on screen in terminals with images, and when printing) and writes
+calculation reports. Without it everything works, the formulas stay text.
+
+```bash
+brew install typst               # macOS / Linux, Homebrew
+winget install --id Typst.Typst  # Windows
+cargo install typst-cli          # anywhere, from source
+```
+
+Without installing, run it from the project folder:
 
 ```bash
 cargo run --release -- examples/budget.hcmd
@@ -155,6 +167,7 @@ layer and column names.
 | `+` row / `+` column             | input there appends a new row / column                        |
 | Del / Backspace                  | clear the selection                                           |
 | Ctrl+D / Ctrl+R                  | fill the first row / column of the selection into the rest (one cell: from above / the left); formula references follow, `$B$1` stays |
+| Ctrl+G (while typing)            | special characters: Greek letters, ≤ ≠ ± √ ∞, ² ₁, → ⇒, ✓, – … (see *Special characters*) |
 | drag the handle **▪** of the selection, `:autofill B10` | continue a series: numbers (1, 2 → 3, 4), dates, “Item 1”, month and weekday names; formulas as with Ctrl+D |
 | Ctrl+C / Ctrl+X / Ctrl+V         | copy / cut / paste (also tab-separated from Excel and the like) |
 | Ctrl+Z / Ctrl+Y                  | undo / redo                                                   |
@@ -297,7 +310,7 @@ the result. Values from the tables are read through cell references:
 ```hardcalc
 ## Bending check
 f_yk    = 235 N/mm²          ' yield strength
-gamma_M = 1.1
+γ_M     = 1.1                ' or \gamma_M
 M_Ed    = 30.9 kNm
 W_y     = Profiles!B2        ' value from the table
 σ_Ed    = M_Ed / W_y -> N/mm²
@@ -321,7 +334,11 @@ the way to the result (**Calculation**) and **Comment**. A name labels a
 line – `[Bending] σ_Ed <= f_yd` in the file – and stands before it when
 printed and in the report; the comment is the `' …` at the end of the line.
 Del in Name or Comment clears it, elsewhere it deletes the line. ASCII input
-is rewritten (`gamma_M` → γ_M, `*` → ·, `<=` → ≤).
+is rewritten (`*` → ·, `<=` → ≤). Greek letters come from **Ctrl+G** (see
+*Special characters*) or are written by their LaTeX name: `\gamma_M` is
+the same name as `γ_M` and stays in the file as typed. A spelled name like
+`gamma_M` is a name of its own (hardcalc says so when you type one); only
+`pi` is the constant π.
 
 More in a sheet:
 
@@ -344,6 +361,18 @@ input still missing. **F7** (`:plot`) edits the chart on the cursor line
 [examples/calc-features.hcmd](examples/calc-features.hcmd). Example: [examples/beam.hcmd](examples/beam.hcmd), syntax in
 [SPEC.md](SPEC.md) section 10.
 
+**Typeset calculations:** in the `∑ calc` view the column *Calculation*
+shows each calculation as a typeset formula – fractions, roots, indices and
+Greek letters as in the report – in terminals that show images (Kitty,
+Ghostty, iTerm2, WezTerm); a row with a fraction becomes two lines high.
+`:typeset off` (menu *View → Typeset formulas on/off*) switches back to text;
+without image support the calculations stay text. Printing a calculation
+sheet (`:print` from the `∑ calc` view, or the whole document) always sets
+the formulas this way, in the PDF and in the print preview. Both need Typst:
+the program `typst` if it is installed (typst.app; `HARDCALC_TYPST` names
+another one), or the compiler built in (`--features typst`, see below);
+without Typst the calculations are text everywhere.
+
 In the right window, **∑ preview** (`:preview`) shows the sheet typeset –
 fractions, roots and indexes drawn over several lines (term-maths); `f` or
 `:formulas 2d|text|ascii` chooses the display.
@@ -353,6 +382,30 @@ with typeset formulas through Typst (`<name>.report.pdf`; with the extension
 `.typ` the Typst source). hardcalc brings the Typst compiler along when built
 with `cargo install hardcalc --features typst`; otherwise the program
 `typst` is used if installed.
+
+### Special characters
+
+**Ctrl+G** while typing – in a cell, the calculation sheet or the command
+line – opens the list of special characters: Greek letters, relations and
+operators (≤ ≥ ≠ ≈ ± · × √ ∞ ∑ ∫ ∂), raised and lowered digits (² ³ ⁻¹ ₁),
+arrows (→ ⇒ ↔), units and marks (° µ ‰ € ✓) and typographic characters
+(– — … „ “). Type part of the name (`Delta`, `less`), its LaTeX name
+(`\le`, `\varphi`) or an ASCII spelling (`<=`, `<>`, `=>`, `->`, `+-`,
+`^2`), Enter inserts it at the cursor; Esc closes the list and you go on
+typing. The characters picked last are listed first. Outside of typing,
+`:symbol` (menu *Insert → Symbol…*) opens the current cell with the
+character at its end, `:symbol Delta` does so without the list. The file
+holds the character itself (UTF-8).
+
+LaTeX may be written instead and stays in the file as typed:
+
+- in the **calculation sheet** a name like `\gamma_M` is the same as `γ_M`
+  (see *Calculation sheets*);
+- in **Markdown text** math goes between dollar signs, as GitHub shows it:
+  `$\sigma_d \le f_{yd}$` is shown and printed as σ_d ≤ f_yd. A `$` opens
+  only before a non-space and closes only after one, so `$5 and $10` stays
+  text; `\$` is a dollar sign;
+- in **table cells** it is text like any other.
 
 ### Formatting
 
@@ -593,7 +646,7 @@ bar:
 | F5      | portrait / landscape                                      |
 | F6      | choose paper: A4, A3, Letter, Legal, Tabloid/Ledger       |
 | F7 / F8 | smaller / larger font                                     |
-| F9      | scope: current table · whole document · layouts           |
+| F9      | scope: current table (in the `∑ calc` view: the calculation sheet with its plots) · whole document · layouts |
 | i       | image preview on/off                                      |
 | + / −   | zoom: several pages side by side (2, 4, 6, 12, 24), 0 or i back to one page |
 | F10/Esc | close                                                     |
@@ -602,6 +655,10 @@ The scope **whole document** prints the file as a flow layout: headings,
 text with live values `{=…}`, tables, charts, comments as footnotes. What is
 visible is printed; long tables repeat their header, tables that are too
 wide are scaled down or split into column blocks.
+
+The PDF uses the font DejaVu Sans Mono and embeds the characters it needs,
+so Greek letters, `≤`, `✓`, arrows and other Unicode characters print as
+they are (license of the font: [assets/fonts/THIRD-PARTY-FONTS.txt](assets/fonts/THIRD-PARTY-FONTS.txt)).
 
 The **image preview** (i) shows the real PDF page – sharp in terminals with
 a graphics protocol (Kitty, Ghostty, iTerm2, WezTerm), otherwise (e.g. macOS
@@ -775,7 +832,7 @@ For power users; the help (F1) lists them all.
 | `:group [Column]` | table with counts and sums per value of a column |
 | `:addrow`, `:delrow`, `:addcol Name[:Type]`, `:delcol` | rows / columns |
 | `:footer [Name]` | add a footer row below the table (a summary per column) |
-| menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, F4 / Ctrl+A steps through the files shown: all, with only the documents hardcalc reads offered (the others grey, the default) → all offered → only the documents, Ctrl+N / Ctrl+D sort by name / date (again: reverse); a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter; the sidebar starts with its own section **Recent** (the last 20 files opened or saved), also Ctrl+R in the dialog, menu *File → Recent files…* or `:recent` |
+| menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, F4 / Ctrl+A steps through the files shown: all, with only the documents hardcalc reads offered (the others grey, the default) → all offered → only the documents, Ctrl+N / Ctrl+D sort by name / date (again: reverse); a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter; the sidebar starts with its own section **Recent**: *Recent Files* (the last 20 files opened or saved, also Ctrl+R / F3 in the dialog, menu *File → Recent files…* or `:recent`) and *Recent Locations* (their folders); it ends with **Examples**, the example files that come with hardcalc (written to hardcalc’s own folder when missing, never overwritten). The dialog has a background of its own |
 | `:e file`, `:e! file` | open another file (xlsx/ods/csv are imported); with unsaved changes it asks, `!` discards them without asking |
 | `:append file` | append the tables, layers, charts, layouts, types, functions and text of another file; table names already in use get a number |
 | `:new`, `:new!` | new document with a playground |
@@ -853,4 +910,5 @@ report security problems in [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The PDF font DejaVu Sans Mono comes with its
+own license: [assets/fonts/THIRD-PARTY-FONTS.txt](assets/fonts/THIRD-PARTY-FONTS.txt).

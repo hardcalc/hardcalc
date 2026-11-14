@@ -90,7 +90,7 @@ fn pick() -> std::io::Result<Option<PathBuf>> {
     use super::file_dialog::{Action, FileDialog, Purpose};
     use ratatui::style::{Color, Style};
     let dir = std::env::current_dir()?;
-    let mut dialog = FileDialog::new(Purpose::Open, dir, app::is_toml).with_tag(app::format_tag);
+    let mut dialog = FileDialog::new(Purpose::Open, dir, app::is_toml).with_tag(app::format_tag).with_examples(crate::examples::dir());
     let mut error: Option<String> = None;
     let mut terminal = ratatui::init();
     let result = (|| loop {

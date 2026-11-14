@@ -172,16 +172,37 @@ const GREEK: &[(&str, &str)] = &[
     ("Omega", "Ω"),
 ];
 
-/// `gamma_M` → `γ_M`: a Greek name before the first `_` (or alone).
-pub fn greek(name: &str) -> String {
-    let (head, tail) = name.split_once('_').map(|(h, t)| (h, Some(t))).unwrap_or((name, None));
-    match GREEK.iter().find(|(a, _)| *a == head) {
-        Some((_, g)) => match tail {
-            Some(t) => format!("{g}_{t}"),
-            None => g.to_string(),
-        },
-        None => name.to_string(),
+/// A name as the sheet knows it: `pi` is the constant π. Other spelled
+/// Greek names stay what they are (`gamma_M` is not `γ_M`); Greek letters
+/// are typed as such (Ctrl+G) or in LaTeX (`\gamma_M`).
+fn canonical(name: String) -> String {
+    if name == "pi" { "π".to_string() } else { name }
+}
+
+/// The first name in `code` that spells a Greek letter (`gamma_M`) with
+/// the letter it may have been meant for (`γ`); `pi` is the constant.
+pub fn spelled_greek(code: &str) -> Option<(String, &'static str)> {
+    let mut quoted = false;
+    let mut word = String::new();
+    let mut found = None;
+    for c in code.chars().chain([' ']) {
+        if c == '"' {
+            quoted = !quoted;
+        }
+        if !quoted && (c.is_alphanumeric() || c == '_' || (c == '\\' && word.is_empty())) {
+            word.push(c);
+            continue;
+        }
+        let head = word.split('_').next().unwrap_or("");
+        if found.is_none()
+            && head != "pi"
+            && let Some((_, g)) = GREEK.iter().find(|(a, _)| *a == head)
+        {
+            found = Some((word.clone(), *g));
+        }
+        word.clear();
     }
+    found
 }
 
 /// `γ_M` → `gamma_M`, for ASCII output.
@@ -194,30 +215,6 @@ pub fn ascii_name(name: &str) -> String {
         },
         None => name.to_string(),
     }
-}
-
-/// A line for the standard PDF fonts (Latin-1): Greek letters by name,
-/// `≤` → `<=`, `✓` → `ok` …; `²`, `³`, `·`, `°` stay.
-pub fn latin1(line: &str) -> String {
-    let mut out = String::new();
-    for c in line.chars() {
-        let s = c.to_string();
-        match GREEK.iter().find(|(_, g)| *g == s) {
-            Some((a, _)) => out.push_str(a),
-            None => match c {
-                '≤' => out.push_str("<="),
-                '≥' => out.push_str(">="),
-                '→' => out.push_str("->"),
-                '✓' => out.push_str("ok"),
-                '✗' => out.push_str("NOT OK"),
-                '⚠' => out.push('!'),
-                '⋅' => out.push('·'),
-                '⁻' => out.push('-'),
-                c => out.push(c),
-            },
-        }
-    }
-    out
 }
 
 /// Parses one line of a ```hardcalc block.
@@ -414,12 +411,12 @@ impl Parser {
             if self.peek() == Some('=') && !matches!(self.peek_at(1), Some('=' | '>')) {
                 self.pos += 1;
                 if self.at_end() {
-                    return Err(format!("{}: enter a value", greek(&name)));
+                    return Err(format!("{name}: enter a value"));
                 }
                 let expr = self.expr()?;
                 let to = self.convert()?;
                 self.finish()?;
-                return Ok(Stmt::Assign { name: greek(&name), expr, to });
+                return Ok(Stmt::Assign { name: canonical(name), expr, to });
             }
         }
         self.pos = start;
@@ -442,7 +439,7 @@ impl Parser {
         let mut params = Vec::new();
         let ok = loop {
             let Some(p) = self.name() else { break self.eat(")") && params.is_empty() };
-            params.push(greek(&p));
+            params.push(canonical(p));
             if self.eat(")") {
                 break true;
             }
@@ -532,16 +529,31 @@ impl Parser {
         parse_unit(&text).map(Some).ok_or_else(|| format!("not a unit: {}", text.trim()))
     }
 
+    /// A name; one starting with a LaTeX letter (`\gamma_M`) is the same
+    /// as one written with the letter (`γ_M`).
     fn name(&mut self) -> Option<String> {
         self.skip_ws();
-        if !self.peek().is_some_and(is_name_start) {
+        let mut out = String::new();
+        if self.peek() == Some('\\') {
+            let (letter, len) = self.latex_letter()?;
+            out.push_str(letter);
+            self.pos += len;
+        } else if !self.peek().is_some_and(is_name_start) {
             return None;
         }
-        let start = self.pos;
-        while self.peek().is_some_and(is_name_char) {
+        while let Some(c) = self.peek().filter(|c| is_name_char(*c)) {
+            out.push(c);
             self.pos += 1;
         }
-        Some(self.chars[start..self.pos].iter().collect())
+        Some(out)
+    }
+
+    /// At a `\`: the letter its LaTeX name stands for (`\alpha` → α) and
+    /// the characters it takes; only letters, `\le` is no name.
+    fn latex_letter(&self) -> Option<(&'static str, usize)> {
+        let word: String = self.chars[self.pos + 1..].iter().take_while(|c| c.is_ascii_alphabetic()).collect();
+        let ch = crate::symbols::latex(&word).filter(|ch| ch.chars().all(char::is_alphabetic))?;
+        Some((ch, word.len() + 1))
     }
 
     fn expr(&mut self) -> Result<Expr, String> {
@@ -628,6 +640,10 @@ impl Parser {
             return Ok(self.cell_ref(start));
         }
         let start = self.pos;
+        if self.peek() == Some('\\') && self.latex_letter().is_none() {
+            let word: String = self.chars[self.pos..].iter().take_while(|c| **c == '\\' || c.is_ascii_alphabetic()).collect();
+            return Err(format!("{word}: no Greek letter of that name (\\alpha … \\Omega)"));
+        }
         let Some(name) = self.name() else { return Err(format!("unexpected '{}'", self.rest())) };
         match self.peek() {
             Some('!') => Ok(self.cell_ref(start)),
@@ -667,7 +683,7 @@ impl Parser {
                 }
                 Ok(Expr::Call(name, args))
             }
-            _ => Ok(Expr::Var(greek(&name))),
+            _ => Ok(Expr::Var(canonical(name))),
         }
     }
 
@@ -1000,6 +1016,13 @@ mod tests {
         }
     }
 
+    fn stmt_err(s: &str) -> String {
+        match parse_line(s) {
+            Line::Error { msg } => msg,
+            other => panic!("{s}: no error but {other:?}"),
+        }
+    }
+
     fn text(e: &Expr) -> String {
         to_text(e, TextStyle::default(), &|_| None)
     }
@@ -1026,9 +1049,18 @@ mod tests {
     fn decimal_comma_and_ascii_input() {
         // Shown with the decimal comma, as with a German locale.
         crate::locale::set_decimal_comma_for_this_thread(true);
-        let Stmt::Assign { name, expr, .. } = stmt("gamma_M = 1,4") else { panic!() };
-        assert_eq!(name, "γ_M");
+        let Stmt::Assign { name, expr, .. } = stmt("\\gamma_M = 1,4") else { panic!() };
+        assert_eq!(name, "γ_M", "a LaTeX name is the letter");
         assert_eq!(expr, Expr::Num { value: 1.4, text: "1,4".into(), unit: None });
+        // A spelled name stays a name of its own; pi is the constant.
+        let Stmt::Assign { name, .. } = stmt("gamma_M = 1") else { panic!() };
+        assert_eq!(name, "gamma_M");
+        let Stmt::Assign { expr, .. } = stmt("u = 2·pi·\\alpha") else { panic!() };
+        assert_eq!(expr, Expr::Bin(Op::Mul, Box::new(Expr::Bin(Op::Mul, Box::new(Expr::Num { value: 2.0, text: "2".into(), unit: None }), Box::new(Expr::Var("π".into())))), Box::new(Expr::Var("α".into()))));
+        assert!(stmt_err("x = \\foo + 1").contains("\\foo: no Greek letter"));
+        assert!(stmt_err("x = \\le").contains("\\le: no Greek letter"));
+        assert_eq!(spelled_greek("y = 2·gamma_M + pi"), Some(("gamma_M".to_string(), "γ")));
+        assert_eq!(spelled_greek("y = \\gamma_M + \"alpha\"!B2 + pi"), None);
         let Stmt::Assign { expr, .. } = stmt("q_d = 1.35*g_k + 1,5·q_k") else { panic!() };
         assert_eq!(text(&expr), "1,35·g_k + 1,5·q_k");
     }
@@ -1077,12 +1109,6 @@ mod tests {
         assert_eq!(text(&expr), "(a + b)·c - (d - e)/(f·g)");
         let Stmt::Show { expr, .. } = stmt("a^2^3") else { panic!() };
         assert_eq!(text(&expr), "a^2^3");
-    }
-
-    #[test]
-    fn latin1_for_pdf() {
-        assert_eq!(latin1("n = 38,2 kN/m ≤ f_d = 60,0 kN/m   η = 0,64 ✓"), "n = 38,2 kN/m <= f_d = 60,0 kN/m   eta = 0,64 ok");
-        assert_eq!(latin1("γ_M = 1,4 · m²"), "gamma_M = 1,4 · m²");
     }
 
     #[test]

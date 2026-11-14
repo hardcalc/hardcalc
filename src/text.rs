@@ -54,9 +54,10 @@ pub struct Styled {
 }
 
 /// Splits `**bold**` and `*italic*`; other Markdown is kept as text, except
-/// that `[text](url)` becomes `text` and inline code loses its backticks.
+/// that `[text](url)` becomes `text`, inline code loses its backticks and
+/// `$…$` math becomes Unicode (`$\\gamma_M$` → γ_M).
 pub fn inline(line: &str) -> Vec<Styled> {
-    let line = strip_links(line).replace('`', "");
+    let line = crate::symbols::inline_math(&strip_links(line).replace('`', ""));
     let mut out: Vec<Styled> = Vec::new();
     let (mut bold, mut italic) = (false, false);
     let mut cur = String::new();

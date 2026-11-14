@@ -35,7 +35,9 @@ fn frames(a: &mut App, term: &mut Terminal<TestBackend>) -> (Vec<String>, String
         if !a.anim.active() || start.elapsed() > Duration::from_secs(2) {
             break;
         }
-        std::thread::sleep(Duration::from_millis(16));
+        // Short pauses: on a slow machine (CI runners) a pause can take much
+        // longer than asked, and a 110 ms popup would show too few frames.
+        std::thread::sleep(Duration::from_millis(2));
     }
     let last = out.last().cloned().unwrap();
     (out, last)

@@ -459,8 +459,12 @@ fn typst_plot(name: &str, p: &super::Plot) -> String {
     shapes.push(format!("place(line(start: (0cm, {:.3}cm), end: ({W}cm, {:.3}cm), stroke: 0.4pt + gray))", py(0.0), py(0.0)));
     for (k, s) in data.series.iter().enumerate() {
         let points: Vec<String> = s.values.iter().zip(&xs).filter_map(|(v, x)| v.map(|v| format!("({:.3}cm, {:.3}cm)", px(*x), py(v)))).collect();
-        if points.len() > 1 {
-            shapes.push(format!("place(path(stroke: 1pt + {}, {}))", colors[k % colors.len()], points.join(", ")));
+        // `curve`, not `path`: Typst 0.15 no longer draws with `path`.
+        if let [first, rest @ ..] = points.as_slice()
+            && !rest.is_empty()
+        {
+            let lines: Vec<String> = rest.iter().map(|p| format!("curve.line({p})")).collect();
+            shapes.push(format!("place(curve(stroke: 1pt + {}, curve.move({first}), {}))", colors[k % colors.len()], lines.join(", ")));
         }
     }
     let unit = super::unit_name_text(&data.unit);
@@ -533,6 +537,15 @@ mod tests {
             "\\left(a + b\\right) \\cdot {\\operatorname{max}\\left(a;\\, b\\right)}^{2} - \\sqrt{a}"
         );
         assert_eq!(line(Lang::Typst, &o[3]).unwrap().split(" = ").nth(1).unwrap(), "(a + b)/(a - b)");
+    }
+
+    #[test]
+    fn plots_are_drawn_with_curve() {
+        // Typst 0.15 no longer draws with `path`; `curve` works from 0.13 on.
+        let o = outs("x = {0, 1,,, 4}\ny = x^2\n[Squares] plot(y; x: x)");
+        let r = typst_report("t", &o);
+        assert!(r.contains("place(curve(stroke: 1pt + blue, curve.move(") && r.contains("curve.line("), "{r}");
+        assert!(!r.contains("path("), "{r}");
     }
 
     #[test]
