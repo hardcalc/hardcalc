@@ -4359,3 +4359,61 @@ fn calc_features_example_calculates() {
     let screen = render(&mut a);
     assert!(screen.contains("Bending moment M") && screen.contains("IPE 270"), "{screen}");
 }
+
+#[test]
+fn calculation_sheet_prints_from_its_view() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    command(&mut a, "calc");
+    let items = a.print_items(false);
+    assert!(matches!(items.first(), Some(hardcalc::print::PrintItem::Calc(_))), "the sheet, not the table");
+    assert!(!items.iter().any(|i| matches!(i, hardcalc::print::PrintItem::Table(_))));
+    let plots = items.iter().filter(|i| matches!(i, hardcalc::print::PrintItem::Chart(_))).count();
+    assert_eq!(plots, 4, "with its plots");
+    assert_eq!(a.scope_name(a.print_setup.scope), "calculation sheet");
+}
+
+#[test]
+fn calculation_sheet_prints_typeset() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    command(&mut a, "calc");
+    let setup = a.print_setup.clone();
+    let layout = a.layout(&setup);
+    let pictures: usize = layout.pictures.iter().map(Vec::len).sum();
+    if !hardcalc::typeset::available() {
+        assert_eq!(pictures, 0, "without Typst the calculations print as text");
+        return;
+    }
+    assert!(pictures > 30, "the calculations typeset: {pictures}");
+    // Their text stands in for them only in the text preview.
+    let stand_ins = layout.pages.iter().flatten().flat_map(|l| &l.spans).filter(|s| s.style.stand_in).count();
+    assert_eq!(stand_ins, pictures);
+    let pdf = hardcalc::print::to_pdf(&layout, "t");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/Subtype /Image") && text.contains("/Im0 Do"), "pictures in the PDF");
+    assert!(!text.contains("(q_d = 1.35"), "the stand-in text is not on the page");
+}
+
+#[test]
+fn calculation_sheet_typeset_on_screen() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    command(&mut a, "calc");
+    a.graphics = Some(hardcalc::tui::graphics::Protocol::Kitty);
+    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    term.draw(|f| ui::draw(f, &mut a)).unwrap();
+    if !hardcalc::typeset::available() {
+        assert!(a.pictures.is_empty());
+        return;
+    }
+    assert!(!a.pictures.is_empty(), "calculations as pictures");
+    // A fraction takes two lines.
+    assert!(a.pictures.iter().any(|p| p.rect.height >= 2), "{:?}", a.pictures.iter().map(|p| p.rect).collect::<Vec<_>>());
+    // Switched off, or without images, the calculations are text.
+    command(&mut a, "typeset off");
+    term.draw(|f| ui::draw(f, &mut a)).unwrap();
+    assert!(a.pictures.is_empty());
+    let screen: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(screen.contains("q_d = 1.35·g_k + 1.5·q_k"), "{screen}");
+}

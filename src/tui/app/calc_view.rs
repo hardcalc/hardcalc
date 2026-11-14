@@ -318,6 +318,70 @@ impl App {
         CellView { text, align: Align::Left, style, error, violation: false }
     }
 
+    /// The calculation of row `r` as Typst math, for lines that are
+    /// calculated without problems (not headings, comments, plots or errors).
+    pub fn calc_math(&mut self, r: usize) -> Option<String> {
+        let out = self.calc_out(r)?;
+        if !sheet::problems(std::slice::from_ref(&out)).is_empty() {
+            return None;
+        }
+        match out {
+            sheet::Out::Assign { .. } | sheet::Out::Show { .. } | sheet::Out::Def { .. } | sheet::Out::Check { .. } => {
+                sheet::notation::line(sheet::notation::Lang::Typst, &out)
+            }
+            _ => None,
+        }
+    }
+
+    /// Typesets the formulas not set yet for cells `cell_h` pixels high, all in one run.
+    pub fn typeset_formulas(&mut self, math: &[String], cell_h: u16) {
+        let mut missing: Vec<String> = math.iter().filter(|m| !self.typeset_cache.contains_key(&((*m).clone(), cell_h))).cloned().collect();
+        missing.dedup();
+        if missing.is_empty() {
+            return;
+        }
+        // An em of about seven tenths of a line: plain formulas fit one line,
+        // fractions (display style, as in the report) two.
+        let style = crate::typeset::Style { size: 10.0, scale: 0.07 * cell_h as f32, color: [255, 255, 255], display: true };
+        for (m, img) in missing.iter().zip(crate::typeset::formulas(&missing, style)) {
+            self.typeset_cache.insert((m.clone(), cell_h), img.map(std::rc::Rc::new));
+        }
+    }
+
+    /// Formula `math` (set before with [`App::typeset_formulas`]) fitted into
+    /// `width` pixels and coloured `ink`, with the lines it takes; `None`
+    /// where it is not set or would be too small to read.
+    pub fn typeset_fitted(&mut self, math: &str, cell_h: u16, width: usize, ink: [u8; 3]) -> Option<super::Fitted> {
+        let key = (math.to_string(), cell_h, width, ink);
+        if let Some(hit) = self.typeset_fit.get(&key) {
+            return hit.clone();
+        }
+        let fitted = self.typeset_cache.get(&(math.to_string(), cell_h)).cloned().flatten().and_then(|img| {
+            let ch = cell_h.max(1) as f64;
+            let mut f = (width as f64 / img.width as f64).min(1.0);
+            // Shrunk to less than two thirds the formula is hard to read: text instead.
+            if f < 0.66 {
+                return None;
+            }
+            // A little taller than whole lines: shrunk to fit them.
+            let lines = ((img.height as f64 * f / ch) - 0.2).ceil().clamp(1.0, 6.0);
+            f = f.min(lines * ch / img.height as f64);
+            let mut out = img.shrink(f);
+            for p in &mut out.pixels {
+                p[0] = ink[0];
+                p[1] = ink[1];
+                p[2] = ink[2];
+            }
+            Some((std::rc::Rc::new(out), lines as u16))
+        });
+        // The cache holds what is on screen and a little more.
+        if self.typeset_fit.len() > 2000 {
+            self.typeset_fit.clear();
+        }
+        self.typeset_fit.insert(key, fitted.clone());
+        fitted
+    }
+
     /// Editable text of the cell at the cursor.
     pub(super) fn calc_raw(&self) -> String {
         let (r, c) = self.view.cursor;

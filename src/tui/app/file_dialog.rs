@@ -36,7 +36,7 @@ impl App {
             _ => PathBuf::from("."),
         };
         let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
-        let mut dialog = FileDialog::new(purpose, dir, is_document);
+        let mut dialog = FileDialog::new(purpose, dir, is_document).with_examples(crate::examples::dir());
         if purpose == Purpose::Open {
             dialog = dialog.with_recent(crate::recent::load(), recent);
         }

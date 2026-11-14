@@ -402,6 +402,22 @@ pub fn render_blocks(doc: &Document, wb: &mut Workbook, r: Render) -> HashMap<us
     map
 }
 
+/// The evaluated lines of each ```hardcalc block, by block index – the
+/// sheet evaluated as a whole, as in [`render_blocks`].
+pub fn outs_by_block(doc: &Document, wb: &mut Workbook) -> HashMap<usize, Vec<Out>> {
+    let mut outs = evaluate_document(doc, wb).into_iter();
+    let mut map = HashMap::new();
+    for (i, b) in doc.blocks.iter().enumerate() {
+        if let Block::Code { info, body } = b
+            && is_sheet_info(info)
+        {
+            let n = body.iter().filter(|l| !matches!(expr::parse_line(l), Line::Mode(_))).count();
+            map.insert(i, outs.by_ref().take(n).collect());
+        }
+    }
+    map
+}
+
 /// Whether a source line is a `plot(…)`.
 pub fn is_plot_line(src: &str) -> bool {
     matches!(expr::parse_line(src), Line::Stmt { stmt: Some(Stmt::Plot { .. }), .. })

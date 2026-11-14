@@ -23,6 +23,7 @@ toml_edit = "0.25.17"
 typst = { version = "0.14.2", optional = true }
 typst-assets = { version = "0.14.2", features = ["fonts"], optional = true }
 typst-pdf = { version = "0.14.2", optional = true }
+typst-render = { version = "0.14.2", optional = true }
 unicode-width = "0.2"
 zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 
@@ -36,5 +37,6 @@ lto = "thin"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 
 [features]
-# PDF calculation reports with typeset formulas (hardcalc report).
-typst = ["dep:typst", "dep:typst-pdf", "dep:typst-assets"]
+# Typeset formulas: PDF calculation reports (hardcalc report), the
+# calculation sheet on screen and in print. Without it formulas stay text.
+typst = ["dep:typst", "dep:typst-pdf", "dep:typst-assets", "dep:typst-render"]

@@ -115,6 +115,9 @@ pub struct SpanStyle {
     pub bg: Option<(u8, u8, u8)>,
     /// Break the text into lines (layer `wrap`): the width, 0 for the usual maximum.
     pub wrap: Option<u16>,
+    /// Text standing in for a picture (a typeset formula): shown in the
+    /// text preview where the picture cannot be, never on the PDF page.
+    pub stand_in: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -188,7 +191,38 @@ pub enum PrintItem {
     Text(Vec<String>),
     /// A code block, printed verbatim.
     Code(Vec<String>),
+    /// The lines of a calculation sheet, the calculations typeset where Typst is built in.
+    Calc(Vec<CalcLine>),
 }
+
+/// A line of a calculation sheet for printing.
+#[derive(Debug, Clone, Default)]
+pub struct CalcLine {
+    pub label: Option<String>,
+    /// The calculation (or heading, comment …) as text.
+    pub text: String,
+    /// The calculation as Typst math, for those that are typeset.
+    pub math: Option<String>,
+    pub comment: Option<String>,
+    /// A check that fails: in red.
+    pub failed: bool,
+}
+
+/// A typeset formula on a page: from line `line` and character column
+/// `col` on, `width` × `height` points.
+#[derive(Debug, Clone)]
+pub struct Picture {
+    pub line: usize,
+    pub col: usize,
+    pub width: f32,
+    pub height: f32,
+    /// Identifies what it shows.
+    pub key: u64,
+    pub image: std::sync::Arc<crate::typeset::Image>,
+}
+
+/// Pixels per point of typeset formulas on paper (about 300 dpi).
+const PICTURE_SCALE: f32 = 4.0;
 
 /// Lines a printed chart takes, including its title line.
 pub const CHART_LINES: usize = 18;
@@ -255,6 +289,8 @@ pub struct Layout {
     pub pages: Vec<Vec<Line>>,
     /// Charts per page.
     pub graphics: Vec<Vec<Graphic>>,
+    /// Typeset formulas per page.
+    pub pictures: Vec<Vec<Picture>>,
     /// Characters per line and lines per page (including the footer).
     pub cols: usize,
     pub rows: usize,
@@ -420,7 +456,8 @@ pub fn compose(setup: &PageSetup, elements: &[PlacedElement], footer: &str) -> L
         }
     }
     add_footers(&mut pages, rows, cols, footer);
-    Layout { pages, graphics, cols, rows, font_size, width, height }
+    let pictures = vec![Vec::new(); pages.len()];
+    Layout { pages, graphics, pictures, cols, rows, font_size, width, height }
 }
 
 /// Lays out `items` on pages. `title` heads the first page, `footer` is
@@ -448,6 +485,7 @@ pub fn paginate(title: &str, items: &[PrintItem], setup: &PageSetup, footer: &st
     let bold = SpanStyle { bold: true, ..SpanStyle::default() };
     let mut pages: Vec<Vec<Line>> = Vec::new();
     let mut graphics: Vec<Vec<Graphic>> = Vec::new();
+    let mut pictures: Vec<Vec<Picture>> = Vec::new();
     let mut page: Vec<Line> = Vec::new();
     if !title.is_empty() {
         page.push(Line::text(LineKind::Title, fit(title, cols, Align::Left), bold.clone()));
@@ -483,6 +521,13 @@ pub fn paginate(title: &str, items: &[PrintItem], setup: &PageSetup, footer: &st
                     }
                     page.push(Line::text(LineKind::Row, fit(l, cols, Align::Left), gray.clone()));
                 }
+                if page.len() < body {
+                    page.push(Line::blank());
+                }
+                continue;
+            }
+            PrintItem::Calc(lines) => {
+                calc_lines(lines, font_size, cols, body, &mut page, &mut pages, &mut pictures);
                 if page.len() < body {
                     page.push(Line::blank());
                 }
@@ -607,7 +652,98 @@ pub fn paginate(title: &str, items: &[PrintItem], setup: &PageSetup, footer: &st
 
     add_footers(&mut pages, rows, cols, footer);
     graphics.resize(pages.len(), Vec::new());
-    Layout { pages, graphics, cols, rows, font_size, width, height }
+    pictures.resize(pages.len(), Vec::new());
+    Layout { pages, graphics, pictures, cols, rows, font_size, width, height }
+}
+
+/// The lines of a calculation sheet onto the pages: each calculation
+/// typeset as a picture (its text stands in for it in the text preview),
+/// the label left of it, the comment right of it or below; as text where
+/// it cannot be typeset.
+fn calc_lines(lines: &[CalcLine], fs: f32, cols: usize, body: usize, page: &mut Vec<Line>, pages: &mut Vec<Vec<Line>>, pictures: &mut Vec<Vec<Picture>>) {
+    use std::hash::{Hash, Hasher};
+    let (cw, lh) = (CHAR_W * fs, LINE_H * fs);
+    let gray = SpanStyle { color: Some((70, 70, 70)), ..SpanStyle::default() };
+    let red = SpanStyle { color: Some((190, 0, 0)), ..SpanStyle::default() };
+    let note = SpanStyle { color: Some((90, 90, 90)), italic: true, ..SpanStyle::default() };
+    // All formulas in two runs: black, and red for the failing checks.
+    let mut images: Vec<Option<crate::typeset::Image>> = vec![None; lines.len()];
+    for failed in [false, true] {
+        let which: Vec<usize> = (0..lines.len()).filter(|&i| lines[i].failed == failed && lines[i].math.is_some()).collect();
+        if which.is_empty() {
+            continue;
+        }
+        let math: Vec<String> = which.iter().filter_map(|&i| lines[i].math.clone()).collect();
+        let color = if failed { [190, 0, 0] } else { [0, 0, 0] };
+        let style = crate::typeset::Style { size: fs, scale: PICTURE_SCALE, color, display: true };
+        for (&i, img) in which.iter().zip(crate::typeset::formulas(&math, style)) {
+            images[i] = img;
+        }
+    }
+    // The formulas start in one column, after the widest label.
+    let label_w = lines.iter().filter_map(|l| l.label.as_ref()).map(|l| l.width() + 3).max().unwrap_or(0).min(cols / 3);
+    let label_span = |l: &CalcLine| l.label.as_ref().map(|t| Span { col: 0, text: fit(&format!("[{t}]"), label_w.saturating_sub(1), Align::Left), style: gray.clone() });
+    let new_page = |page: &mut Vec<Line>, pages: &mut Vec<Vec<Line>>| pages.push(std::mem::take(page));
+    for (l, img) in lines.iter().zip(images) {
+        let text_style = if l.failed { red.clone() } else { gray.clone() };
+        let Some(img) = img else {
+            // As text: the label, the calculation, the comment.
+            let mut text = match &l.label {
+                Some(t) => format!("[{t}] {}", l.text),
+                None => l.text.clone(),
+            };
+            if let Some(c) = &l.comment {
+                text.push_str(&format!("   ' {c}"));
+            }
+            if page.len() >= body {
+                new_page(page, pages);
+            }
+            page.push(Line::text(LineKind::Row, fit(&text, cols, Align::Left), text_style));
+            continue;
+        };
+        let col = label_w;
+        let (mut w, mut h) = (img.width as f32 / PICTURE_SCALE, img.height as f32 / PICTURE_SCALE);
+        let room = cols.saturating_sub(col).max(1) as f32 * cw;
+        if w > room {
+            h *= room / w;
+            w = room;
+        }
+        let n = ((h / lh) - 0.05).ceil().max(1.0) as usize;
+        let after = col + (w / cw).ceil() as usize + 3;
+        let comment = l.comment.as_ref().map(|c| (c, after + c.width() <= cols));
+        let need = n + usize::from(comment.is_some_and(|(_, beside)| !beside));
+        if !page.is_empty() && page.len() + need > body {
+            new_page(page, pages);
+        }
+        let start = page.len();
+        // Label, stand-in and comment on the middle line, beside the formula.
+        for k in 0..n {
+            let mut spans = Vec::new();
+            if k == (n - 1) / 2 {
+                spans.extend(label_span(l));
+                spans.push(Span { col, text: fit(&l.text, cols - col, Align::Left), style: SpanStyle { stand_in: true, ..text_style.clone() } });
+                if let Some((c, true)) = comment {
+                    spans.push(Span { col: after, text: c.clone(), style: note.clone() });
+                }
+            }
+            page.push(Line { kind: LineKind::Row, spans, width: 0 });
+        }
+        if let Some((c, false)) = comment {
+            page.push(Line::text(LineKind::Row, fit(c, cols.saturating_sub(col), Align::Left), note.clone()));
+            if let Some(last) = page.last_mut() {
+                last.spans[0].col = col;
+            }
+        }
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        (&l.math, l.failed, fs.to_bits()).hash(&mut hash);
+        pictures.resize(pages.len() + 1, Vec::new());
+        pictures[pages.len()].push(Picture { line: start, col, width: w, height: h, key: hash.finish(), image: std::sync::Arc::new(img) });
+    }
+}
+
+/// Lines a picture of `height` points takes at font size `fs`.
+pub fn picture_lines(height: f32, fs: f32) -> usize {
+    ((height / (LINE_H * fs)) - 0.05).ceil().max(1.0) as usize
 }
 
 /// Turns wrapped, styled text into a print line; `base` overrides the color.
@@ -622,6 +758,7 @@ pub fn styled_line(kind: LineKind, pieces: &[crate::text::Styled], base: Option<
             shade: base.is_some_and(|b| b.shade),
             bg: base.and_then(|b| b.bg),
             wrap: base.and_then(|b| b.wrap),
+            stand_in: false,
         };
         spans.push(Span { col, text: p.text.clone(), style });
         col += p.text.width();
@@ -891,7 +1028,9 @@ fn pdf_string(s: &str) -> Vec<u8> {
     out
 }
 
-fn page_content(layout: &Layout, index: usize) -> Vec<u8> {
+/// The content stream of page `index`; the pictures it shows are added to
+/// `images` and drawn as `/Im<n>` by their place there.
+fn page_content(layout: &Layout, index: usize, images: &mut Vec<std::sync::Arc<crate::typeset::Image>>) -> Vec<u8> {
     let page = &layout.pages[index];
     let fs = layout.font_size;
     let lh = LINE_H * fs;
@@ -907,7 +1046,7 @@ fn page_content(layout: &Layout, index: usize) -> Vec<u8> {
             out.extend(format!("0.9 g {:.2} {:.2} {:.2} {:.2} re f\n", MARGIN, top - lh, w, lh).bytes());
             out.extend(format!("0.4 G 0.5 w {:.2} {:.2} m {:.2} {:.2} l S\n", MARGIN, top - lh, MARGIN + w, top - lh).bytes());
         }
-        for span in &line.spans {
+        for span in line.spans.iter().filter(|s| !s.style.stand_in) {
             if let Some(bg) = span.style.bg {
                 rect_op(&mut out, bg, MARGIN + span.col as f32 * cw, top - lh, span.text.width() as f32 * cw, lh);
             }
@@ -940,6 +1079,34 @@ fn page_content(layout: &Layout, index: usize) -> Vec<u8> {
     for g in &layout.graphics[index] {
         chart_ops(&mut out, layout, g);
     }
+    for p in layout.pictures.get(index).into_iter().flatten() {
+        // Centred from top to bottom in the lines it takes.
+        let n = picture_lines(p.height, fs) as f32;
+        let top = layout.height - MARGIN - p.line as f32 * lh;
+        let y = top - n * lh + (n * lh - p.height) / 2.0;
+        let x = MARGIN + p.col as f32 * cw;
+        out.extend(format!("q {:.3} 0 0 {:.3} {x:.2} {y:.2} cm /Im{} Do Q\n", p.width, p.height, images.len()).bytes());
+        images.push(p.image.clone());
+    }
+    out
+}
+
+/// A picture as a PDF image object: RGB on white paper, deflated.
+fn image_object(img: &crate::typeset::Image) -> Vec<u8> {
+    use std::io::Write;
+    let raw: Vec<u8> = img.over([255, 255, 255]).into_iter().flatten().collect();
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let _ = z.write_all(&raw);
+    let data = z.finish().unwrap_or_default();
+    let mut out = format!(
+        "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
+        img.width,
+        img.height,
+        data.len()
+    )
+    .into_bytes();
+    out.extend(data);
+    out.extend(b"\nendstream");
     out
 }
 
@@ -1111,7 +1278,13 @@ fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
 
 /// Serializes the layout as a PDF document.
 pub fn to_pdf(layout: &Layout, title: &str) -> Vec<u8> {
-    let pages = (0..layout.pages.len()).map(|i| (layout.width, layout.height, page_content(layout, i))).collect();
+    let pages = (0..layout.pages.len())
+        .map(|i| {
+            let mut images = Vec::new();
+            let content = page_content(layout, i, &mut images);
+            (layout.width, layout.height, content, images)
+        })
+        .collect();
     assemble(pages, title)
 }
 
@@ -1131,6 +1304,7 @@ pub fn sheet_size(layout: &Layout, across: usize, down: usize) -> (f32, f32) {
 pub fn to_pdf_sheet(layout: &Layout, first: usize, across: usize, down: usize, title: &str) -> Vec<u8> {
     let (w, h) = sheet_size(layout, across, down);
     let mut out: Vec<u8> = format!("0.35 g 0 0 {w:.2} {h:.2} re f\n").into_bytes();
+    let mut images = Vec::new();
     for k in 0..across * down {
         let index = first + k;
         if index >= layout.pages.len() {
@@ -1139,18 +1313,24 @@ pub fn to_pdf_sheet(layout: &Layout, first: usize, across: usize, down: usize, t
         let x = SHEET_GAP + (k % across) as f32 * (layout.width + SHEET_GAP);
         let y = h - (SHEET_GAP + (k / across + 1) as f32 * (layout.height + SHEET_GAP) - SHEET_GAP);
         out.extend(format!("q 1 0 0 1 {x:.2} {y:.2} cm\n").bytes());
-        out.extend(page_content(layout, index));
+        out.extend(page_content(layout, index, &mut images));
         out.extend(b"Q\n");
     }
-    assemble(vec![(w, h, out)], title)
+    assemble(vec![(w, h, out, images)], title)
 }
 
-/// A PDF file from pages of (width, height, content stream).
-fn assemble(sheets: Vec<(f32, f32, Vec<u8>)>, title: &str) -> Vec<u8> {
+/// A sheet for [`assemble`]: width, height, content stream and the pictures it draws.
+type Sheet = (f32, f32, Vec<u8>, Vec<std::sync::Arc<crate::typeset::Image>>);
+
+/// A PDF file from pages.
+fn assemble(sheets: Vec<Sheet>, title: &str) -> Vec<u8> {
     let mut objects: Vec<Vec<u8>> = Vec::new();
-    // 1 catalog, 2 pages, 3–6 fonts, 7 info, then a page and its content per page.
+    // 1 catalog, 2 pages, 3–6 fonts, 7 info, then a page and its content per
+    // page, then the pictures.
     let n = sheets.len();
     let page_ids: Vec<usize> = (0..n).map(|i| 8 + 2 * i).collect();
+    let mut next_image = 8 + 2 * n;
+    let mut image_objects: Vec<Vec<u8>> = Vec::new();
     objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
     let kids: Vec<String> = page_ids.iter().map(|id| format!("{id} 0 R")).collect();
     objects.push(format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")).into_bytes());
@@ -1163,11 +1343,18 @@ fn assemble(sheets: Vec<(f32, f32, Vec<u8>)>, title: &str) -> Vec<u8> {
     info.extend(pdf_string(title));
     info.extend(b" >>");
     objects.push(info);
-    for (&page_id, (width, height, content)) in page_ids.iter().zip(sheets) {
+    for (&page_id, (width, height, content, images)) in page_ids.iter().zip(sheets) {
+        let mut xobjects = String::new();
+        for (k, img) in images.iter().enumerate() {
+            xobjects.push_str(&format!("/Im{k} {next_image} 0 R "));
+            next_image += 1;
+            image_objects.push(image_object(img));
+        }
+        let xobjects = if xobjects.is_empty() { String::new() } else { format!(" /XObject << {xobjects}>>") };
         objects.push(
             format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.2} {height:.2}] \
-                 /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents {} 0 R >>",
+                 /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >>{xobjects} >> /Contents {} 0 R >>",
                 page_id + 1
             )
             .into_bytes(),
@@ -1177,6 +1364,7 @@ fn assemble(sheets: Vec<(f32, f32, Vec<u8>)>, title: &str) -> Vec<u8> {
         stream.extend(b"\nendstream");
         objects.push(stream);
     }
+    objects.extend(image_objects);
 
     let mut pdf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets = Vec::new();

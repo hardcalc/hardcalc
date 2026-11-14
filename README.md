@@ -65,8 +65,20 @@ cargo install --git https://github.com/hardcalc/hardcalc
 cargo install --path .
 ```
 
-Both install `hardcalc` and `hardconf` (see below). Without installing, run it
-from the project folder:
+Both install `hardcalc` and `hardconf` (see below).
+
+**Optional: Typst for typeset formulas.** With [Typst](https://typst.app)
+installed, hardcalc shows the calculations of a calculation sheet as typeset
+formulas (on screen in terminals with images, and when printing) and writes
+calculation reports. Without it everything works, the formulas stay text.
+
+```bash
+brew install typst               # macOS / Linux, Homebrew
+winget install --id Typst.Typst  # Windows
+cargo install typst-cli          # anywhere, from source
+```
+
+Without installing, run it from the project folder:
 
 ```bash
 cargo run --release -- examples/budget.hcmd
@@ -344,6 +356,18 @@ input still missing. **F7** (`:plot`) edits the chart on the cursor line
 [examples/calc-features.hcmd](examples/calc-features.hcmd). Example: [examples/beam.hcmd](examples/beam.hcmd), syntax in
 [SPEC.md](SPEC.md) section 10.
 
+**Typeset calculations:** in the `∑ calc` view the column *Calculation*
+shows each calculation as a typeset formula – fractions, roots, indices and
+Greek letters as in the report – in terminals that show images (Kitty,
+Ghostty, iTerm2, WezTerm); a row with a fraction becomes two lines high.
+`:typeset off` (menu *View → Typeset formulas on/off*) switches back to text;
+without image support the calculations stay text. Printing a calculation
+sheet (`:print` from the `∑ calc` view, or the whole document) always sets
+the formulas this way, in the PDF and in the print preview. Both need Typst:
+the program `typst` if it is installed (typst.app; `HARDCALC_TYPST` names
+another one), or the compiler built in (`--features typst`, see below);
+without Typst the calculations are text everywhere.
+
 In the right window, **∑ preview** (`:preview`) shows the sheet typeset –
 fractions, roots and indexes drawn over several lines (term-maths); `f` or
 `:formulas 2d|text|ascii` chooses the display.
@@ -593,7 +617,7 @@ bar:
 | F5      | portrait / landscape                                      |
 | F6      | choose paper: A4, A3, Letter, Legal, Tabloid/Ledger       |
 | F7 / F8 | smaller / larger font                                     |
-| F9      | scope: current table · whole document · layouts           |
+| F9      | scope: current table (in the `∑ calc` view: the calculation sheet with its plots) · whole document · layouts |
 | i       | image preview on/off                                      |
 | + / −   | zoom: several pages side by side (2, 4, 6, 12, 24), 0 or i back to one page |
 | F10/Esc | close                                                     |
@@ -775,7 +799,7 @@ For power users; the help (F1) lists them all.
 | `:group [Column]` | table with counts and sums per value of a column |
 | `:addrow`, `:delrow`, `:addcol Name[:Type]`, `:delcol` | rows / columns |
 | `:footer [Name]` | add a footer row below the table (a summary per column) |
-| menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, F4 / Ctrl+A steps through the files shown: all, with only the documents hardcalc reads offered (the others grey, the default) → all offered → only the documents, Ctrl+N / Ctrl+D sort by name / date (again: reverse); a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter; the sidebar starts with its own section **Recent** (the last 20 files opened or saved), also Ctrl+R in the dialog, menu *File → Recent files…* or `:recent` |
+| menu *File → Open…*, Ctrl+E, `:e`, `:append` (without a file) | file dialog (with unsaved changes hardcalc asks first: save / discard / cancel): browse folders, typing searches, Enter opens or appends, ← one level up, `~` home, F4 / Ctrl+A steps through the files shown: all, with only the documents hardcalc reads offered (the others grey, the default) → all offered → only the documents, Ctrl+N / Ctrl+D sort by name / date (again: reverse); a sidebar like the Finder’s lists favourites (Desktop, Documents, Downloads, home) and locations (disks and volumes, iCloud Drive, cloud storage such as OneDrive or Synology Drive) – click one, or Tab into it and press Enter; the sidebar starts with its own section **Recent**: *Recent Files* (the last 20 files opened or saved, also Ctrl+R / F3 in the dialog, menu *File → Recent files…* or `:recent`) and *Recent Locations* (their folders); it ends with **Examples**, the example files that come with hardcalc (written to hardcalc’s own folder when missing, never overwritten). The dialog has a background of its own |
 | `:e file`, `:e! file` | open another file (xlsx/ods/csv are imported); with unsaved changes it asks, `!` discards them without asking |
 | `:append file` | append the tables, layers, charts, layouts, types, functions and text of another file; table names already in use get a number |
 | `:new`, `:new!` | new document with a playground |

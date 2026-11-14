@@ -174,8 +174,19 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     result
 }
 
-/// The images on screen – the page of the print preview, charts – so they
-/// are only sent when something changes.
+/// A ready picture (a typeset formula) to be shown after the frame is drawn:
+/// placed at the left of `rect`, centred from top to bottom.
+#[derive(Debug, Clone)]
+pub struct Picture {
+    /// Where on screen, in cells.
+    pub rect: ratatui::layout::Rect,
+    /// Identifies what it shows (with `rect`), to send it only when it changes.
+    pub key: u64,
+    pub image: std::rc::Rc<crate::typeset::Image>,
+}
+
+/// The images on screen – the page of the print preview, charts, typeset
+/// formulas – so they are only sent when something changes.
 #[derive(Default)]
 struct ImageState {
     /// Hash of everything shown (page PDF, charts, their places).
@@ -184,12 +195,12 @@ struct ImageState {
     rects: Vec<ratatui::layout::Rect>,
     /// Last rasterized page: hash of its PDF and the PNG.
     cache: Option<(u64, Vec<u8>)>,
-    /// The PNGs of the charts on screen, by what they show.
+    /// The PNGs of the charts and pictures on screen, by what they show.
     charts: std::collections::HashMap<u64, Vec<u8>>,
 }
 
 /// Pixels of a terminal cell; a usual size where the terminal does not say.
-fn cell_pixels() -> (u16, u16) {
+pub fn cell_pixels() -> (u16, u16) {
     match ratatui::crossterm::terminal::window_size() {
         Ok(w) if w.width > 0 && w.height > 0 && w.columns > 0 && w.rows > 0 => ((w.width / w.columns).max(1), (w.height / w.rows).max(1)),
         _ => (10, 20),
@@ -206,7 +217,7 @@ impl ImageState {
             (Some(slot), Some(pdf)) => Some((slot, pdf)),
             _ => None,
         };
-        if page.is_none() && app.images.is_empty() {
+        if page.is_none() && app.images.is_empty() && app.pictures.is_empty() {
             if self.shown.take().is_some() {
                 write!(stdout(), "{}", graphics::clear(protocol))?;
                 self.rects.clear();
@@ -228,11 +239,24 @@ impl ImageState {
         for (k, _) in &charts {
             k.hash(&mut h);
         }
+        let pictures: Vec<(u64, &Picture)> = app
+            .pictures
+            .iter()
+            .map(|p| {
+                let mut ph = std::collections::hash_map::DefaultHasher::new();
+                (p.key, p.rect.x, p.rect.y, p.rect.width, p.rect.height, cell).hash(&mut ph);
+                (ph.finish(), p)
+            })
+            .collect();
+        for (k, _) in &pictures {
+            k.hash(&mut h);
+        }
         let key = h.finish();
         if self.shown == Some(key) {
             return Ok(false);
         }
-        let rects: Vec<ratatui::layout::Rect> = page.iter().map(|(s, _)| *s).chain(charts.iter().map(|(_, i)| i.rect)).collect();
+        let rects: Vec<ratatui::layout::Rect> =
+            page.iter().map(|(s, _)| *s).chain(charts.iter().map(|(_, i)| i.rect)).chain(pictures.iter().map(|(_, p)| p.rect)).collect();
         // iTerm2 images are part of the cells: one that moved away is only
         // gone once its cells are written again.
         if protocol == graphics::Protocol::Iterm && self.rects.iter().any(|r| !rects.contains(r)) {
@@ -259,11 +283,20 @@ impl ImageState {
             };
             pngs.push((*slot, png));
         }
-        let wanted: Vec<u64> = charts.iter().map(|(k, _)| *k).collect();
+        let wanted: Vec<u64> = charts.iter().map(|(k, _)| *k).chain(pictures.iter().map(|(k, _)| *k)).collect();
         self.charts.retain(|k, _| wanted.contains(k));
         for (k, img) in &charts {
             let png = self.charts.entry(*k).or_insert_with(|| chart_image::plot(&img.data, img.rect.width, img.rect.height, cell, img.paper).png());
             pngs.push((img.rect, png.clone()));
+        }
+        for (k, p) in &pictures {
+            let png = self.charts.entry(*k).or_insert_with(|| {
+                // Exactly the cells' size, so the terminal does not stretch it.
+                let (w, h) = (p.rect.width as usize * cell.0 as usize, p.rect.height as usize * cell.1 as usize);
+                let placed = p.image.placed(w, h);
+                chart_image::Canvas { width: placed.width, height: placed.height, pixels: placed.pixels }.png()
+            });
+            pngs.push((p.rect, png.clone()));
         }
         let mut out = stdout();
         write!(out, "{}", graphics::clear(protocol))?;

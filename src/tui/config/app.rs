@@ -948,7 +948,7 @@ impl ConfApp {
             _ => PathBuf::from("."),
         };
         let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
-        self.file_dialog = Some(FileDialog::new(Purpose::Open, dir, is_toml).with_tag(format_tag));
+        self.file_dialog = Some(FileDialog::new(Purpose::Open, dir, is_toml).with_tag(format_tag).with_examples(crate::examples::dir()));
         self.message = None;
     }
 
