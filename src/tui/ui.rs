@@ -1343,7 +1343,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     // Filling tables get Excel-like column widths.
     let min_col = if app.fills() { FILL_MIN_COL } else { MIN_COL };
     // The calculation sheet with typeset calculations: the formula of each row.
-    let cell_px = super::cell_pixels();
+    let cell_px = app.cell_px;
     let typeset = app.calc_view() && app.typeset && app.images_allowed && crate::typeset::available();
     let math: HashMap<usize, String> = if typeset {
         let m: HashMap<usize, String> = (0..app.calc_rows().len()).filter_map(|r| app.calc_math(r).map(|m| (r, m))).collect();
@@ -2103,7 +2103,7 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
             inside.then(|| (Rect::new(x as u16, y as u16, w as u16, h as u16), pic.key, pic.image.clone(), pic.width / cw))
         })
         .collect();
-    let cell = super::cell_pixels();
+    let cell = app.cell_px;
     if app.typeset_preview.len() > 500 {
         app.typeset_preview.clear();
     }

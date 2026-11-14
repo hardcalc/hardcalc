@@ -227,7 +227,7 @@ pub fn decode_png(data: &[u8]) -> Result<Image, String> {
                     _ => return Err(bad()),
                 };
             }
-            b"PLTE" => palette = body.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            b"PLTE" => palette = body.as_chunks::<3>().0.to_vec(),
             b"tRNS" => alpha = body.to_vec(),
             b"IDAT" => idat.extend_from_slice(body),
             b"IEND" => break,
@@ -364,7 +364,9 @@ mod imp {
                 let pixmap = typst_render::render(page, style.scale);
                 let pixels = pixmap
                     .data()
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|p| {
                         // tiny-skia keeps the colours premultiplied by alpha.
                         let a = p[3];

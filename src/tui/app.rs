@@ -570,6 +570,8 @@ pub struct App {
     pub typeset: bool,
     /// Typeset formulas drawn as pixel images in this frame (set while drawing).
     pub pictures: Vec<super::Picture>,
+    /// Pixels of a terminal cell (set by the event loop; a usual size until then).
+    pub cell_px: (u16, u16),
     /// Typeset formulas (their shape: alpha only) by formula and cell height;
     /// `None`: Typst could not set it.
     pub(crate) typeset_cache: HashMap<(String, u16), Option<std::rc::Rc<crate::typeset::Image>>>,
@@ -989,6 +991,7 @@ impl App {
             images_allowed: false,
             typeset: true,
             pictures: Vec::new(),
+            cell_px: (10, 20),
             typeset_cache: HashMap::new(),
             typeset_fit: HashMap::new(),
             typeset_preview: HashMap::new(),

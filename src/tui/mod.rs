@@ -80,6 +80,9 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
         app.caps.merge_lines(&text);
     }
     app.graphics = graphics::detect(|k| std::env::var(k).ok());
+    // Asked once and when the window changes: asking can take long (a
+    // process is started where the terminal does not say).
+    app.cell_px = cell_pixels();
     app.truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
     app.anim.enabled = std::env::var("HARDCALC_ANIMATIONS").map_or(true, |v| v != "0" && v != "off");
     let mut images = ImageState::default();
@@ -149,6 +152,7 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
                     app.on_paste(&text);
                     typed = true;
                 }
+                Event::Resize(..) => app.cell_px = cell_pixels(),
                 _ => {}
             }
             if app.quit || !event::poll(Duration::ZERO)? {
@@ -227,7 +231,7 @@ impl ImageState {
             }
             return Ok(false);
         }
-        let cell = cell_pixels();
+        let cell = app.cell_px;
         let mut h = std::collections::hash_map::DefaultHasher::new();
         let mut pdf_hash = 0;
         if let Some((slot, pdf)) = &page {
