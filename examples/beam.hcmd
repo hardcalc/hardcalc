@@ -14,7 +14,7 @@ Section properties from the profile table:
 ```hardcalc
 ## Bending check
 f_yk    = 235 N/mm²          ' yield strength S235
-gamma_M = 1.1
+γ_M     = 1.1
 L       = 5.0 m              ' span
 g_k     = 4.0 kN/m
 q_k     = 3.0 kN/m

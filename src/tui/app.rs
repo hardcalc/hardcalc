@@ -37,6 +37,8 @@ mod search;
 mod shape;
 mod sources;
 mod calc_dialogs;
+mod symbol_picker;
+pub use symbol_picker::{SymbolPicker, SymbolTarget};
 mod values;
 mod views;
 pub use functions_view::{FnRow, FN_COLS};
@@ -120,6 +122,8 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Hit {
     Tab(usize),
+    /// Character `n` of the list of special characters.
+    Symbol(usize),
     Cell(usize, usize),
     ColHeader(usize),
     RowHeader(usize),
@@ -471,6 +475,10 @@ pub struct App {
     /// Start of a possible `ESC ESC [ A` sequence (Alt+arrow in "Option as
     /// Meta" mode): time of the Esc, and whether `[` followed.
     esc_seq: Option<(Instant, bool)>,
+    /// The list of special characters (Ctrl+G while typing, `:symbol`).
+    pub symbols: Option<SymbolPicker>,
+    /// Characters picked from it, the last one first.
+    pub recent_symbols: Vec<String>,
     /// The focused window's view.
     pub view: View,
     /// The other window's view while the screen is split.
@@ -928,6 +936,8 @@ impl App {
             bands: true,
             levels: HashMap::new(),
             esc_seq: None,
+            symbols: None,
+            recent_symbols: Vec::new(),
             view: View::new(ViewKind::Table, 0),
             other: None,
             left_focused: true,
@@ -4910,6 +4920,9 @@ impl App {
         if self.library.is_some() {
             return self.key_library(key);
         }
+        if self.symbols.is_some() {
+            return self.key_symbols(key);
+        }
         if self.show_help {
             return self.key_help(key);
         }
@@ -4927,6 +4940,10 @@ impl App {
         }
         if self.preview.is_some() {
             return self.key_preview(key);
+        }
+        // Ctrl+G while typing: the list of special characters.
+        if !matches!(self.mode, Mode::Normal) && key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return self.open_symbols();
         }
         match self.mode {
             Mode::Normal => self.key_normal(key),
@@ -5177,6 +5194,7 @@ impl App {
             || self.paper_menu.is_some()
             || self.plot_dialog.is_some()
             || self.library.is_some()
+            || self.symbols.is_some()
     }
 
     /// The function key whose label is at `pos` and not hidden by a dialog.
@@ -5210,6 +5228,18 @@ impl App {
                     Some(Hit::ContextItem(i)) => self.choose_context(i),
                     _ => self.context = None,
                 }
+            }
+            return;
+        }
+        if self.symbols.is_some() {
+            match m.kind {
+                MouseEventKind::Down(_) => match self.hits.iter().rev().find(|(r, h)| r.contains(pos) && matches!(h, Hit::Symbol(_))).map(|(_, h)| *h) {
+                    Some(Hit::Symbol(i)) => self.pick_symbol(i),
+                    _ => self.symbols = None,
+                },
+                MouseEventKind::ScrollDown => self.key_symbols(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+                MouseEventKind::ScrollUp => self.key_symbols(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+                _ => {}
             }
             return;
         }
@@ -5442,7 +5472,7 @@ impl App {
                         self.fill_drag = Some(self.selection());
                         self.fill_to = None;
                     }
-                    Some(Hit::RowHeader(_) | Hit::File(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_) | Hit::ValueItem(_) | Hit::ValuesApply) => {}
+                    Some(Hit::RowHeader(_) | Hit::File(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_) | Hit::ValueItem(_) | Hit::ValuesApply | Hit::Symbol(_)) => {}
                     Some(Hit::Corner) => {
                         if matches!(self.mode, Mode::Edit { .. }) {
                             self.commit_edit(0, 0);
@@ -5856,6 +5886,8 @@ impl App {
             "calc" => self.show_helper(ViewKind::Calc),
             "plot" => self.open_plot_dialog(),
             "library" => self.open_library(),
+            "symbol" if args.is_empty() => self.open_symbols(),
+            "symbol" => self.insert_symbol_named(&args.join(" ")),
             "preview" => self.show_helper(ViewKind::CalcPreview),
             "formulas" => match args.first().and_then(|a| FormulaStyle::parse(a)) {
                 Some(st) => {
@@ -6357,20 +6389,30 @@ pub fn split_percent_at(body: Rect, x: u16) -> u16 {
 pub(crate) type Fitted = (std::rc::Rc<crate::typeset::Image>, u16);
 
 /// A line of the calculation sheet for printing: the calculation as text
-/// (the standard PDF fonts have no Greek letters, ≤ or ✓) and as Typst math.
+/// and as Typst math.
 fn calc_print_line(o: &crate::sheet::Out) -> print::CalcLine {
-    use crate::sheet::{self, expr::latin1, Out};
+    use crate::sheet::{self, Out};
     let failed = matches!(o, Out::Check { rel, sides: Ok((l, r)), .. } if !sheet::verdict(*rel, l, r).ok);
     let ok = sheet::problems(std::slice::from_ref(o)).is_empty();
     let math = match o {
         Out::Assign { .. } | Out::Show { .. } | Out::Def { .. } | Out::Check { .. } if ok => sheet::notation::line(sheet::notation::Lang::Typst, o),
         _ => None,
     };
+    let text = match o {
+        Out::Heading { text, .. } => text.clone(),
+        Out::Comment(c) => c.clone(),
+        _ => sheet::Render::default().body(o),
+    };
     print::CalcLine {
-        label: o.label().map(latin1),
-        text: latin1(&sheet::Render::default().body(o)),
+        label: o.label().map(str::to_string),
+        text,
         math,
-        comment: o.comment().map(latin1),
+        comment: o.comment().map(str::to_string),
         failed,
+        heading: match o {
+            Out::Heading { level, .. } => Some(*level),
+            _ => None,
+        },
+        note: matches!(o, Out::Comment(_)),
     }
 }

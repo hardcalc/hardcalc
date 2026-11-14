@@ -132,6 +132,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     slide(f, app, "plot", plot, 0, draw_plot_dialog);
     let library = app.library.as_ref().map(|_| 0);
     slide(f, app, "library", library, 0, draw_library);
+    let symbols = app.symbols.as_ref().map(|_| 0);
+    slide(f, app, "symbols", symbols, 0, draw_symbols);
     let dialog = app.file_dialog.as_ref().map(|_| 0);
     slide(f, app, "files", dialog, 0, draw_file_dialog);
     let confirm = app.confirm.as_ref().map(|_| 0);
@@ -329,6 +331,36 @@ fn draw_plot_dialog(f: &mut Frame, app: &mut App) {
 }
 
 /// The formula library (F6): pick a formula to insert.
+/// The list of special characters: the character, its name, its LaTeX
+/// name and ASCII spellings; typing narrows it.
+fn draw_symbols(f: &mut Frame, app: &mut App) {
+    let shown = app.symbols_shown();
+    let Some(mut p) = app.symbols.clone() else { return };
+    let area = f.area();
+    let title = if p.query.is_empty() { " special characters – type a name, \\le or <= ".to_string() } else { format!(" special characters: {}▏ ", p.query) };
+    let rect = centered_box(f, 64.min(area.width), (area.height * 3 / 4).clamp(8, 24), title, " ↑↓ · Enter inserts · Esc ".into());
+    let inner = rect.width.saturating_sub(2) as usize;
+    let body = rect.height.saturating_sub(2) as usize;
+    p.selected = p.selected.min(shown.len().saturating_sub(1));
+    if p.selected < p.scroll {
+        p.scroll = p.selected;
+    } else if body > 0 && p.selected >= p.scroll + body {
+        p.scroll = p.selected + 1 - body;
+    }
+    for (k, s) in shown.iter().enumerate().skip(p.scroll).take(body) {
+        let y = rect.y + 1 + (k - p.scroll) as u16;
+        let latex: Vec<String> = s.latex.iter().map(|l| format!("\\{l}")).collect();
+        let text = format!("  {}   {:<26} {:<16} {}", s.ch, s.name, latex.join(" "), s.ascii.join(" "));
+        let style = if k == p.selected { Style::new().reversed() } else { Style::new() };
+        f.buffer_mut().set_stringn(rect.x + 1, y, fit(&clip(&text, inner), inner, Align::Left), inner, style);
+        app.hits.push((Rect::new(rect.x + 1, y, inner as u16, 1), Hit::Symbol(k)));
+    }
+    if shown.is_empty() {
+        f.buffer_mut().set_stringn(rect.x + 2, rect.y + 1, "(no character matches)", inner - 1, Style::new().fg(Color::DarkGray));
+    }
+    app.symbols = Some(p);
+}
+
 fn draw_library(f: &mut Frame, app: &mut App) {
     let Some(mut d) = app.library.clone() else { return };
     let area = f.area();
@@ -1900,8 +1932,11 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect, helper: Option<&str>) {
             return;
         }
         Mode::Edit { .. } => {
-            let hint = "editing – Enter/Tab commit · Esc cancel";
-            f.buffer_mut().set_stringn(area.x, area.y, hint, area.width as usize, Style::new().fg(Color::Yellow));
+            let (hint, style) = match &app.message {
+                Some(m) if m.error => (m.text.clone(), Style::new().fg(Color::LightRed).bold()),
+                _ => ("editing – Enter/Tab commit · Esc cancel · Ctrl+G special characters (α ≤ ² →)".to_string(), Style::new().fg(Color::Yellow)),
+            };
+            f.buffer_mut().set_stringn(area.x, area.y, hint, area.width as usize, style);
             return;
         }
         Mode::Normal => {}

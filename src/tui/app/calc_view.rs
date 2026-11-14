@@ -25,7 +25,8 @@ pub enum CalcRow {
 }
 
 /// ASCII input as typed in a terminal, written the readable way:
-/// `*` → ·, `<=` → ≤, `>=` → ≥, `->` → →, `gamma_M` → γ_M.
+/// `*` → ·, `<=` → ≤, `>=` → ≥, `->` → →. Names stay as typed (also
+/// `\gamma_M`, which the sheet reads as γ_M).
 pub fn tidy_input(line: &str) -> String {
     // The label is text: `[beta check]` stays.
     let (label, line) = line.split_at(sheet::expr::label_prefix(line));
@@ -38,7 +39,7 @@ pub fn tidy_input(line: &str) -> String {
     let mut quoted = false;
     let flush = |word: &mut String, out: &mut String| {
         if !word.is_empty() {
-            out.push_str(&sheet::expr::greek(word));
+            out.push_str(word);
             word.clear();
         }
     };
@@ -298,8 +299,17 @@ impl App {
             (Some(CalcRow::Line { .. }), _) => match self.calc_out(r) {
                 Some(out) => {
                     match &out {
-                        sheet::Out::Heading { .. } => style.bold = true,
-                        sheet::Out::Comment(_) => style.fg = Some(Color::Named("darkgray".into())),
+                        // Headings and comment lines without their `##` and `'`.
+                        sheet::Out::Heading { level, text } => {
+                            style.bold = true;
+                            style.underline = *level <= 2;
+                            return CellView { text: text.clone(), align: Align::Left, style, error, violation: false };
+                        }
+                        sheet::Out::Comment(c) => {
+                            style.fg = Some(Color::Named("darkgray".into()));
+                            style.italic = true;
+                            return CellView { text: c.clone(), align: Align::Left, style, error, violation: false };
+                        }
                         _ if !sheet::problems(std::slice::from_ref(&out)).is_empty() => error = true,
                         sheet::Out::Def { .. } | sheet::Out::Plot { .. } => style.fg = Some(Color::Named("cyan".into())),
                         sheet::Out::Check { rel, sides: Ok((l, r)), .. } => {
@@ -440,6 +450,7 @@ impl App {
             }
         };
         let line = parts.line();
+        let code = Parts::of(&line).code;
         match row {
             Some(CalcRow::Line { block, line: i }) => self.with_doc(|doc| {
                 if let Block::Code { body, .. } = &mut doc.blocks[block] {
@@ -451,6 +462,13 @@ impl App {
         }
         if let Some(p) = self.calc_problem() {
             self.error(p);
+        } else if c == INPUT
+            && let Some((word, g)) = sheet::expr::spelled_greek(&code)
+        {
+            // No longer turned into the letter: a hint, in case it was meant.
+            let head = word.split('_').next().unwrap_or("");
+            let tail = &word[head.len()..];
+            self.info(format!("{word} is a name of its own – for {g}{tail} write \\{head}{tail} or press Ctrl+G"));
         }
     }
 
@@ -516,9 +534,10 @@ mod tests {
     #[test]
     fn ascii_input_is_tidied() {
         assert_eq!(tidy_input("q_d = 1,35*g_k + 1.5*q_k"), "q_d = 1.35·g_k + 1.5·q_k");
-        assert_eq!(tidy_input("n_Ed <= f_d / gamma_M"), "n_Ed ≤ f_d / γ_M");
+        assert_eq!(tidy_input("n_Ed <= f_d / gamma_M"), "n_Ed ≤ f_d / gamma_M", "names stay as typed");
+        assert_eq!(tidy_input("n_Ed <= f_d / \\gamma_M"), "n_Ed ≤ f_d / \\gamma_M");
         assert_eq!(tidy_input("s = N/A -> N/mm^2 ' x*y"), "s = N/A → N/mm^2 ' x*y");
         assert_eq!(tidy_input("a = \"My*sheet\"!B2"), "a = \"My*sheet\"!B2");
-        assert_eq!(tidy_input("[beta check, 1,5] b = 1,5*beta"), "[beta check, 1,5] b = 1.5·β");
+        assert_eq!(tidy_input("[beta check, 1,5] b = 1,5*beta"), "[beta check, 1,5] b = 1.5·beta");
     }
 }

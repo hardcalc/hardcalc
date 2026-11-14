@@ -206,6 +206,10 @@ pub struct CalcLine {
     pub comment: Option<String>,
     /// A check that fails: in red.
     pub failed: bool,
+    /// A heading of this level (`## Loads`): `text` is its title.
+    pub heading: Option<usize>,
+    /// A line of comment only: `text` is the comment.
+    pub note: bool,
 }
 
 /// A typeset formula on a page: from line `line` and character column
@@ -684,8 +688,41 @@ fn calc_lines(lines: &[CalcLine], fs: f32, cols: usize, body: usize, page: &mut 
     let label_w = lines.iter().filter_map(|l| l.label.as_ref()).map(|l| l.width() + 3).max().unwrap_or(0).min(cols / 3);
     let label_span = |l: &CalcLine| l.label.as_ref().map(|t| Span { col: 0, text: fit(&format!("[{t}]"), label_w.saturating_sub(1), Align::Left), style: gray.clone() });
     let new_page = |page: &mut Vec<Line>, pages: &mut Vec<Vec<Line>>| pages.push(std::mem::take(page));
+    let bold = SpanStyle { bold: true, ..SpanStyle::default() };
     for (l, img) in lines.iter().zip(images) {
         let text_style = if l.failed { red.clone() } else { gray.clone() };
+        // A heading: bold, a blank line before it, kept with the line after it.
+        if l.heading.is_some() {
+            if !page.is_empty() && page.len() + 3 > body {
+                new_page(page, pages);
+            }
+            if page.last().is_some_and(|x| x.kind != LineKind::Blank) {
+                page.push(Line::blank());
+            }
+            for part in crate::text::wrap_plain(&l.text, cols) {
+                page.push(Line::text(LineKind::Title, part, bold.clone()));
+            }
+            continue;
+        }
+        if l.note {
+            for part in crate::text::wrap_plain(&l.text, cols) {
+                if page.len() >= body {
+                    new_page(page, pages);
+                }
+                page.push(Line::text(LineKind::Row, part, note.clone()));
+            }
+            continue;
+        }
+        // An empty line of the sheet: one blank line, also before a heading.
+        if l.text.is_empty() && l.label.is_none() && l.comment.is_none() {
+            if page.len() >= body {
+                new_page(page, pages);
+            }
+            if !page.is_empty() && page.last().is_some_and(|x| x.kind != LineKind::Blank) {
+                page.push(Line::blank());
+            }
+            continue;
+        }
         let Some(img) = img else {
             // As text: the label, the calculation, the comment.
             let mut text = match &l.label {
@@ -990,47 +1027,37 @@ pub fn print_bg(c: &Color) -> Option<(u8, u8, u8)> {
 
 // ---------------------------------------------------------------- PDF
 
-/// Maps a char to the WinAnsi encoding of the standard PDF fonts.
-fn win_ansi(c: char) -> u8 {
-    match c as u32 {
-        0x20..=0x7e | 0xa0..=0xff => c as u32 as u8,
-        _ => match c {
-            '€' => 0x80,
-            '‚' => 0x82,
-            '„' => 0x84,
-            '…' => 0x85,
-            '‘' => 0x91,
-            '’' => 0x92,
-            '“' => 0x93,
-            '”' => 0x94,
-            '•' => 0x95,
-            '–' => 0x96,
-            '—' => 0x97,
-            '™' => 0x99,
-            // Superscripts beyond ¹²³ are not in WinAnsi; print plain digits.
-            '⁰' => b'0',
-            '⁴'..='⁹' => b'4' + (c as u32 - '⁴' as u32) as u8,
-            _ => b'?',
-        },
-    }
+/// A text string for the document information: UTF-16 with its byte-order mark.
+fn info_string(s: &str) -> String {
+    let units: String = s.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    format!("<FEFF{units}>")
 }
 
-fn pdf_string(s: &str) -> Vec<u8> {
-    let mut out = vec![b'('];
-    for c in s.chars() {
-        let b = win_ansi(c);
-        if matches!(b, b'(' | b')' | b'\\') {
-            out.push(b'\\');
-        }
-        out.push(b);
-    }
-    out.push(b')');
-    out
+/// What the pages of a PDF use besides their content: the glyphs of the
+/// font and the pictures (by page).
+#[derive(Default)]
+struct Res {
+    used: crate::pdf_font::Used,
+    images: Vec<std::sync::Arc<crate::typeset::Image>>,
 }
 
-/// The content stream of page `index`; the pictures it shows are added to
-/// `images` and drawn as `/Im<n>` by their place there.
-fn page_content(layout: &Layout, index: usize, images: &mut Vec<std::sync::Arc<crate::typeset::Image>>) -> Vec<u8> {
+/// Text in the font's style at (`x`, `y`): squeezed a little, so each
+/// character takes exactly the cell the layout counts with.
+fn show(out: &mut Vec<u8>, used: &mut crate::pdf_font::Used, (bold, italic): (bool, bool), fs: f32, color: (u8, u8, u8), (x, y): (f32, f32), text: &str) {
+    let style = crate::pdf_font::style(bold, italic);
+    let squeeze = 100.0 * CHAR_W * 1000.0 / crate::pdf_font::cell_width();
+    out.extend(format!("BT {} rg {squeeze:.2} Tz {x:.2} {y:.2} Td", rgb(color)).bytes());
+    // Runs in another style go on where the one before ended.
+    for (s, glyphs) in crate::pdf_font::encode(style, text, used) {
+        out.extend(format!(" /F{} {fs:.2} Tf {glyphs} Tj", s + 1).bytes());
+    }
+    out.extend(b" ET\n");
+}
+
+/// The content stream of page `index`; the glyphs it uses are noted in
+/// `res`, the pictures it shows added there and drawn as `/Im<n>` by their
+/// place in it.
+fn page_content(layout: &Layout, index: usize, res: &mut Res) -> Vec<u8> {
     let page = &layout.pages[index];
     let fs = layout.font_size;
     let lh = LINE_H * fs;
@@ -1054,30 +1081,12 @@ fn page_content(layout: &Layout, index: usize, images: &mut Vec<std::sync::Arc<c
                 let x = MARGIN + span.col as f32 * cw;
                 out.extend(format!("0.9 g {:.2} {:.2} {:.2} {:.2} re f\n", x, top - lh, span.text.width() as f32 * cw, lh).bytes());
             }
-            let font = match (span.style.bold, span.style.italic) {
-                (false, false) => "F1",
-                (true, false) => "F2",
-                (false, true) => "F3",
-                (true, true) => "F4",
-            };
-            let (r, g, b) = span.style.color.unwrap_or((0, 0, 0));
-            out.extend(
-                format!(
-                    "BT /{font} {fs:.2} Tf {:.3} {:.3} {:.3} rg {:.2} {:.2} Td ",
-                    r as f32 / 255.0,
-                    g as f32 / 255.0,
-                    b as f32 / 255.0,
-                    MARGIN + span.col as f32 * cw,
-                    baseline
-                )
-                .bytes(),
-            );
-            out.extend(pdf_string(&span.text));
-            out.extend(b" Tj ET\n");
+            let color = span.style.color.unwrap_or((0, 0, 0));
+            show(&mut out, &mut res.used, (span.style.bold, span.style.italic), fs, color, (MARGIN + span.col as f32 * cw, baseline), &span.text);
         }
     }
     for g in &layout.graphics[index] {
-        chart_ops(&mut out, layout, g);
+        chart_ops(&mut out, &mut res.used, layout, g);
     }
     for p in layout.pictures.get(index).into_iter().flatten() {
         // Centred from top to bottom in the lines it takes.
@@ -1085,8 +1094,8 @@ fn page_content(layout: &Layout, index: usize, images: &mut Vec<std::sync::Arc<c
         let top = layout.height - MARGIN - p.line as f32 * lh;
         let y = top - n * lh + (n * lh - p.height) / 2.0;
         let x = MARGIN + p.col as f32 * cw;
-        out.extend(format!("q {:.3} 0 0 {:.3} {x:.2} {y:.2} cm /Im{} Do Q\n", p.width, p.height, images.len()).bytes());
-        images.push(p.image.clone());
+        out.extend(format!("q {:.3} 0 0 {:.3} {x:.2} {y:.2} cm /Im{} Do Q\n", p.width, p.height, res.images.len()).bytes());
+        res.images.push(p.image.clone());
     }
     out
 }
@@ -1119,11 +1128,8 @@ fn rgb(c: (u8, u8, u8)) -> String {
     format!("{:.3} {:.3} {:.3}", c.0 as f32 / 255.0, c.1 as f32 / 255.0, c.2 as f32 / 255.0)
 }
 
-fn text_op(out: &mut Vec<u8>, x: f32, y: f32, fs: f32, color: (u8, u8, u8), bold: bool, text: &str) {
-    let font = if bold { "F2" } else { "F1" };
-    out.extend(format!("BT /{font} {fs:.2} Tf {} rg {x:.2} {y:.2} Td ", rgb(color)).bytes());
-    out.extend(pdf_string(text));
-    out.extend(b" Tj ET\n");
+fn text_op(out: &mut Vec<u8>, used: &mut crate::pdf_font::Used, at: (f32, f32), fs: f32, color: (u8, u8, u8), bold: bool, text: &str) {
+    show(out, used, (bold, false), fs, color, at, text);
 }
 
 fn rect_op(out: &mut Vec<u8>, color: (u8, u8, u8), x: f32, y: f32, w: f32, h: f32) {
@@ -1152,7 +1158,7 @@ fn tint(c: (u8, u8, u8)) -> (u8, u8, u8) {
 
 /// Draws a chart into its box. The geometry follows the terminal preview
 /// (same character grid), drawn as vectors.
-fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
+fn chart_ops(out: &mut Vec<u8>, glyphs: &mut crate::pdf_font::Used, layout: &Layout, g: &Graphic) {
     let fs = layout.font_size;
     let cw = CHAR_W * fs;
     let lh = LINE_H * fs;
@@ -1164,14 +1170,14 @@ fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
     let baseline = |l: usize| line_y(l) - fs;
     let gray = (110, 110, 110);
 
-    text_op(out, left, baseline(0), fs, (0, 0, 0), true, &format!("{} ({})", d.title, d.kind.name()));
+    text_op(out, glyphs, (left, baseline(0)), fs, (0, 0, 0), true, &format!("{} ({})", d.title, d.kind.name()));
     if d.series.len() > 1 {
         let mut x = left + cols as f32 * cw;
         for (i, s) in d.series.iter().enumerate().rev() {
             let item = format!("{} ", s.name);
             x -= (item.width() + 2) as f32 * cw;
             rect_op(out, SERIES[i % SERIES.len()], x, baseline(0), cw, fs * 0.7);
-            text_op(out, x + 1.5 * cw, baseline(0), fs, (0, 0, 0), false, &item);
+            text_op(out, glyphs, (x + 1.5 * cw, baseline(0)), fs, (0, 0, 0), false, &item);
         }
     }
     if d.categories.is_empty() {
@@ -1191,7 +1197,7 @@ fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
                 if l0 + n_series > g.height {
                     break;
                 }
-                text_op(out, left, baseline(l0), fs, (0, 0, 0), false, &fit(cat, label_w, Align::Left));
+                text_op(out, glyphs, (left, baseline(l0)), fs, (0, 0, 0), false, &fit(cat, label_w, Align::Left));
                 for (j, s) in d.series.iter().enumerate() {
                     let Some(v) = s.values.get(i).copied().flatten() else { continue };
                     let len = (v.abs() / (hi - lo)) as f32 * bar_w;
@@ -1199,12 +1205,12 @@ fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
                     let y = line_y(l0 + j) - lh * 0.85;
                     rect_op(out, SERIES[j % SERIES.len()], x0, y, len * cw, lh * 0.7);
                     let tx = x0 + len * cw + cw;
-                    text_op(out, tx, baseline(l0 + j), fs, (0, 0, 0), false, &d.fmt(v, false));
+                    text_op(out, glyphs, (tx, baseline(l0 + j)), fs, (0, 0, 0), false, &d.fmt(v, false));
                 }
             }
             let used = d.categories.len() * per_category + 1;
             if !d.unit.is_none() && used < g.height {
-                text_op(out, left + (label_w + 1) as f32 * cw, baseline(used), fs, gray, false, &format!("values in {}", d.unit));
+                text_op(out, glyphs, (left + (label_w + 1) as f32 * cw, baseline(used)), fs, gray, false, &format!("values in {}", d.unit));
             }
         }
         ChartType::Line | ChartType::Area | ChartType::Scatter => {
@@ -1228,7 +1234,7 @@ fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
             path_op(out, gray, 0.6, &[(x0, y_top), (x0, y_bot), (x1, y_bot)], false);
             for (k, l) in labels.iter().enumerate() {
                 let y = [lo, (lo + hi) / 2.0, hi][k];
-                text_op(out, left, py(y) - fs * 0.35, fs, gray, false, l);
+                text_op(out, glyphs, (left, py(y) - fs * 0.35), fs, gray, false, l);
             }
             let n = d.categories.len();
             let x_labels: Vec<(f64, String)> = match &d.xs {
@@ -1238,7 +1244,7 @@ fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
             for (x, l) in x_labels {
                 let w = l.width() as f32 * cw;
                 let tx = (px(x) - w / 2.0).clamp(x0, x1 - w);
-                text_op(out, tx, baseline(g.height - 1), fs, gray, false, &l);
+                text_op(out, glyphs, (tx, baseline(g.height - 1)), fs, gray, false, &l);
             }
             for (j, s) in d.series.iter().enumerate() {
                 let color = SERIES[j % SERIES.len()];
@@ -1278,14 +1284,16 @@ fn chart_ops(out: &mut Vec<u8>, layout: &Layout, g: &Graphic) {
 
 /// Serializes the layout as a PDF document.
 pub fn to_pdf(layout: &Layout, title: &str) -> Vec<u8> {
+    let mut used = crate::pdf_font::Used::default();
     let pages = (0..layout.pages.len())
         .map(|i| {
-            let mut images = Vec::new();
-            let content = page_content(layout, i, &mut images);
-            (layout.width, layout.height, content, images)
+            let mut res = Res { used: std::mem::take(&mut used), images: Vec::new() };
+            let content = page_content(layout, i, &mut res);
+            used = res.used;
+            (layout.width, layout.height, content, res.images)
         })
         .collect();
-    assemble(pages, title)
+    assemble(pages, &used, title)
 }
 
 /// Gap between the pages of an overview sheet, in points.
@@ -1304,7 +1312,7 @@ pub fn sheet_size(layout: &Layout, across: usize, down: usize) -> (f32, f32) {
 pub fn to_pdf_sheet(layout: &Layout, first: usize, across: usize, down: usize, title: &str) -> Vec<u8> {
     let (w, h) = sheet_size(layout, across, down);
     let mut out: Vec<u8> = format!("0.35 g 0 0 {w:.2} {h:.2} re f\n").into_bytes();
-    let mut images = Vec::new();
+    let mut res = Res::default();
     for k in 0..across * down {
         let index = first + k;
         if index >= layout.pages.len() {
@@ -1313,36 +1321,32 @@ pub fn to_pdf_sheet(layout: &Layout, first: usize, across: usize, down: usize, t
         let x = SHEET_GAP + (k % across) as f32 * (layout.width + SHEET_GAP);
         let y = h - (SHEET_GAP + (k / across + 1) as f32 * (layout.height + SHEET_GAP) - SHEET_GAP);
         out.extend(format!("q 1 0 0 1 {x:.2} {y:.2} cm\n").bytes());
-        out.extend(page_content(layout, index, &mut images));
+        out.extend(page_content(layout, index, &mut res));
         out.extend(b"Q\n");
     }
-    assemble(vec![(w, h, out, images)], title)
+    assemble(vec![(w, h, out, res.images)], &res.used, title)
 }
 
 /// A sheet for [`assemble`]: width, height, content stream and the pictures it draws.
 type Sheet = (f32, f32, Vec<u8>, Vec<std::sync::Arc<crate::typeset::Image>>);
 
-/// A PDF file from pages.
-fn assemble(sheets: Vec<Sheet>, title: &str) -> Vec<u8> {
+/// A PDF file from pages that use the glyphs `used`.
+fn assemble(sheets: Vec<Sheet>, used: &crate::pdf_font::Used, title: &str) -> Vec<u8> {
     let mut objects: Vec<Vec<u8>> = Vec::new();
-    // 1 catalog, 2 pages, 3–6 fonts, 7 info, then a page and its content per
-    // page, then the pictures.
+    // 1 catalog, 2 pages, 3 info, the fonts in use, then a page and its
+    // content per page, then the pictures.
+    let (font_objects, fonts) = crate::pdf_font::objects(used, 4);
+    let first_page = 4 + font_objects.len();
     let n = sheets.len();
-    let page_ids: Vec<usize> = (0..n).map(|i| 8 + 2 * i).collect();
-    let mut next_image = 8 + 2 * n;
+    let page_ids: Vec<usize> = (0..n).map(|i| first_page + 2 * i).collect();
+    let mut next_image = first_page + 2 * n;
     let mut image_objects: Vec<Vec<u8>> = Vec::new();
     objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
     let kids: Vec<String> = page_ids.iter().map(|id| format!("{id} 0 R")).collect();
     objects.push(format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")).into_bytes());
-    for font in ["Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"] {
-        objects.push(
-            format!("<< /Type /Font /Subtype /Type1 /BaseFont /{font} /Encoding /WinAnsiEncoding >>").into_bytes(),
-        );
-    }
-    let mut info = b"<< /Producer (hardcalc) /Title ".to_vec();
-    info.extend(pdf_string(title));
-    info.extend(b" >>");
-    objects.push(info);
+    objects.push(format!("<< /Producer (hardcalc) /Title {} >>", info_string(title)).into_bytes());
+    objects.extend(font_objects);
+    let font_list: String = fonts.iter().map(|(name, id)| format!("/{name} {id} 0 R ")).collect();
     for (&page_id, (width, height, content, images)) in page_ids.iter().zip(sheets) {
         let mut xobjects = String::new();
         for (k, img) in images.iter().enumerate() {
@@ -1354,7 +1358,7 @@ fn assemble(sheets: Vec<Sheet>, title: &str) -> Vec<u8> {
         objects.push(
             format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.2} {height:.2}] \
-                 /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >>{xobjects} >> /Contents {} 0 R >>",
+                 /Resources << /Font << {font_list}>>{xobjects} >> /Contents {} 0 R >>",
                 page_id + 1
             )
             .into_bytes(),
@@ -1379,7 +1383,7 @@ fn assemble(sheets: Vec<Sheet>, title: &str) -> Vec<u8> {
     for off in offsets {
         pdf.extend(format!("{off:010} 00000 n \n").bytes());
     }
-    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R /Info 7 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
     pdf
 }
 
@@ -1439,9 +1443,10 @@ mod tests {
         assert!(pdf.ends_with(b"%%EOF\n"));
         let text = String::from_utf8_lossy(&pdf);
         assert!(text.contains(&format!("/Count {}", l.pages.len())));
-        assert!(text.contains("/BaseFont /Courier-Bold"));
-        // `€` is encoded as WinAnsi 0x80.
-        assert!(pdf.windows(9).any(|w| w == b"(Budget \x80"));
+        // The embedded Unicode font, bold for the titles; the title in UTF-16.
+        assert!(text.contains("/Subtype /Type0") && text.contains("/FontFile2") && text.contains("/ToUnicode"));
+        assert!(text.contains("+DejaVuSansMono-Bold"));
+        assert!(text.contains("/Title <FEFF004200750064006700650074002020AC>"), "{}", &text[..400.min(text.len())]);
         // xref offsets point at the objects.
         let xref = text.rfind("startxref\n").unwrap();
         let start: usize = text[xref + 10..].lines().next().unwrap().parse().unwrap();
@@ -1461,7 +1466,13 @@ mod tests {
     }
 
     #[test]
-    fn escapes_and_unknown_chars() {
-        assert_eq!(pdf_string("a(b)\\ é ⚠"), b"(a\\(b\\)\\\\ \xe9 ?)".to_vec());
+    fn unicode_text_in_the_pdf() {
+        let lines = vec!["γ_M = 1.1 ≤ 2 ✓ → Δ".to_string()];
+        let l = paginate("", &[PrintItem::Code(lines)], &PageSetup::default(), "");
+        let pdf = to_pdf(&l, "t");
+        let text = String::from_utf8_lossy(&pdf);
+        // Only the fonts in use: the code is regular, the footer too.
+        assert!(text.contains("/F1 ") && !text.contains("/F4 "), "only fonts in use");
+        assert!(pdf.len() < 60_000, "a subset, not the whole font: {}", pdf.len());
     }
 }

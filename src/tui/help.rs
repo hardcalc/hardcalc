@@ -39,6 +39,7 @@ pub const PAGES: &[Page] = &[
             ("Ctrl+C / Ctrl+X / Ctrl+V", "copy / cut / paste (also tab-separated text from other apps)"),
             ("Ctrl+Z / Ctrl+Y", "undo / redo – also jumps: back to where you came from, on again"),
             ("Ctrl+D / Ctrl+R, drag ▪", "fill down / right · continue a series (1, 2 → 3; Jan → Feb)"),
+            ("Ctrl+G (typing), :symbol", "special characters: type a name (Delta), a LaTeX name (\\le) or an ASCII spelling (<=, ->), Enter inserts"),
             ("F7, F7 again", "sort the rows by the current column ascending, then descending (selection: only its rows)"),
             (":sortcol", "sort the column on its own (selection: each of its columns)"),
             (":sort Status, Amount desc", "sort by several columns: the first decides, the next break ties"),

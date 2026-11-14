@@ -167,6 +167,7 @@ layer and column names.
 | `+` row / `+` column             | input there appends a new row / column                        |
 | Del / Backspace                  | clear the selection                                           |
 | Ctrl+D / Ctrl+R                  | fill the first row / column of the selection into the rest (one cell: from above / the left); formula references follow, `$B$1` stays |
+| Ctrl+G (while typing)            | special characters: Greek letters, ≤ ≠ ± √ ∞, ² ₁, → ⇒, ✓, – … (see *Special characters*) |
 | drag the handle **▪** of the selection, `:autofill B10` | continue a series: numbers (1, 2 → 3, 4), dates, “Item 1”, month and weekday names; formulas as with Ctrl+D |
 | Ctrl+C / Ctrl+X / Ctrl+V         | copy / cut / paste (also tab-separated from Excel and the like) |
 | Ctrl+Z / Ctrl+Y                  | undo / redo                                                   |
@@ -309,7 +310,7 @@ the result. Values from the tables are read through cell references:
 ```hardcalc
 ## Bending check
 f_yk    = 235 N/mm²          ' yield strength
-gamma_M = 1.1
+γ_M     = 1.1                ' or \gamma_M
 M_Ed    = 30.9 kNm
 W_y     = Profiles!B2        ' value from the table
 σ_Ed    = M_Ed / W_y -> N/mm²
@@ -333,7 +334,11 @@ the way to the result (**Calculation**) and **Comment**. A name labels a
 line – `[Bending] σ_Ed <= f_yd` in the file – and stands before it when
 printed and in the report; the comment is the `' …` at the end of the line.
 Del in Name or Comment clears it, elsewhere it deletes the line. ASCII input
-is rewritten (`gamma_M` → γ_M, `*` → ·, `<=` → ≤).
+is rewritten (`*` → ·, `<=` → ≤). Greek letters come from **Ctrl+G** (see
+*Special characters*) or are written by their LaTeX name: `\gamma_M` is
+the same name as `γ_M` and stays in the file as typed. A spelled name like
+`gamma_M` is a name of its own (hardcalc says so when you type one); only
+`pi` is the constant π.
 
 More in a sheet:
 
@@ -377,6 +382,30 @@ with typeset formulas through Typst (`<name>.report.pdf`; with the extension
 `.typ` the Typst source). hardcalc brings the Typst compiler along when built
 with `cargo install hardcalc --features typst`; otherwise the program
 `typst` is used if installed.
+
+### Special characters
+
+**Ctrl+G** while typing – in a cell, the calculation sheet or the command
+line – opens the list of special characters: Greek letters, relations and
+operators (≤ ≥ ≠ ≈ ± · × √ ∞ ∑ ∫ ∂), raised and lowered digits (² ³ ⁻¹ ₁),
+arrows (→ ⇒ ↔), units and marks (° µ ‰ € ✓) and typographic characters
+(– — … „ “). Type part of the name (`Delta`, `less`), its LaTeX name
+(`\le`, `\varphi`) or an ASCII spelling (`<=`, `<>`, `=>`, `->`, `+-`,
+`^2`), Enter inserts it at the cursor; Esc closes the list and you go on
+typing. The characters picked last are listed first. Outside of typing,
+`:symbol` (menu *Insert → Symbol…*) opens the current cell with the
+character at its end, `:symbol Delta` does so without the list. The file
+holds the character itself (UTF-8).
+
+LaTeX may be written instead and stays in the file as typed:
+
+- in the **calculation sheet** a name like `\gamma_M` is the same as `γ_M`
+  (see *Calculation sheets*);
+- in **Markdown text** math goes between dollar signs, as GitHub shows it:
+  `$\sigma_d \le f_{yd}$` is shown and printed as σ_d ≤ f_yd. A `$` opens
+  only before a non-space and closes only after one, so `$5 and $10` stays
+  text; `\$` is a dollar sign;
+- in **table cells** it is text like any other.
 
 ### Formatting
 
@@ -626,6 +655,10 @@ The scope **whole document** prints the file as a flow layout: headings,
 text with live values `{=…}`, tables, charts, comments as footnotes. What is
 visible is printed; long tables repeat their header, tables that are too
 wide are scaled down or split into column blocks.
+
+The PDF uses the font DejaVu Sans Mono and embeds the characters it needs,
+so Greek letters, `≤`, `✓`, arrows and other Unicode characters print as
+they are (license of the font: [assets/fonts/THIRD-PARTY-FONTS.txt](assets/fonts/THIRD-PARTY-FONTS.txt)).
 
 The **image preview** (i) shows the real PDF page – sharp in terminals with
 a graphics protocol (Kitty, Ghostty, iTerm2, WezTerm), otherwise (e.g. macOS
@@ -877,4 +910,5 @@ report security problems in [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The PDF font DejaVu Sans Mono comes with its
+own license: [assets/fonts/THIRD-PARTY-FONTS.txt](assets/fonts/THIRD-PARTY-FONTS.txt).
