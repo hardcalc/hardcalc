@@ -41,6 +41,33 @@ fn valid_name(s: &str) -> bool {
 }
 
 impl App {
+    /// The help below the window while a formula is typed (at most `max`
+    /// lines; `None`: no formula is typed). In tables a formula starts with
+    /// `=`; in the calculation sheet the input column holds one.
+    pub fn formula_help(&self, max: usize) -> Option<Vec<crate::tui::formula_help::Line>> {
+        let super::Mode::Edit { buf, cursor } = &self.mode else { return None };
+        let table = self.view.kind == ViewKind::Table && buf.trim_start().starts_with('=');
+        let calc = self.calc_view() && self.view.cursor.1 == super::calc_view::INPUT;
+        if !table && !calc {
+            return None;
+        }
+        let own: Vec<crate::tui::formula_help::Func> = self
+            .function_rows()
+            .into_iter()
+            .filter_map(|r| match r {
+                FnRow::User { def, .. } => Some(crate::tui::formula_help::Func {
+                    signature: format!("{}({})", def.name, def.params.join("; ")),
+                    desc: def.description.unwrap_or_else(|| format!("= {}", def.body)),
+                    name: def.name,
+                }),
+                _ => None,
+            })
+            .collect();
+        let funcs = crate::tui::formula_help::all_functions(&own);
+        // The short reference is for table formulas; the sheet has its own hint.
+        Some(crate::tui::formula_help::help(buf, *cursor, &funcs, max, table))
+    }
+
     pub fn functions_view(&self) -> bool {
         self.view.kind == ViewKind::Functions
     }

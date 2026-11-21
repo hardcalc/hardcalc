@@ -113,15 +113,21 @@ is enough. Printing from hardcalc uses `lp` (macOS, Linux).
 ## Quick start
 
 ```bash
-hardcalc                           # new, empty document with a playground
+hardcalc                           # the document used last (none yet: a new one with a playground)
 hardcalc examples/budget.hcmd      # open
 hardcalc new.hcmd                  # new file (created when saving)
 hardcalc book.xlsx                 # import an Excel, LibreOffice or CSV file and open it
 ```
 
-A new document asks for a file name on the first **F2** (`.hcmd` is
-added). On the command line, **Tab** completes file names, e.g. for `:e`,
-`:append`, `:w` and `:export`.
+A new document opens the save dialog on the first **F2**: choose the folder
+in the list (sidebar with favourites, locations and the recent folders), type
+the file name below it (`.hcmd` is added) and press Enter; an existing file is
+replaced only after a second Enter. Menu *File → Save as…* (`:saveas`) opens
+the same dialog for a document that has a name already. On the command line,
+**Tab** completes file names, e.g. for `:e`, `:append`, `:w` and `:export`.
+
+Every document opens again at the table and cell it was left at; `hardcalc`
+without a file opens the document used last (`:new` starts a new one).
 
 Typing writes into the cell, **F2** saves, **F10** quits, **F1** shows the
 help – pages for basics, views, layers, layouts & printing, commands, files &
@@ -167,6 +173,7 @@ layer and column names.
 | `+` row / `+` column             | input there appends a new row / column                        |
 | Del / Backspace                  | clear the selection                                           |
 | Ctrl+D / Ctrl+R                  | fill the first row / column of the selection into the rest (one cell: from above / the left); formula references follow, `$B$1` stays |
+| typing a formula (`=`)           | help below the table: the function at the cursor with the current argument marked, the functions a started name may become (also your own and other names like `summe`), else references and operators |
 | Ctrl+G (while typing)            | special characters: Greek letters, ≤ ≠ ± √ ∞, ² ₁, → ⇒, ✓, – … (see *Special characters*) |
 | drag the handle **▪** of the selection, `:autofill B10` | continue a series: numbers (1, 2 → 3, 4), dates, “Item 1”, month and weekday names; formulas as with Ctrl+D |
 | Ctrl+C / Ctrl+X / Ctrl+V         | copy / cut / paste (also tab-separated from Excel and the like) |
@@ -820,6 +827,7 @@ For power users; the help (F1) lists them all.
 | Command | Effect |
 |---|---|
 | `:w [file]`, `:q`, `:q!`, `:wq` | save / quit |
+| `:saveas` | save dialog: folder and file name |
 | `:B5` | go to a cell |
 | `:sort [column] [desc]` | sort (without arguments: the current column, again: descending) |
 | `:filter [Column [condition]]`, `:filter off [Column]` | column filter: only rows that meet the condition (without one: the value at the cursor); `off` removes it |

@@ -15,6 +15,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub enum Purpose {
     Open,
     Append,
+    /// Saving: a folder is chosen in the list and the file name typed below it.
+    Save,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +150,12 @@ pub struct FileDialog {
     examples: Option<PathBuf>,
     /// Chosen order (key, descending); `None`: by name, recent files by use.
     sort: Option<(SortKey, bool)>,
+    /// Saving: the file name typed (it takes the keys the quick search takes otherwise).
+    pub name: String,
+    /// Saving: the extension a name without one gets (`hcmd`).
+    extension: &'static str,
+    /// Saving: the file that exists already; Enter again replaces it.
+    pub overwrite: Option<PathBuf>,
 }
 
 impl FileDialog {
@@ -172,6 +180,9 @@ impl FileDialog {
             before_recent: PathBuf::new(),
             examples: None,
             sort: None,
+            name: String::new(),
+            extension: "",
+            overwrite: None,
         };
         probe::start(std::time::Duration::from_millis(150));
         d.take_places();
@@ -191,6 +202,13 @@ impl FileDialog {
         self
     }
 
+    /// Saving: the name to start with and the extension added to a name without one.
+    pub fn with_name(mut self, name: &str, extension: &'static str) -> FileDialog {
+        self.name = name.to_string();
+        self.extension = extension;
+        self
+    }
+
     /// Offers the folder with the examples as a place of its own, below the locations.
     pub fn with_examples(mut self, dir: Option<PathBuf>) -> FileDialog {
         self.examples = dir.map(|d| plain(std::fs::canonicalize(&d).unwrap_or(d)));
@@ -202,7 +220,8 @@ impl FileDialog {
     /// recent files and folders first, the examples last.
     fn add_own_places(&mut self) {
         let has = |places: &[Place], path: &std::path::Path| places.iter().any(|p| p.path == path);
-        if !self.recent.is_empty() && !has(&self.places, std::path::Path::new(RECENT)) {
+        // Saving goes into a folder: the recent files are no place for it.
+        if !self.recent.is_empty() && self.purpose != Purpose::Save && !has(&self.places, std::path::Path::new(RECENT)) {
             self.places.insert(0, Place { name: "Recent Files".into(), path: PathBuf::from(RECENT), section: Section::Recent });
         }
         if !self.recent_dirs().is_empty() && !has(&self.places, std::path::Path::new(RECENT_DIRS)) {
@@ -248,8 +267,9 @@ impl FileDialog {
             (true, _) => "Go",
             (false, Purpose::Open) => "Open",
             (false, Purpose::Append) => "Append",
+            (false, Purpose::Save) => "Save",
         };
-        let recent = match (self.recent.is_empty(), self.in_recent()) {
+        let recent = match (self.recent.is_empty() || self.purpose == Purpose::Save, self.in_recent()) {
             (true, _) => "",
             (false, true) => "Folder",
             (false, false) => "Recent",
@@ -285,6 +305,9 @@ impl FileDialog {
 
     /// Ctrl+R / F3: the list of recent files, and back to the folder.
     fn toggle_recent(&mut self) {
+        if self.purpose == Purpose::Save {
+            return;
+        }
         if self.in_recent() {
             self.dir = std::mem::take(&mut self.before_recent);
             self.filter.clear();
@@ -529,11 +552,10 @@ impl FileDialog {
                 self.in_places = false;
                 return self.key(key);
             }
-            // Typing searches the list again.
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Typing searches the list again (saving: types the name).
+            KeyCode::Char(_) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.in_places = false;
-                self.filter.push(c);
-                self.select(0);
+                return self.key(key);
             }
             _ => {}
         }
@@ -567,9 +589,70 @@ impl FileDialog {
         Action::Chosen(entry.path.unwrap_or_else(|| self.dir.join(&entry.name)))
     }
 
+    /// Saving: the typed name in the shown folder (an existing file is
+    /// replaced only after a second Enter); without a name, or in one of the
+    /// lists of recent folders, the selected folder is entered.
+    fn save_here(&mut self) -> Action {
+        let name = self.name.trim().to_string();
+        // A file selected without a name typed: its name, to save under it with another Enter.
+        if name.is_empty()
+            && !self.in_virtual()
+            && let Some(e) = self.current().filter(|e| !e.dir)
+        {
+            self.name = e.name;
+            return Action::None;
+        }
+        if name.is_empty() || self.in_virtual() {
+            return self.choose();
+        }
+        let typed = match (name.strip_prefix("~/").or_else(|| name.strip_prefix("~\\")), home_dir()) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => PathBuf::from(&name),
+        };
+        let path = self.dir.join(typed);
+        // The name of a folder: into it.
+        if path.is_dir() && crate::bundle::Kind::from_path(&path).is_none() {
+            self.dir = plain(std::fs::canonicalize(&path).unwrap_or(path));
+            self.name.clear();
+            self.overwrite = None;
+            self.read();
+            return Action::None;
+        }
+        let path = if path.extension().is_none() && !self.extension.is_empty() { path.with_extension(self.extension) } else { path };
+        if path.exists() && self.overwrite.as_ref() != Some(&path) {
+            self.overwrite = Some(path);
+            return Action::None;
+        }
+        Action::Chosen(path)
+    }
+
+    /// Saving: keys that edit the file name; `None`: the key is not one of them.
+    fn key_name(&mut self, key: KeyEvent) -> Option<Action> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc if self.overwrite.is_some() => self.overwrite = None,
+            KeyCode::Enter | KeyCode::F(2) => return Some(self.save_here()),
+            // `~` alone: the home folder; in a name it is a character.
+            KeyCode::Char('~') if self.name.is_empty() => return None,
+            KeyCode::Char('u') if ctrl => self.name.clear(),
+            KeyCode::Char(c) if !ctrl => self.name.push(c),
+            KeyCode::Backspace if !self.name.is_empty() => {
+                self.name.pop();
+            }
+            _ => return None,
+        }
+        self.overwrite = None;
+        Some(Action::None)
+    }
+
     pub fn key(&mut self, key: KeyEvent) -> Action {
         if self.in_places {
             return self.key_places(key);
+        }
+        if self.purpose == Purpose::Save
+            && let Some(action) = self.key_name(key)
+        {
+            return action;
         }
         let page = self.rows.max(1) as isize;
         let sel = self.selected as isize;
@@ -621,6 +704,14 @@ impl FileDialog {
         // The keys follow the click: Enter opens the clicked entry.
         self.in_places = false;
         self.select(i as isize);
+        // Saving: a file's name is taken; a double click saves under it.
+        if self.purpose == Purpose::Save
+            && let Some(e) = self.current().filter(|e| !e.dir)
+        {
+            self.name = e.name;
+            self.overwrite = None;
+            return if double { self.save_here() } else { Action::None };
+        }
         if double { self.choose() } else { Action::None }
     }
 
@@ -740,6 +831,10 @@ impl FileDialog {
             buf.set_stringn(list_x, list_y, "  (no matching files)", iw, Style::new().fg(Color::DarkGray));
         }
         let search = match self.current() {
+            _ if self.purpose == Purpose::Save => match &self.overwrite {
+                Some(p) => format!(" {} exists – Enter replaces it, Esc keeps it", p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()),
+                None => format!(" file name: {}▏", self.name),
+            },
             _ if !self.filter.is_empty() => format!(" search: {}▏", self.filter),
             Some(e) if !self.in_places && !self.takes(&e) => format!(" not one of the {filter_label} – F4 offers all files"),
             _ => String::new(),
@@ -755,9 +850,11 @@ impl FileDialog {
             Files::All => format!("F4: {filter_label} only"),
             Files::Only => "F4: others grey".to_string(),
         };
-        let all = if self.recent.is_empty() { all } else { format!("F3: recent · {all}") };
+        let all = if self.recent.is_empty() || self.purpose == Purpose::Save { all } else { format!("F3: recent · {all}") };
         let keys = if self.in_places {
             " ↑↓ Enter: go there · Tab / Esc: back to the list".to_string()
+        } else if self.purpose == Purpose::Save {
+            " type the name · Enter saves · ↑↓ → into a folder · ← up · Tab places · Esc".to_string()
         } else if self.places.is_empty() {
             format!(" ↑↓ Enter · ← up · ~ home · type to search · {all} · Esc")
         } else {
@@ -1311,6 +1408,44 @@ mod tests {
         }
         assert_eq!(buf[(50, 12)].bg, super::super::theme::DIALOG);
         assert_eq!(buf[(0, 0)].bg, Color::Reset, "the screen around stays as it is");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn saving_takes_a_typed_name_and_asks_before_replacing() {
+        let root = std::env::temp_dir().join(format!("hardcalc-save-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("old.md"), "").unwrap();
+        let mut d = FileDialog::new(Purpose::Save, root.clone(), |n| n.ends_with(".md")).with_name("start.md", "md");
+        assert_eq!(d.name, "start.md");
+        // Typing edits the name, it does not search.
+        d.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        for c in "sub".chars() {
+            key(&mut d, KeyCode::Char(c));
+        }
+        assert!(d.filter.is_empty());
+        // The name of a folder leads into it.
+        assert_eq!(key(&mut d, KeyCode::Enter), Action::None);
+        assert_eq!(d.dir, plain(std::fs::canonicalize(root.join("sub")).unwrap()));
+        assert!(d.name.is_empty());
+        for c in "neu".chars() {
+            key(&mut d, KeyCode::Char(c));
+        }
+        assert_eq!(key(&mut d, KeyCode::Enter), Action::Chosen(d.dir.join("neu.md")), "the extension is added");
+        // Up again; a click takes a file's name; an existing file needs a second Enter.
+        key(&mut d, KeyCode::Char('u'));
+        d.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        key(&mut d, KeyCode::Backspace);
+        assert_eq!(d.dir, plain(std::fs::canonicalize(&root).unwrap()));
+        let i = d.shown().iter().position(|e| e.name == "old.md").unwrap();
+        d.click(i, false);
+        assert_eq!(d.name, "old.md");
+        assert_eq!(key(&mut d, KeyCode::Enter), Action::None);
+        assert!(d.overwrite.is_some());
+        key(&mut d, KeyCode::Esc);
+        assert!(d.overwrite.is_none(), "Esc keeps the file");
+        key(&mut d, KeyCode::Enter);
+        assert_eq!(key(&mut d, KeyCode::Enter), Action::Chosen(d.dir.join("old.md")));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

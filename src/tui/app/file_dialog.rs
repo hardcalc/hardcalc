@@ -20,7 +20,7 @@ impl App {
     pub fn open_file_dialog(&mut self, purpose: Purpose) {
         match purpose {
             Purpose::Open => self.after_unsaved(super::files::Pending::Dialog(true), false),
-            Purpose::Append => self.show_file_dialog(purpose, false),
+            Purpose::Append | Purpose::Save => self.show_file_dialog(purpose, false),
         }
     }
 
@@ -36,9 +36,20 @@ impl App {
             _ => PathBuf::from("."),
         };
         let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
-        let mut dialog = FileDialog::new(purpose, dir, is_document).with_examples(crate::examples::dir());
-        if purpose == Purpose::Open {
-            dialog = dialog.with_recent(crate::recent::load(), recent);
+        // Started from a launcher (in /), a new document goes to the home folder.
+        let dir = match crate::tui::file_dialog::home_dir() {
+            Some(home) if dir.parent().is_none() && self.is_untitled() => home,
+            _ => dir,
+        };
+        let mut dialog = FileDialog::new(purpose, dir, is_document);
+        match purpose {
+            Purpose::Open => dialog = dialog.with_examples(crate::examples::dir()).with_recent(crate::recent::load(), recent),
+            Purpose::Append => dialog = dialog.with_examples(crate::examples::dir()),
+            // Saving: the recent folders, and the current name to start with.
+            Purpose::Save => {
+                let name = if self.is_untitled() { String::new() } else { self.doc_file_name() };
+                dialog = dialog.with_name(&name, crate::storage::EXTENSION).with_recent(crate::recent::load(), false);
+            }
         }
         self.file_dialog = Some(dialog);
         self.message = None;
@@ -48,7 +59,13 @@ impl App {
     fn dialog_action(&mut self, action: Action) {
         match action {
             Action::None => {}
-            Action::Close => self.file_dialog = None,
+            Action::Close => {
+                // Closing the save dialog: not saved, and what waited for the save is dropped.
+                if self.file_dialog.take().is_some_and(|d| d.purpose == Purpose::Save) {
+                    self.after_save = None;
+                    self.info("not saved");
+                }
+            }
             Action::Chosen(path) => {
                 let Some(d) = self.file_dialog.take() else { return };
                 let name = path.display().to_string();
@@ -56,6 +73,7 @@ impl App {
                     // Unsaved changes were saved or discarded before the dialog opened.
                     Purpose::Open => self.open_file(&name, true),
                     Purpose::Append => self.append_file(&name),
+                    Purpose::Save => self.save(Some(&name)),
                 }
             }
         }

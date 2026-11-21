@@ -6,6 +6,7 @@ pub mod chart_image;
 pub mod chart_view;
 pub mod config;
 pub mod file_dialog;
+pub mod formula_help;
 pub mod commands;
 pub mod graphics;
 pub mod help;
@@ -46,13 +47,29 @@ pub(crate) fn detect_light() -> Option<bool> {
 pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     let mut app = match path {
         Some(path) => {
-            let app = App::open(path)?;
+            let mut app = App::open(path)?;
             if path.exists() {
                 crate::recent::add(path);
+                app.restore_spot();
             }
             app
         }
-        None => App::untitled(),
+        // Without a file: the document used last, where it was left.
+        None => match crate::recent::load().into_iter().next() {
+            Some(last) => match App::open(&last) {
+                Ok(mut app) => {
+                    crate::recent::add(&last);
+                    app.restore_spot();
+                    if app.message.is_none() {
+                        let text = format!("reopened {} – :new starts a new document, F3 opens another", last.display());
+                        app.message = Some(app::Message { text, error: false });
+                    }
+                    app
+                }
+                Err(_) => App::untitled(),
+            },
+            None => App::untitled(),
+        },
     };
     if let Some(t) = std::env::var("HARDCALC_THEME").ok().and_then(|v| theme::ThemeSetting::parse(&v)) {
         app.theme = t;
@@ -175,6 +192,7 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     }
     let _ = execute!(stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
+    app.remember_spot();
     result
 }
 

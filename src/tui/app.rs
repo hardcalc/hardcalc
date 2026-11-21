@@ -4374,10 +4374,7 @@ impl App {
                 self.compression = crate::storage::Compression::from_path(&self.path);
             }
             // A new document asks for its name first.
-            None if self.is_untitled() => {
-                self.mode = Mode::Command { buf: "w ".into() };
-                return self.info("save as: type a file name (.hcmd is added), Tab completes, Enter saves");
-            }
+            None if self.is_untitled() => return self.show_file_dialog(Purpose::Save, false),
             None => {}
         }
         if let Some(kind) = crate::bundle::Kind::from_path(&self.path) {
@@ -5917,6 +5914,7 @@ impl App {
             "e" | "edit" | "open" | "e!" | "edit!" | "open!" => self.open_file(&args.join(" "), cmd.ends_with('!')),
             "new" | "new!" => self.new_file(cmd == "new!"),
             "recent" => self.open_recent_dialog(),
+            "saveas" => self.show_file_dialog(Purpose::Save, false),
             "append" if args.is_empty() => self.open_file_dialog(Purpose::Append),
             "append" => self.append_file(&args.join(" ")),
             "typeset" => {

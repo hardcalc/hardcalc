@@ -21,7 +21,8 @@ const fn choice(name: &'static str, args: &'static str, help: &'static str, choi
 }
 
 pub const COMMANDS: &[Command] = &[
-    c("w", "[file]", "write (save); a new document asks for its name"),
+    c("w", "[file]", "write (save); a new document asks for folder and name"),
+    c("saveas", "", "save under another name or in another folder (the file dialog)"),
     c("q", "", "quit"),
     c("q!", "", "quit without saving"),
     c("wq", "[file]", "write and quit"),
@@ -139,7 +140,7 @@ pub const MENU_ITEMS: &[MenuItem] = &[
     m(0, "Recent files…", "recent", ":recent"),
     m(0, "Append / import…", "append", ":append"),
     m(0, "Save", "w", "F2"),
-    m(0, "Save as…", "w ", ":w file"),
+    m(0, "Save as…", "saveas", ":saveas"),
     m(0, "Export…", "export ", ":export"),
     m(0, "Save compressed (zstd)", "compress zstd", ":compress"),
     m(0, "Save as bundle…", "bundle ", ":bundle"),

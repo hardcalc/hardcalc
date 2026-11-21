@@ -155,6 +155,8 @@ pub const PAGES: &[Page] = &[
             (":e file  :e! file  :new", "open another file (! discards changes) · new document"),
             (": Enter", "the command line with nothing typed runs the last command again"),
             (":w [file]  :q  :q!  :wq", "write · quit · quit without saving · write and quit"),
+            (":saveas, F2 on a new document", "save dialog: choose the folder in the list, type the name below it, Enter saves (an existing file only after a second Enter)"),
+            ("hardcalc without a file", "opens the document used last, at the table and cell it was left at (:new starts a new one)"),
             (":B5  :back", "jump to a cell · back from the last jump (changes since stay)"),
             (":addrow  :delrow  :addcol Name", "insert / delete rows and columns"),
             (":footer [Label]", "footer row below the table: =sum, =avg, =count …, a formula, value or text"),

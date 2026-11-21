@@ -1,4 +1,4 @@
-use hardcalc::tui::app::{App, Header, Hit, Mode};
+use hardcalc::tui::app::{App, Header, Hit, Mode, Purpose};
 use hardcalc::tui::ui;
 use hardcalc::units::Unit;
 use hardcalc::value::Value;
@@ -1759,11 +1759,12 @@ fn untitled_document_open_and_append() {
     typ(&mut a, "42");
     key(&mut a, KeyCode::Enter);
 
-    // F2 asks for a name; .hcmd is added.
+    // F2 opens the save dialog for folder and name; .hcmd is added.
     fkey(&mut a, 2);
-    assert!(matches!(&a.mode, Mode::Command { buf } if buf == "w "));
+    assert!(a.file_dialog.as_ref().is_some_and(|d| d.purpose == Purpose::Save && d.name.is_empty()));
     typ(&mut a, &dir.join("notiz").display().to_string());
     key(&mut a, KeyCode::Enter);
+    assert!(a.file_dialog.is_none());
     let saved = dir.join("notiz.hcmd");
     assert!(std::fs::read_to_string(&saved).unwrap().contains("| 42"), "{:?}", a.message);
     assert!(!a.dirty);
@@ -1887,8 +1888,8 @@ fn saving_a_new_document_before_opening_another() {
     key(&mut a, KeyCode::Enter);
     ctrl(&mut a, 'e');
     typ(&mut a, "s");
-    // A new document asks for its name first; then the dialog opens.
-    assert!(matches!(&a.mode, Mode::Command { buf } if buf == "w "));
+    // A new document asks for folder and name first; then the open dialog follows.
+    assert!(a.file_dialog.as_ref().is_some_and(|d| d.purpose == Purpose::Save));
     typ(&mut a, &dir.join("erst").display().to_string());
     key(&mut a, KeyCode::Enter);
     assert!(dir.join("erst.hcmd").exists() && !a.dirty);
@@ -1954,7 +1955,7 @@ fn menu_bar_runs_commands() {
     key(&mut a, KeyCode::Down);
     key(&mut a, KeyCode::Down);
     key(&mut a, KeyCode::Enter);
-    assert!(matches!(&a.mode, Mode::Command { buf } if buf == "w "), "Save as…");
+    assert!(a.file_dialog.as_ref().is_some_and(|d| d.purpose == Purpose::Save), "Save as…");
 }
 
 #[test]
@@ -4487,4 +4488,27 @@ fn calculation_headings_without_markdown() {
     let lines: Vec<&hardcalc::print::Line> = layout.pages.iter().flatten().collect();
     assert!(lines.iter().any(|l| l.kind == hardcalc::print::LineKind::Title && l.plain() == "System and loads"));
     assert!(!lines.iter().any(|l| l.plain().contains("## ")), "no Markdown marks in print");
+}
+
+#[test]
+fn formula_help_below_the_table_while_typing() {
+    let mut a = app();
+    // Not while a plain value is typed.
+    typ(&mut a, "12");
+    assert!(!render(&mut a).contains(" formula – "));
+    key(&mut a, KeyCode::Esc);
+    // After `=`: the basics; a started name: the functions it may become.
+    typ(&mut a, "=");
+    let screen = render(&mut a);
+    assert!(screen.contains(" formula – ") && screen.contains("References"), "{screen}");
+    typ(&mut a, "sumi");
+    let screen = render(&mut a);
+    assert!(screen.contains("sumif(range; criterion; [sum_range])") && screen.contains("sumifs("), "{screen}");
+    // In the call: the function, also the document's own ones.
+    key(&mut a, KeyCode::Esc);
+    typ(&mut a, "=gross(");
+    let screen = render(&mut a);
+    assert!(screen.contains("gross(x)") && screen.contains("gross amount with 19 % VAT"), "{screen}");
+    key(&mut a, KeyCode::Esc);
+    assert!(!render(&mut a).contains(" formula – "));
 }

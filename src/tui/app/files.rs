@@ -1,7 +1,7 @@
 //! Documents and files from within the UI: a new untitled document, opening
 //! another file, appending one, and file name completion in the command line.
 
-use super::{new_table, tables, App, Purpose};
+use super::{new_table, tables, App, Purpose, ViewKind};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::model::{Block, Document, Shape};
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ impl App {
     /// A new, untitled document (`hardcalc` without a file).
     pub fn untitled() -> App {
         let mut app = App::new(PathBuf::new(), new_document());
-        app.info("new document – :w name saves it, :e file opens one, :append file adds one (Tab completes names)");
+        app.info("new document – F2 saves it (folder and name), F3 opens one, :append file adds one");
         app
     }
 
@@ -63,8 +63,36 @@ impl App {
         self.path.as_os_str().is_empty()
     }
 
+    /// The name a table is remembered by: its own, or `#n` for one without.
+    fn sheet_key(&self, i: usize) -> Option<String> {
+        let sheet = self.wb.sheets.get(i)?;
+        Some(sheet.name.clone().unwrap_or_else(|| format!("#{}", i + 1)))
+    }
+
+    /// Notes which table of the document is shown and where the cursor is,
+    /// so the document opens there next time (see [`App::restore_spot`]).
+    pub fn remember_spot(&self) {
+        if self.is_untitled() || !self.path.exists() {
+            return;
+        }
+        // The table of the main window, also while a helper has the keys.
+        let view = [Some(&self.view), self.other.as_ref()].into_iter().flatten().find(|v| v.kind == ViewKind::Table);
+        let Some(view) = view else { return };
+        let Some(table) = self.sheet_key(view.sheet) else { return };
+        crate::recent::remember(&self.path, crate::recent::Spot { table, cursor: view.cursor });
+    }
+
+    /// Shows the table and cell the document was left at last time.
+    pub fn restore_spot(&mut self) {
+        let Some(spot) = crate::recent::spot(&self.path) else { return };
+        let Some(i) = (0..self.wb.sheets.len()).find(|&i| self.sheet_key(i).as_deref() == Some(spot.table.as_str())) else { return };
+        self.switch_sheet(i);
+        self.move_to(spot.cursor.0, spot.cursor.1);
+    }
+
     /// Replaces the document, keeping the screen settings.
     fn replace_with(&mut self, mut next: App) {
+        self.remember_spot();
         next.theme = self.theme;
         next.detected_light = self.detected_light;
         next.graphics = self.graphics;
@@ -138,6 +166,7 @@ impl App {
                 }
                 let message = next.message.clone();
                 self.replace_with(next);
+                self.restore_spot();
                 match message {
                     Some(m) => self.message = Some(m),
                     None if existed => self.info(format!("opened {}", path.display())),

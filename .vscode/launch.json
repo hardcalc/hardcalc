@@ -1,0 +1,85 @@
+{
+    // Debugging with CodeLLDB (vadimcn.vscode-lldb). The TUI needs a real
+    // terminal: "terminal": "integrated" runs it in VS Code's terminal panel,
+    // the debugger stays in the Debug Console.
+    // HARDCALC_STATE_DIR: debug runs keep their own recent files, examples and
+    // remembered views in target/debug-state, not in the user's list
+    // (delete the folder for a first start).
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "hardcalc: examples/budget.hcmd",
+            "cargo": {
+                "args": ["build", "--bin=hardcalc"],
+                "filter": { "name": "hardcalc", "kind": "bin" }
+            },
+            "args": ["examples/budget.hcmd"],
+            "cwd": "${workspaceFolder}",
+            "terminal": "integrated",
+            "env": { "RUST_BACKTRACE": "1", "HARDCALC_STATE_DIR": "${workspaceFolder}/target/debug-state" }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "hardcalc: open file in editor",
+            "cargo": {
+                "args": ["build", "--bin=hardcalc"],
+                "filter": { "name": "hardcalc", "kind": "bin" }
+            },
+            "args": ["${file}"],
+            "cwd": "${workspaceFolder}",
+            "terminal": "integrated",
+            "env": { "RUST_BACKTRACE": "1", "HARDCALC_STATE_DIR": "${workspaceFolder}/target/debug-state" }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "hardcalc: without a file (last document)",
+            "cargo": {
+                "args": ["build", "--bin=hardcalc"],
+                "filter": { "name": "hardcalc", "kind": "bin" }
+            },
+            "cwd": "${workspaceFolder}",
+            "terminal": "integrated",
+            "env": { "RUST_BACKTRACE": "1", "HARDCALC_STATE_DIR": "${workspaceFolder}/target/debug-state" }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "hardconf",
+            "cargo": {
+                "args": ["build", "--bin=hardconf"],
+                "filter": { "name": "hardconf", "kind": "bin" }
+            },
+            "cwd": "${workspaceFolder}",
+            "terminal": "integrated",
+            "env": { "RUST_BACKTRACE": "1", "HARDCALC_STATE_DIR": "${workspaceFolder}/target/debug-state" }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "tests: library (selected text filters)",
+            "cargo": {
+                "args": ["test", "--no-run", "--lib"],
+                "filter": { "name": "hardcalc", "kind": "lib" }
+            },
+            "args": ["${selectedText}"],
+            "cwd": "${workspaceFolder}",
+            "env": { "RUST_BACKTRACE": "1", "HARDCALC_STATE_DIR": "${workspaceFolder}/target/debug-state" }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "tests: tests/tui.rs (selected text filters)",
+            "cargo": {
+                "args": ["test", "--no-run", "--test=tui"],
+                "filter": { "name": "tui", "kind": "test" }
+            },
+            "args": ["${selectedText}"],
+            "cwd": "${workspaceFolder}",
+            "env": { "RUST_BACKTRACE": "1", "HARDCALC_STATE_DIR": "${workspaceFolder}/target/debug-state" }
+        }
+    ]
+}

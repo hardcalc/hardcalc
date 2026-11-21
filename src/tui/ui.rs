@@ -80,6 +80,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_type_help(f, help);
         body = rest;
     }
+    // While a formula is typed: the function at the cursor, the names it may become, or the basics.
+    // Its height stays the same while typing, so the table does not jump.
+    const HELP_LINES: usize = 4;
+    let room = (body.height as usize).saturating_sub(8).min(HELP_LINES);
+    let lines = if room > 0 { app.with_window(data_left, |app| app.formula_help(room)) } else { None };
+    if let Some(lines) = lines {
+        let [rest, help] = Layout::vertical([Constraint::Min(6), Constraint::Length(room as u16 + 2)]).areas(body);
+        draw_formula_help(f, help, &lines);
+        body = rest;
+    }
     // The hint of a focused helper window (inspector, source, chart).
     let helper = helper_hint(app);
     app.split_body = None;
@@ -582,6 +592,35 @@ fn draw_type_help(f: &mut Frame, area: Rect) {
     }
 }
 
+/// The formula help below the window (see [`super::formula_help`]).
+fn draw_formula_help(f: &mut Frame, area: Rect, lines: &[super::formula_help::Line]) {
+    f.render_widget(Clear, area);
+    let block = Block::bordered()
+        .title(" formula – Enter/Tab commit · Esc cancel · Ctrl+G special characters ")
+        .border_style(Style::new().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let label_w = lines.iter().map(|l| l.label.width()).max().unwrap_or(0) + 2;
+    let buf = f.buffer_mut();
+    for (k, l) in lines.iter().enumerate() {
+        let y = inner.y + k as u16;
+        if y >= inner.bottom() {
+            break;
+        }
+        buf.set_stringn(inner.x + 1, y, &l.label, label_w, Style::new().bold().fg(Color::Cyan));
+        let mut x = inner.x + 1 + label_w as u16;
+        for (text, marked) in &l.parts {
+            let room = inner.right().saturating_sub(x) as usize;
+            if room == 0 {
+                break;
+            }
+            let style = if *marked { Style::new().bold().fg(Color::Yellow) } else { Style::new() };
+            let (end, _) = buf.set_stringn(x, y, text, room, style);
+            x = end;
+        }
+    }
+}
+
 /// "Save or discard unsaved changes?" with three buttons.
 fn draw_confirm(f: &mut Frame, app: &mut App) {
     if app.confirm.is_none() {
@@ -615,6 +654,7 @@ fn draw_file_dialog(f: &mut Frame, app: &mut App) {
     let title = match d.purpose {
         super::app::Purpose::Open => " open file ",
         super::app::Purpose::Append => " append file ",
+        super::app::Purpose::Save => " save as ",
     };
     let hits = d.draw(f, title, "documents");
     app.hits.extend(hits.into_iter().map(|(r, spot)| (r, Hit::File(spot))));
