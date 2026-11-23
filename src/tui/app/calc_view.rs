@@ -303,7 +303,15 @@ impl App {
                         sheet::Out::Heading { level, text } => {
                             style.bold = true;
                             style.underline = *level <= 2;
-                            return CellView { text: text.clone(), align: Align::Left, style, error, violation: false };
+                            // ▾ open, ▸ folded (with the number of lines it hides).
+                            let folded = self.calc_keys.get(r).cloned().flatten().is_some_and(|k| self.calc_folds.contains(&k));
+                            let text = if folded {
+                                let hidden = self.calc_hidden.iter().skip(r + 1).take_while(|h| **h).count();
+                                format!("▸ {text} ({hidden} lines)")
+                            } else {
+                                format!("▾ {text}")
+                            };
+                            return CellView { text, align: Align::Left, style, error, violation: false };
                         }
                         sheet::Out::Comment(c) => {
                             style.fg = Some(Color::Named("darkgray".into()));
@@ -488,7 +496,7 @@ impl App {
             }
             None if dc == -1 && dr == 0 && c == NAME && r < lines && !extend => {
                 self.enter_header(Header::Row, r, 0);
-                self.info("line selected – - / + moves it, Shift+↑/↓ extends, → back to the cells");
+                self.info("line selected – - / + moves it (a heading with its section), Space folds a section, Shift+↑/↓ extends, → back to the cells");
             }
             _ => return false,
         }
@@ -496,16 +504,148 @@ impl App {
         true
     }
 
-    /// Moves the selected lines one place up (-1) or down (+1); the lines
+    /// The heading level of every line (without the + row).
+    fn calc_levels(&self) -> Vec<Option<usize>> {
+        let rows = self.calc_rows();
+        rows[..rows.len() - 1]
+            .iter()
+            .map(|row| match self.calc_source(*row).map(|s| sheet::expr::parse_line(s)) {
+                Some(Line::Heading { level, .. }) => Some(level),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Recomputes which rows folded headings hide (after any change).
+    pub(super) fn refresh_calc_hidden(&mut self) {
+        let rows = self.calc_rows();
+        let n = rows.len() - 1;
+        let mut seen: std::collections::HashMap<String, usize> = Default::default();
+        let mut keys = Vec::with_capacity(n + 1);
+        let mut levels = Vec::with_capacity(n);
+        for row in &rows[..n] {
+            match self.calc_source(*row).map(|s| sheet::expr::parse_line(s)) {
+                Some(Line::Heading { level, text }) => {
+                    let k = seen.entry(text.clone()).or_insert(0);
+                    keys.push(Some((text, *k)));
+                    *k += 1;
+                    levels.push(Some(level));
+                }
+                _ => {
+                    keys.push(None);
+                    levels.push(None);
+                }
+            }
+        }
+        keys.push(None);
+        // A folded heading that is gone does not come back with the same text.
+        let present: std::collections::HashSet<_> = keys.iter().flatten().cloned().collect();
+        self.calc_folds.retain(|k| present.contains(k));
+        let mut hidden = vec![false; n + 1];
+        let mut folded_at: Option<usize> = None;
+        for i in 0..n {
+            if let (Some(level), Some(f)) = (levels[i], folded_at)
+                && level <= f
+            {
+                folded_at = None;
+            }
+            hidden[i] = folded_at.is_some();
+            if let (Some(level), None, Some(key)) = (levels[i], folded_at, &keys[i])
+                && self.calc_folds.contains(key)
+            {
+                folded_at = Some(level);
+            }
+        }
+        self.calc_hidden = hidden;
+        self.calc_keys = keys;
+    }
+
+    /// Last line of the section of the heading at `r`: up to the next heading
+    /// of the same or a higher level.
+    fn section_end(levels: &[Option<usize>], r: usize) -> usize {
+        let Some(level) = levels[r] else { return r };
+        (r + 1..levels.len()).find(|&i| levels[i].is_some_and(|l| l <= level)).map_or(levels.len() - 1, |i| i - 1)
+    }
+
+    /// Folds / unfolds the section the cursor is in (the nearest heading above).
+    pub(super) fn toggle_fold(&mut self) {
+        let r = self.view.cursor.0;
+        let levels = self.calc_levels();
+        let Some(h) = (0..=r.min(levels.len().saturating_sub(1))).rev().find(|&i| levels.get(i).is_some_and(|l| l.is_some())) else {
+            return self.error("no heading above – ## starts a section");
+        };
+        let Some(key) = self.calc_keys.get(h).cloned().flatten() else { return };
+        if !self.calc_folds.remove(&key) {
+            self.calc_folds.insert(key);
+        }
+        self.refresh_calc_hidden();
+        self.view.cursor.0 = h;
+        self.view.anchor = None;
+        self.view.follow = true;
+    }
+
+    /// `:fold` toggles the section at the cursor, `:fold all` folds every
+    /// section, `:fold off` unfolds them.
+    pub(super) fn fold_command(&mut self, arg: Option<&str>) {
+        if !self.calc_view() {
+            return self.error(":fold works in the ∑ calc tab");
+        }
+        match arg {
+            None => self.toggle_fold(),
+            Some("all") => {
+                self.calc_folds = self.calc_keys.iter().flatten().cloned().collect();
+                self.refresh_calc_hidden();
+                self.snap_to_shown();
+            }
+            Some("off") => {
+                self.calc_folds.clear();
+                self.refresh_calc_hidden();
+            }
+            Some(_) => self.error("usage: :fold [all|off]"),
+        }
+    }
+
+    /// Moves the selected lines one place up (-1) or down (+1): over the
+    /// neighbouring line, or over a whole section when that is a heading
+    /// (folded or not) or when a heading with its section is moved. The lines
     /// swap places in the document, also across the blocks of the sheet.
     pub(super) fn move_calc_lines(&mut self, d: isize) {
-        let ((r0, _), (r1, _)) = self.selection();
+        let ((r0, _), (mut r1, _)) = self.selection();
         let mut rows = self.calc_rows();
         rows.pop();
         let n = rows.len();
-        if r1 >= n || (d < 0 && r0 == 0) || (d > 0 && r1 + 1 >= n) {
+        let levels = self.calc_levels();
+        if r1 >= n {
             return;
         }
+        // A single heading takes its section along.
+        let heading = levels[r0];
+        if r0 == r1 && self.view.anchor.is_none() {
+            r1 = Self::section_end(&levels, r0);
+        }
+        let neighbour = if d > 0 {
+            if r1 + 1 >= n {
+                return;
+            }
+            (r1 + 1, Self::section_end(&levels, r1 + 1))
+        } else {
+            if r0 == 0 {
+                return;
+            }
+            let c = r0 - 1;
+            let start = match heading {
+                // A section moves over the one before it (same level).
+                Some(level) => match (0..=c).rev().find(|&i| levels[i].is_some_and(|l| l <= level)) {
+                    Some(j) if levels[j] == Some(level) => j,
+                    _ => return self.error("already the first section of its group"),
+                },
+                None => (0..=c).rev().find(|&i| !self.calc_hidden[i]).unwrap_or(c),
+            };
+            (start, c)
+        };
+        let (n0, n1) = neighbour;
+        let moved = r1 - r0 + 1;
+        let other = n1 - n0 + 1;
         let slots: Vec<(usize, usize)> = rows
             .iter()
             .filter_map(|row| match row {
@@ -515,9 +655,9 @@ impl App {
             .collect();
         let mut order: Vec<usize> = (0..n).collect();
         if d < 0 {
-            order[r0 - 1..=r1].rotate_left(1);
+            order[n0..=r1].rotate_left(other);
         } else {
-            order[r0..=r1 + 1].rotate_right(1);
+            order[r0..=n1].rotate_left(moved);
         }
         self.with_doc(|doc| {
             let old: Vec<String> = slots
@@ -533,7 +673,7 @@ impl App {
                 }
             }
         });
-        let step = |i: usize| (i as isize + d) as usize;
+        let step = |i: usize| if d < 0 { i - other } else { i + other };
         self.view.cursor.0 = step(self.view.cursor.0);
         if let Some(a) = &mut self.view.anchor {
             a.0 = step(a.0);

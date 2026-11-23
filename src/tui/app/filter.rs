@@ -33,6 +33,10 @@ impl App {
     /// The rows the filter hides in the shown table, while it acts: in a
     /// table (not its pivot), outside the layer view, the layer switched on.
     fn hidden_flags(&self) -> Option<&Vec<bool>> {
+        // The calculation sheet hides the rows of folded sections.
+        if self.view.kind == ViewKind::Calc {
+            return Some(&self.calc_hidden);
+        }
         if self.view.kind != ViewKind::Table || self.view.pivot.is_some() || self.solo.is_some() || !self.layer_visible_in(FILTER, self.view.sheet) {
             return None;
         }

@@ -432,6 +432,12 @@ pub struct App {
     pub links: HashMap<CellId, String>,
     /// The evaluated calculation sheet, until the document changes.
     calc_cache: Option<Vec<crate::sheet::Out>>,
+    /// Folded headings of the calculation sheet: (text, n-th heading with it).
+    calc_folds: std::collections::HashSet<(String, usize)>,
+    /// Per row of the calculation sheet: hidden in a folded section.
+    calc_hidden: Vec<bool>,
+    /// Per row: the key of the heading in it.
+    calc_keys: Vec<Option<(String, usize)>>,
     /// How the calculation preview draws formulas (`:formulas`).
     pub formula_style: FormulaStyle,
     /// How the file is compressed; kept when saving.
@@ -916,6 +922,9 @@ impl App {
             print_where: None,
             links: HashMap::new(),
             calc_cache: None,
+            calc_folds: Default::default(),
+            calc_hidden: Vec::new(),
+            calc_keys: Vec::new(),
             formula_style: FormulaStyle::default(),
             compression: crate::storage::Compression::None,
             bundle: None,
@@ -1008,6 +1017,7 @@ impl App {
     fn rebuild(&mut self) {
         self.wb = Workbook::from_document(&self.doc).0;
         self.calc_cache = None;
+        self.refresh_calc_hidden();
         self.attached = layers::attach(&self.doc, &self.wb);
         self.formats = Formats::new(&self.attached, FORMAT);
         self.formula_formats = Formats::new(&self.attached, FORMULAS);
@@ -5004,6 +5014,8 @@ impl App {
             KeyCode::Char(ch @ ('-' | '+')) if !ctrl && self.on_header() == Some(Header::Corner) && self.layer_count() > 0 => {
                 self.move_level(if ch == '-' { -1 } else { 1 });
             }
+            // On a heading line of the calculation sheet Space folds / unfolds its section.
+            KeyCode::Char(' ') if !ctrl && !alt && self.calc_view() && self.on_header() == Some(Header::Row) => self.toggle_fold(),
             KeyCode::Char(ch @ ('-' | '+')) if !ctrl && matches!(self.on_header(), Some(Header::Column | Header::Row)) => {
                 let d = if ch == '-' { -1 } else { 1 };
                 match self.on_header() {
@@ -5895,6 +5907,7 @@ impl App {
             },
             "functions" => self.show_helper(ViewKind::Functions),
             "calc" => self.show_helper(ViewKind::Calc),
+            "fold" => self.fold_command(args.first().copied()),
             "plot" => self.open_plot_dialog(),
             "library" => self.open_library(),
             "symbol" if args.is_empty() => self.open_symbols(),

@@ -80,6 +80,7 @@ pub const COMMANDS: &[Command] = &[
     c("types", "", "the types tab"),
     c("functions", "", "the functions tab"),
     c("calc", "", "the calculation sheet (```hardcalc blocks)"),
+    c("fold", "[all|off]", "calculation sheet: fold / unfold the section of the heading at the cursor; all / off: every section"),
     c("preview", "", "the calculation sheet typeset, in the right window"),
     c("plot", "", "calculation sheet: settings of the chart at the cursor, or a new one (F7)"),
     c("library", "", "calculation sheet: insert a formula from the library (F6)"),

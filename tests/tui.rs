@@ -4550,3 +4550,31 @@ fn calc_units_with_parentheses() {
     assert!(screen.contains("6"), "{screen}");
     assert!(!screen.contains("unknown") && !screen.contains("unexpected"), "{screen}");
 }
+
+#[test]
+fn calc_sections_fold_and_move() {
+    let mut a = app();
+    a.command("calc");
+    for l in ["## A", "a1 = 1", "a2 = 2", "## B", "b1 = 3", "## C", "c1 = 4"] {
+        typ(&mut a, l);
+        key(&mut a, KeyCode::Enter);
+    }
+    let lines = |a: &App| hardcalc::sheet::source_lines(&a.doc);
+    // Fold A: its two lines are hidden, the cursor stays on the heading.
+    a.view.cursor = (0, 0);
+    key(&mut a, KeyCode::Left);
+    key(&mut a, KeyCode::Char(' '));
+    assert!(a.row_hidden(1) && a.row_hidden(2) && !a.row_hidden(3));
+    // A single heading moves with its section: A below B.
+    key(&mut a, KeyCode::Char('+'));
+    assert_eq!(lines(&a), ["## B", "b1 = 3", "## A", "a1 = 1", "a2 = 2", "## C", "c1 = 4"]);
+    assert_eq!(a.view.cursor.0, 2);
+    key(&mut a, KeyCode::Char('-'));
+    assert_eq!(lines(&a)[0], "## A");
+    key(&mut a, KeyCode::Char('-'));
+    assert_eq!(a.view.cursor.0, 0, "already first");
+    a.command("fold all");
+    assert!(a.row_hidden(1) && a.row_hidden(4));
+    a.command("fold off");
+    assert!(!a.row_hidden(1));
+}
