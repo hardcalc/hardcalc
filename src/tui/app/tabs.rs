@@ -202,6 +202,19 @@ impl App {
         });
     }
 
+    /// Ctrl+PgDn / Ctrl+PgUp: the next / previous table or calculation in the
+    /// bar (not further than the first and the last).
+    pub(super) fn step_tab(&mut self, d: isize) {
+        let items = tab_items(&self.doc);
+        let here = self.current_tab().unwrap_or(TabItem::Table(self.view.sheet));
+        let Some(at) = items.iter().position(|t| *t == here) else { return };
+        let to = (at as isize + d).clamp(0, items.len() as isize - 1) as usize;
+        match items[to] {
+            TabItem::Table(i) => self.switch_sheet(i),
+            TabItem::Calc(k) => self.show_calc(k),
+        }
+    }
+
     /// `:movetab left|right|first|last|<place>`: moves the shown table or calculation.
     pub(super) fn movetab_command(&mut self, args: &[&str]) {
         let items = tab_items(&self.doc);

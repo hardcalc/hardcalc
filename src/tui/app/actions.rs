@@ -56,8 +56,8 @@ impl App {
             Action::Pivot => self.toggle_pivot(None),
             Action::Split => self.toggle_split(),
             Action::SwapWindows => self.swap_windows(),
-            Action::NextTable => self.switch_sheet(self.view.sheet + 1),
-            Action::PrevTable => self.switch_sheet(self.view.sheet.saturating_sub(1)),
+            Action::NextTable => self.step_tab(1),
+            Action::PrevTable => self.step_tab(-1),
             Action::Bold => self.toggle_style("bold"),
         }
     }

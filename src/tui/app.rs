@@ -4068,6 +4068,7 @@ impl App {
         let next = if back { (current + n - 1) % n } else { (current + 1) % n };
         match tabs[next].1 {
             Hit::Tab(i) => self.switch_sheet(i),
+            Hit::CalcTab(k) => self.show_calc(k),
             Hit::TypesTab => self.set_view(ViewKind::Types, self.view.sheet),
             Hit::ViewTab(kind) => self.set_view(kind, self.view.sheet),
             _ => {}

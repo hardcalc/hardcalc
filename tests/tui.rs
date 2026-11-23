@@ -4786,3 +4786,32 @@ fn moving_a_calculation_before_its_data_warns_in_red() {
     a.command("movetab last");
     assert!(a.order_warning.as_ref().is_some_and(|w| w.contains("Loads")), "{:?}", a.order_warning);
 }
+
+#[test]
+fn tab_and_ctrl_page_keys_walk_through_tables_and_calculations() {
+    let mut a = App::new(PathBuf::from("x.hcmd"), hardcalc::parse(TWO_CALCS).unwrap());
+    let here = |a: &App| (a.view.kind, if a.calc_view() { a.view.calc } else { a.view.sheet });
+    use hardcalc::tui::app::ViewKind;
+    // Tab goes along the bar: A, ∑ Loads, B, ∑ Check, types, functions, and round.
+    let mut seen = vec![here(&a)];
+    for _ in 0..6 {
+        key(&mut a, KeyCode::Tab);
+        seen.push(here(&a));
+    }
+    assert_eq!(
+        seen,
+        [(ViewKind::Table, 0), (ViewKind::Calc, 0), (ViewKind::Table, 1), (ViewKind::Calc, 1), (ViewKind::Types, 1), (ViewKind::Functions, 1), (ViewKind::Table, 0)]
+    );
+    a.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert_eq!(here(&a).0, ViewKind::Functions);
+    // Ctrl+PgDn / Ctrl+PgUp step over tables and calculations alike.
+    a.switch_sheet(0);
+    let pg = |a: &mut App, code| a.on_key(KeyEvent::new(code, KeyModifiers::CONTROL));
+    pg(&mut a, KeyCode::PageDown);
+    assert_eq!(here(&a), (ViewKind::Calc, 0));
+    pg(&mut a, KeyCode::PageDown);
+    assert_eq!(here(&a), (ViewKind::Table, 1));
+    pg(&mut a, KeyCode::PageUp);
+    pg(&mut a, KeyCode::PageUp);
+    assert_eq!(here(&a), (ViewKind::Table, 0));
+}
