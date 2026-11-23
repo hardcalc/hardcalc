@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "hardcalc"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "calamine",
  "flate2",
