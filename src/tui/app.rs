@@ -38,6 +38,7 @@ mod shape;
 mod sources;
 mod calc_dialogs;
 mod symbol_picker;
+mod tabs;
 pub use symbol_picker::{SymbolPicker, SymbolTarget};
 mod values;
 mod views;
@@ -478,6 +479,10 @@ pub struct App {
     pub bands: bool,
     /// The slice / scenario last shown per table (kept across tab changes, printed).
     pub levels: HashMap<usize, usize>,
+    /// Where each table was left (cursor, scroll), for when it is shown again.
+    table_views: HashMap<usize, tabs::Spot>,
+    /// A tab being dragged to another place: its number.
+    tab_drag: Option<usize>,
     /// Start of a possible `ESC ESC [ A` sequence (Alt+arrow in "Option as
     /// Meta" mode): time of the Esc, and whether `[` followed.
     esc_seq: Option<(Instant, bool)>,
@@ -946,6 +951,8 @@ impl App {
             show_keys: false,
             bands: true,
             levels: HashMap::new(),
+            table_views: HashMap::new(),
+            tab_drag: None,
             esc_seq: None,
             symbols: None,
             recent_symbols: Vec::new(),
@@ -4650,7 +4657,7 @@ impl App {
             Header::Column => "column selected – type to name it, - / + moves it, Shift+←/→ extends, ↓ back to the cells",
             Header::Row => "row selected – - / + moves it, Shift+↑/↓ extends, → back to the cells",
             Header::Corner if self.layer_count() > 0 => "whole table selected – type to rename it · ↑/↓ go through the slices and scenarios · - / + move the shown one",
-            Header::Corner => "whole table selected – type or Enter to rename it",
+            Header::Corner => "whole table selected – type or Enter to rename it · - / + move the tab (also :movetab, dragging the tab)",
         };
         self.info(what);
     }
@@ -4772,12 +4779,14 @@ impl App {
 
     /// Shows `kind` (for tables: sheet `sheet`) in the focused window.
     pub fn set_view(&mut self, kind: ViewKind, sheet: usize) {
+        self.remember_table_view();
         self.view = View::new(kind, sheet);
         if kind == ViewKind::Calc {
             self.view.cursor.1 = calc_view::INPUT;
         }
         if kind == ViewKind::Table {
             self.view.layer = self.levels.get(&sheet).copied().unwrap_or(0);
+            self.restore_table_view(sheet);
             self.clamp_view();
             self.snap_to_shown();
         }
@@ -5013,6 +5022,10 @@ impl App {
             // On the table origin, - and + move the shown slice / scenario in the stack.
             KeyCode::Char(ch @ ('-' | '+')) if !ctrl && self.on_header() == Some(Header::Corner) && self.layer_count() > 0 => {
                 self.move_level(if ch == '-' { -1 } else { 1 });
+            }
+            // Without slices the origin is the table: - / + move its tab.
+            KeyCode::Char(ch @ ('-' | '+')) if !ctrl && self.on_header() == Some(Header::Corner) => {
+                self.movetab_command(&[if ch == '-' { "left" } else { "right" }]);
             }
             // On selected lines of the calculation sheet Tab / Shift+Tab nest them.
             KeyCode::Tab if !ctrl && !alt && self.calc_view() && self.on_header() == Some(Header::Row) => self.indent_calc_lines(true),
@@ -5507,7 +5520,10 @@ impl App {
                         self.view.anchor = None;
                         self.view.cursor = (0, 0);
                     }
-                    Some(Hit::Tab(i)) => self.switch_sheet(i),
+                    Some(Hit::Tab(i)) => {
+                        self.switch_sheet(i);
+                        self.tab_drag = Some(i);
+                    }
                     Some(Hit::Link(r, c)) => self.follow_link(r, c),
                     Some(Hit::Back) => self.back(),
                     Some(Hit::Layer(i)) => {
@@ -5563,6 +5579,17 @@ impl App {
                     self.point_at((r, c), Some(p.anchor.unwrap_or(p.cell)));
                 }
             }
+            // A tab dragged over another one takes its place.
+            MouseEventKind::Drag(MouseButton::Left) if self.tab_drag.is_some() => {
+                if let (Some(from), Some(Hit::Tab(to))) = (self.tab_drag, hit)
+                    && from != to
+                    && self.view.kind == ViewKind::Table
+                    && self.view.sheet == from
+                {
+                    self.move_table(from, to);
+                    self.tab_drag = Some(to);
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
                 let (rows, cols) = self.dims();
                 let to = match (self.on_header(), hit) {
@@ -5580,6 +5607,7 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                self.tab_drag = None;
                 self.dragging = false;
                 self.point_drag = false;
                 if let (Some(src), Some(to)) = (self.fill_drag.take(), self.fill_to.take()) {
@@ -5910,6 +5938,7 @@ impl App {
             },
             "functions" => self.show_helper(ViewKind::Functions),
             "calc" => self.show_helper(ViewKind::Calc),
+            "movetab" => self.movetab_command(&args),
             "fold" => self.fold_command(args.first().copied()),
             "plot" => self.open_plot_dialog(),
             "library" => self.open_library(),

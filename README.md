@@ -165,6 +165,7 @@ layer and column names.
 |----------------------------------|---------------------------------------------------------------|
 | typing, Enter, double-click      | edit the cell (typing replaces the content; the input appears in the cell) |
 | arrows, click                    | move; Shift+arrows or dragging selects                        |
+| `:movetab left\|right\|first\|last\|N`, drag a tab, `-` / `+` on the table origin | reorder the tables (the tabs); each table keeps its cursor and scroll position when you switch away and back |
 | while editing a formula: arrows, click | after `=`, `(`, `,` or an operator a reference is inserted (Shift+arrows, dragging: a range; without Shift: type `:` and point at the second corner), as in Excel |
 | ↑ in the first row, ← in the first column, click on a column/row header | cursor on the header: the whole column / row is selected; Shift+arrows extend |
 | on a header: `-` / `+`           | move the selected columns / rows; references follow           |
