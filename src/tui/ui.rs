@@ -64,8 +64,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     });
     // Layouts and charts have a row of their own below the tabs of the tables
-    // and calculations (in one window; two windows have their own tabs).
-    let second_row = !app.is_split() && app.has_second_tab_row();
+    // and calculations – also while the window is split, so that nothing moves
+    // when a chart is opened.
+    let second_row = app.has_second_tab_row();
     let [top, bar, body, stack, layers, status, fkeys] = Layout::vertical([
         Constraint::Length(1 + u16::from(second_row)),
         Constraint::Length(bar_height),
@@ -97,7 +98,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let helper = helper_hint(app);
     app.split_body = None;
     if app.is_split() {
-        draw_split_title(f, app, top);
+        let [row1, row2] = Layout::vertical([Constraint::Length(1), Constraint::Length(u16::from(second_row))]).areas(top);
+        draw_split_title(f, app, row1);
+        if second_row {
+            draw_second_tabs(f, app, row2);
+        }
         let [left, sep, right] =
             Layout::horizontal([Constraint::Percentage(app.split_percent), Constraint::Length(1), Constraint::Fill(1)]).areas(body);
         app.split_body = Some(body);
@@ -1174,12 +1179,16 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect, second_row: bool) {
 fn draw_second_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     f.buffer_mut().set_style(area, Style::new().bg(Color::DarkGray));
     let label = |t: &str| (format!(" {t} "), Style::new().italic().fg(Color::Gray).bg(Color::DarkGray), None);
+    // Whichever window shows it.
+    let shows = |kind: ViewKind| app.view.kind == kind || app.other.as_ref().is_some_and(|o| o.kind == kind);
     let mut items = Vec::new();
     let charts = app.chart_blocks();
     if !charts.is_empty() {
         items.push(label("charts"));
         for (i, (name, _)) in charts.into_iter().enumerate() {
-            items.push((format!(" ▥ {name} "), tab_style(false).fg(Color::LightGreen), Some(Hit::ViewTab(ViewKind::Chart(i)))));
+            let shown = shows(ViewKind::Chart(i));
+            let style = if shown { tab_style(true) } else { tab_style(false).fg(Color::LightGreen) };
+            items.push((format!(" ▥ {name} "), style, Some(Hit::ViewTab(ViewKind::Chart(i)))));
         }
     }
     let layouts = app.layout_blocks();
@@ -1189,8 +1198,7 @@ fn draw_second_tabs(f: &mut Frame, app: &mut App, area: Rect) {
         }
         items.push(label("layouts"));
         for (i, (name, _)) in layouts.into_iter().enumerate() {
-            let active = app.view.kind == ViewKind::Layout(i);
-            items.push((format!(" ▤ {name} "), tab_style(active), Some(Hit::ViewTab(ViewKind::Layout(i)))));
+            items.push((format!(" ▤ {name} "), tab_style(shows(ViewKind::Layout(i))), Some(Hit::ViewTab(ViewKind::Layout(i)))));
         }
     }
     chips(f, area, items, &mut app.hits);

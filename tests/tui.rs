@@ -607,8 +607,9 @@ fn two_tables_side_by_side_and_swap() {
     // The left window never shows helpers.
     a.set_view(ViewKind::Table, 2);
     render(&mut a);
-    // The left window never offers helpers (layouts are main views and may appear).
-    assert!(!a.hits.iter().any(|(_, h)| matches!(h, Hit::ViewTab(ViewKind::Inspector | ViewKind::Source | ViewKind::Chart(_)))));
+    // The left window never offers helpers (layouts are main views and may appear;
+    // the charts stand in the row of charts and layouts below the tabs).
+    assert!(!a.hits.iter().any(|(_, h)| matches!(h, Hit::ViewTab(ViewKind::Inspector | ViewKind::Source))));
 }
 
 #[test]
@@ -4814,4 +4815,28 @@ fn tab_and_ctrl_page_keys_walk_through_tables_and_calculations() {
     pg(&mut a, KeyCode::PageUp);
     pg(&mut a, KeyCode::PageUp);
     assert_eq!(here(&a), (ViewKind::Table, 0));
+}
+
+#[test]
+fn opening_a_chart_does_not_move_the_screen() {
+    use hardcalc::tui::app::ViewKind;
+    let mut a = app();
+    let screen = render(&mut a);
+    let rows = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
+    let line_of = |s: &str, needle: &str| rows(s).iter().position(|l| l.contains(needle)).unwrap_or(usize::MAX);
+    let (bar, header, tabs2) = (line_of(&screen, "A1 "), line_of(&screen, "Item  "), line_of(&screen, "charts"));
+    assert!(tabs2 < bar && bar < header, "{screen}");
+    click(&mut a, Hit::ViewTab(ViewKind::Chart(0)));
+    assert!(a.is_split(), "the chart opens beside the table");
+    let after = render(&mut a);
+    // The row that was clicked is still there, with the chart marked, and the
+    // formula bar and the table stand where they stood.
+    assert_eq!(line_of(&after, "charts"), tabs2, "{after}");
+    assert_eq!(line_of(&after, "A1 "), bar, "{after}");
+    assert!(rows(&after)[tabs2].contains("▥ Spending"), "{after}");
+    // A click on another chart there goes on from the same place, and closing the split changes nothing either.
+    click(&mut a, Hit::ViewTab(ViewKind::Chart(1)));
+    assert_eq!(line_of(&render(&mut a), "A1 "), bar);
+    a.toggle_split();
+    assert_eq!(line_of(&render(&mut a), "A1 "), bar);
 }
