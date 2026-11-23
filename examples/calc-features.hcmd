@@ -5,9 +5,11 @@
 A simply supported steel beam under a uniform load. The sheet shows what a
 calculation sheet can do: names and comments beside the lines, ranges of
 values, checks over a range, own functions and the formula library,
-integrals and derivatives, angle functions and charts. Open it with
+integrals and derivatives, angle functions, case distinctions with
+indented branches, and charts. Open it with
 `hardcalc examples/calc-features.hcmd`, then `:calc` (F6: formula library,
-F7: chart settings) and `:report` for the typeset report.
+F7: chart settings; ← in the Name column selects a line, then - / + move it,
+Tab nests it, Space folds a heading's section) and `:report` for the typeset report.
 
 ## Profiles :: matrix
 
@@ -70,6 +72,23 @@ l = 4.0 m                              ' run
 s = l/cos(α)                           ' length of the rafter
 c = sqrt(h^2 + l^2)                    ' the same by Pythagoras
 g_slope = g_k·cos(α)                   ' dead load across the rafter
+
+## Case distinction: snow load shape factor
+s_k = 1.0 kN/m^2                       ' ground snow load
+[Shape] μ =                            ' one formula per range of the slope
+    α ≤ 30°: 0.8
+    α < 60°: 0.8·(60° - α)/30°
+    else: 0                            ' too steep: no snow
+s_roof = μ·s_k                         ' snow load on the roof
+
+## Case distinction with a side calculation
+λ_rel = 0.6                            ' relative slenderness
+α_b   = 0.34                           ' imperfection factor, curve b
+χ =                                    ' buckling reduction factor
+    λ_rel ≤ 0.2: 1
+    else:
+        Φ = 0.5·(1 + α_b·(λ_rel - 0.2) + λ_rel^2)   ' local to this branch
+        1/(Φ + sqrt(Φ^2 - λ_rel^2))    ' the last line is the value
 ```
 
 ## Overview

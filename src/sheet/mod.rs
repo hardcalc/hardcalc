@@ -1232,7 +1232,13 @@ impl Render {
                 format!("{}({}) = {}", self.name(name), params.join("; "), self.formula(expr))
             }
             Out::Case { name, result, mode, .. } => match (result, o.taken().and_then(|b| b.value.as_ref().map(|v| (b, v)))) {
-                (Ok(q), Some((b, v))) => format!("{} = {}   if {}", self.name(name), self.steps(&v.expr, &v.values, q, *mode, None).join(" = "), self.cond_text(b)),
+                (Ok(q), Some((b, v))) => format!(
+                    "{} = {}   {}{}",
+                    self.name(name),
+                    self.steps(&v.expr, &v.values, q, *mode, None).join(" = "),
+                    if b.is_else { "" } else { "if " },
+                    self.cond_text(b)
+                ),
                 (Err(e), _) if !e.is_empty() => format!("{} =   ⚠ {e}", self.name(name)),
                 _ => format!("{} =   ⚠ see the lines below", self.name(name)),
             },
