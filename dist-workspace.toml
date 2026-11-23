@@ -27,3 +27,8 @@ publish-jobs = ["homebrew"]
 # GitHub no longer offers the macos-14 runner that dist picks for Apple Silicon
 [dist.github-custom-runners]
 aarch64-apple-darwin = "macos-15"
+
+# Typst typesets the formulas (screen, print, report): `brew install` brings it
+# along. Other installers cannot install programs; hardcalc says what to run.
+[dist.dependencies.homebrew]
+typst = { stage = ["run"] }

@@ -1997,6 +1997,9 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect, helper: Option<&str>) {
                 "moving: arrows move · + − taller/shorter (rest follows) · > < wider/narrower · = fit height · a auto height · Enter / Esc / F3 put it down".to_string()
             } else if matches!(app.view.kind, ViewKind::Layout(_)) {
                 "arrows: select · F3: move and resize · Space: overview · mouse: drag, ◢ resize, draw new".to_string()
+            } else if app.calc_view() && app.graphics.is_some() && !crate::typeset::available() {
+                // The terminal could show typeset formulas; Typst is missing.
+                format!("formulas are text: install Typst for typeset ones – {} · F9 menu · : command", crate::typeset::install_hint())
             } else if app.calc_view() {
                 "calculation: f_d = f_tk / γ_M · checks n ≤ f · cells Loads!C12 · Name and Comment beside the input · ## heading · #result/#formula/#full".into()
             } else if app.functions_view() {

@@ -89,6 +89,17 @@ pub fn available() -> bool {
     cfg!(feature = "typst") || program().is_some()
 }
 
+/// What to run to install Typst on this system.
+pub fn install_hint() -> &'static str {
+    if cfg!(windows) {
+        "winget install --id Typst.Typst"
+    } else if cfg!(target_os = "macos") {
+        "brew install typst"
+    } else {
+        "cargo install typst-cli"
+    }
+}
+
 /// The installed `typst` program (`HARDCALC_TYPST` overrides the name),
 /// if it runs; looked up once.
 pub fn program() -> Option<&'static std::path::Path> {

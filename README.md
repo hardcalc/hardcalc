@@ -70,7 +70,9 @@ Both install `hardcalc` and `hardconf` (see below).
 **Optional: Typst for typeset formulas.** With [Typst](https://typst.app)
 installed, hardcalc shows the calculations of a calculation sheet as typeset
 formulas (on screen in terminals with images, and when printing) and writes
-calculation reports. Without it everything works, the formulas stay text.
+calculation reports. Without it everything works, the formulas stay text. Homebrew installs
+Typst along with hardcalc; elsewhere hardcalc names the command to run in the status
+line of the ∑ calc tab when the terminal could show formulas.
 
 ```bash
 brew install typst               # macOS / Linux, Homebrew
