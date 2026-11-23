@@ -4596,6 +4596,9 @@ fn calc_tree_nests_with_tab_and_moves_as_a_unit() {
     assert_eq!(lines(&a), ["l = 0.4", "x =", "    l ≤ 1: 2", "    else: 3", "y = 5"]);
     let screen = render(&mut a);
     assert!(screen.contains("if l ≤ 1") && screen.contains("x = 2"), "{screen}");
+    // Nested lines are numbered below their head: 2, 2.1, 2.2, then 3.
+    let numbers: Vec<String> = (0..5).map(|r| a.row_header(r)).collect();
+    assert_eq!(numbers, ["1", "2", "2.1", "2.2", "3"]);
     // y moves up over the whole head with its branches.
     a.view.header = None;
     a.view.anchor = None;
@@ -4625,4 +4628,25 @@ fn calc_tree_nests_with_tab_and_moves_as_a_unit() {
     a.view.cursor = (1, 1);
     key(&mut a, KeyCode::F(8));
     assert_eq!(lines(&a), ["l = 0.4", "y = 5"]);
+}
+
+#[test]
+fn calc_example_numbers_nested_lines() {
+    let src = include_str!("../examples/calc-features.hcmd");
+    let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
+    a.command("calc");
+    let lines = hardcalc::sheet::source_lines(&a.doc);
+    let numbers = |first: &str, n: usize| {
+        let at = lines.iter().position(|l| l.starts_with(first)).unwrap();
+        (at..at + n).map(|r| a.row_header(r)).collect::<Vec<_>>()
+    };
+    // The head of the snow factor: its branches count on from its number, the
+    // line after them goes on at the level of the head.
+    let head: usize = numbers("[Shape] μ =", 1)[0].parse().unwrap();
+    assert_eq!(numbers("[Shape] μ =", 5), [head.to_string(), format!("{head}.1"), format!("{head}.2"), format!("{head}.3"), (head + 1).to_string()]);
+    // The buckling factor: branch 2 has side calculations nested below it.
+    let chi: usize = numbers("χ =", 1)[0].parse().unwrap();
+    assert_eq!(numbers("χ =", 5), [chi.to_string(), format!("{chi}.1"), format!("{chi}.2"), format!("{chi}.2.1"), format!("{chi}.2.2")]);
+    // Indentation that only aligns lines under a label does not nest.
+    assert_eq!(numbers("[Eq. 1]", 3), ["2", "3", "4"]);
 }

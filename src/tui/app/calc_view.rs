@@ -617,6 +617,45 @@ impl App {
         }
         self.calc_hidden = hidden;
         self.calc_keys = keys;
+        self.calc_numbers = self.numbered(&rows[..n]);
+    }
+
+    /// The numbers of the lines: lines of one level count 1, 2, 3 …, the lines
+    /// nested below a case head or a branch count on from its number (`60`,
+    /// `60.1`, `60.2`; a line nested in 60.2 is `60.2.1`). Indentation
+    /// elsewhere is only layout and does not nest. A line with nothing in it
+    /// belongs to the line after it.
+    fn numbered(&self, rows: &[CalcRow]) -> Vec<String> {
+        let sources: Vec<&str> = rows.iter().map(|row| self.calc_source(*row).map_or("", String::as_str)).collect();
+        let mut indent = vec![0; sources.len()];
+        let mut next = 0;
+        for i in (0..sources.len()).rev() {
+            // Only an empty line takes the indent of the next one; a line of
+            // spaces (just inserted below a case head) keeps its own.
+            next = if sources[i].is_empty() { next } else { sheet::expr::indent_of(sources[i]) };
+            indent[i] = next;
+        }
+        let (mut levels, mut counts): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
+        let mut numbers = Vec::with_capacity(sources.len());
+        let mut opens = false;
+        for (src, k) in sources.iter().zip(indent) {
+            while levels.last().is_some_and(|&l| l > k) {
+                levels.pop();
+                counts.pop();
+            }
+            // Deeper than the level: nested only below a head or a branch.
+            if levels.is_empty() || (levels.last().is_some_and(|&l| l < k) && opens) {
+                levels.push(k);
+                counts.push(0);
+            }
+            if let Some(c) = counts.last_mut() {
+                *c += 1;
+            }
+            numbers.push(counts.iter().map(usize::to_string).collect::<Vec<_>>().join("."));
+            let head = matches!(sheet::expr::parse_line(src), Line::Stmt { stmt: Some(sheet::expr::Stmt::Head { .. }), .. });
+            opens = head || (levels.len() > 1 && sheet::expr::parse_branch(src).is_ok());
+        }
+        numbers
     }
 
     /// Heading levels, indents and blank lines of the lines (without the + row).

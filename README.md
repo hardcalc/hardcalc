@@ -378,6 +378,10 @@ calculations of a branch are indented below it and local to it:
 ```
 ````
 
+The row numbers show the nesting: the branches of the head in line 60 are 60.1,
+60.2 …, lines nested in branch 60.2 are 60.2.1 …; the lines after the head go on
+with 61. Indentation that only aligns lines does not nest.
+
 In the **∑ calc** tab, **←** in the Name column selects a line (click on its
 number does too); then **- / +** move it – with what is nested below it, a
 `##` heading with its section –, **Tab / Shift+Tab** nest it deeper / back

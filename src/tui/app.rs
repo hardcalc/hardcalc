@@ -438,6 +438,8 @@ pub struct App {
     calc_hidden: Vec<bool>,
     /// Per row: the key of the heading in it.
     calc_keys: Vec<Option<(String, usize)>>,
+    /// Per line of the calculation sheet: its number (`60`, `60.1`, `69.2.1`).
+    calc_numbers: Vec<String>,
     /// How the calculation preview draws formulas (`:formulas`).
     pub formula_style: FormulaStyle,
     /// How the file is compressed; kept when saving.
@@ -925,6 +927,7 @@ impl App {
             calc_folds: Default::default(),
             calc_hidden: Vec::new(),
             calc_keys: Vec::new(),
+            calc_numbers: Vec::new(),
             formula_style: FormulaStyle::default(),
             compression: crate::storage::Compression::None,
             bundle: None,
@@ -1805,7 +1808,7 @@ impl App {
     pub fn row_header(&self, r: usize) -> String {
         if self.calc_view() {
             return match self.calc_rows().get(r) {
-                Some(CalcRow::Line { .. }) => (r + 1).to_string(),
+                Some(CalcRow::Line { .. }) => self.calc_numbers.get(r).cloned().unwrap_or_else(|| (r + 1).to_string()),
                 _ => "+".into(),
             };
         }

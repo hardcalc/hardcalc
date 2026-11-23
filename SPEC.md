@@ -894,7 +894,9 @@ f_yd   = f_yk / γ_M
   taken when no other is. The colon is followed by a space. With no
   condition holding the line is an error. Indent with spaces (a tab counts
   four); a line indented below a line that is no case head is read as an
-  ordinary line. The report and the preview draw the head as a brace with
+  ordinary line. Numbers of lines (a view feature, not in the file): the head
+  is 60, its branches 60.1, 60.2 …, lines nested in 60.2 are 60.2.1 …; the
+  line after the head is 61. The report and the preview draw the head as a brace with
   all branches, then the side calculations of the branch taken.
 - **Ranges:** `{1, 1.1,,, 2}` are the 11 values from 1 to 2 in steps of 0.1:
   an empty item continues with the step of the two values before it, up to
