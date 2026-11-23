@@ -4598,7 +4598,7 @@ fn calc_tree_nests_with_tab_and_moves_as_a_unit() {
     assert!(screen.contains("if l ≤ 1") && screen.contains("x = 2"), "{screen}");
     // Nested lines are numbered below their head: 2, 2.1, 2.2, then 3.
     let numbers: Vec<String> = (0..5).map(|r| a.row_header(r)).collect();
-    assert_eq!(numbers, ["1", "2", "2.1", "2.2", "3"]);
+    assert_eq!(numbers, ["1  ", "2  ", "2.1", "2.2", "3  "]);
     // y moves up over the whole head with its branches.
     a.view.header = None;
     a.view.anchor = None;
@@ -4638,7 +4638,7 @@ fn calc_example_numbers_nested_lines() {
     let lines = hardcalc::sheet::source_lines(&a.doc);
     let numbers = |first: &str, n: usize| {
         let at = lines.iter().position(|l| l.starts_with(first)).unwrap();
-        (at..at + n).map(|r| a.row_header(r)).collect::<Vec<_>>()
+        (at..at + n).map(|r| a.row_header(r).trim().to_string()).collect::<Vec<_>>()
     };
     // The head of the snow factor: its branches count on from its number, the
     // line after them goes on at the level of the head.
@@ -4649,4 +4649,13 @@ fn calc_example_numbers_nested_lines() {
     assert_eq!(numbers("χ =", 5), [chi.to_string(), format!("{chi}.1"), format!("{chi}.2"), format!("{chi}.2.1"), format!("{chi}.2.2")]);
     // Indentation that only aligns lines under a label does not nest.
     assert_eq!(numbers("[Eq. 1]", 3), ["2", "3", "4"]);
+    // The last digit of the primary index is in one column: the 9 under the 10's 0.
+    let at = lines.iter().position(|l| l.starts_with("[Shape] μ =")).unwrap();
+    let (h, b) = (a.row_header(at), a.row_header(at + 1));
+    let digit = |s: &str| s.find('.').unwrap_or_else(|| s.trim_end().len());
+    assert_eq!(h.len(), b.len());
+    assert_eq!(digit(&h), digit(&b) - 0, "{h:?} {b:?}");
+    let first = a.row_header(0);
+    assert_eq!(first.len(), h.len(), "{first:?} {h:?}: same width everywhere");
+    assert!(first.starts_with(' '), "{first:?}: 1 stands under the last digit of 56");
 }

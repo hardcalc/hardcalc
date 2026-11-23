@@ -655,7 +655,21 @@ impl App {
             let head = matches!(sheet::expr::parse_line(src), Line::Stmt { stmt: Some(sheet::expr::Stmt::Head { .. }), .. });
             opens = head || (levels.len() > 1 && sheet::expr::parse_branch(src).is_ok());
         }
+        // The last digit of the primary index stands in one column, the
+        // indices nested below it follow to the right: _9__, 10__, 10.1.
+        numbers.push("+".into());
+        let split = |n: &str| match n.find('.') {
+            Some(i) => (n[..i].len(), n.len() - i),
+            None => (n.len(), 0),
+        };
+        let widths = numbers.iter().map(|n| split(n)).fold((0, 0), |(a, b), (p, s)| (a.max(p), b.max(s)));
         numbers
+            .iter()
+            .map(|n| {
+                let (primary, rest) = n.split_at(n.find('.').unwrap_or(n.len()));
+                format!("{primary:>0$}{rest:<1$}", widths.0, widths.1)
+            })
+            .collect()
     }
 
     /// Heading levels, indents and blank lines of the lines (without the + row).

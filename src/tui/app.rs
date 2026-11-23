@@ -1809,7 +1809,8 @@ impl App {
         if self.calc_view() {
             return match self.calc_rows().get(r) {
                 Some(CalcRow::Line { .. }) => self.calc_numbers.get(r).cloned().unwrap_or_else(|| (r + 1).to_string()),
-                _ => "+".into(),
+                // The + stands under the last digit of the numbers like the primary index.
+                _ => self.calc_numbers.get(r).cloned().unwrap_or_else(|| "+".into()),
             };
         }
         if self.functions_view() {
