@@ -261,6 +261,11 @@ impl App {
             .sum()
     }
 
+    /// The source of a row of the calculation shown.
+    pub fn calc_row_source(&self, row: CalcRow) -> Option<String> {
+        self.calc_source(row).cloned()
+    }
+
     fn calc_source(&self, row: CalcRow) -> Option<&String> {
         match row {
             CalcRow::Line { block, line } => match &self.doc.blocks[block] {

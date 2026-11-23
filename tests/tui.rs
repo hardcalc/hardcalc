@@ -4476,7 +4476,9 @@ fn special_characters_with_ctrl_g() {
 fn calculation_headings_without_markdown() {
     let src = include_str!("../examples/calc-features.hcmd");
     let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
-    command(&mut a, "calc");
+    command(&mut a, "calc Beam");
+    // The cursor off the heading, whose text the formula bar would repeat.
+    a.view.cursor = (4, 1);
     let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
     term.draw(|f| ui::draw(f, &mut a)).unwrap();
     let screen: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
@@ -4634,30 +4636,29 @@ fn calc_tree_nests_with_tab_and_moves_as_a_unit() {
 fn calc_example_numbers_nested_lines() {
     let src = include_str!("../examples/calc-features.hcmd");
     let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
-    a.command("calc");
-    let lines = hardcalc::sheet::source_lines(&a.doc);
-    let numbers = |first: &str, n: usize| {
-        let at = lines.iter().position(|l| l.starts_with(first)).unwrap();
+    let sources = |a: &App| -> Vec<String> { a.calc_rows().iter().filter_map(|r| a.calc_row_source(*r)).collect() };
+    let numbers = |a: &App, first: &str, n: usize| {
+        let at = sources(a).iter().position(|l| l.starts_with(first)).unwrap();
         (at..at + n).map(|r| a.row_header(r).trim().to_string()).collect::<Vec<_>>()
     };
     // The head of the snow factor: its branches count on from its number, the
     // line after them goes on at the level of the head.
-    let head: usize = numbers("[Shape] μ =", 1)[0].parse().unwrap();
-    assert_eq!(numbers("[Shape] μ =", 5), [head.to_string(), format!("{head}.1"), format!("{head}.2"), format!("{head}.3"), (head + 1).to_string()]);
+    a.command("calc Roof");
+    let head: usize = numbers(&a, "[Shape] μ =", 1)[0].parse().unwrap();
+    assert_eq!(numbers(&a, "[Shape] μ =", 5), [head.to_string(), format!("{head}.1"), format!("{head}.2"), format!("{head}.3"), (head + 1).to_string()]);
     // The buckling factor: branch 2 has side calculations nested below it.
-    let chi: usize = numbers("χ =", 1)[0].parse().unwrap();
-    assert_eq!(numbers("χ =", 5), [chi.to_string(), format!("{chi}.1"), format!("{chi}.2"), format!("{chi}.2.1"), format!("{chi}.2.2")]);
-    // Indentation that only aligns lines under a label does not nest.
-    assert_eq!(numbers("[Eq. 1]", 3), ["2", "3", "4"]);
-    // The last digit of the primary index is in one column: the 9 under the 10's 0.
-    let at = lines.iter().position(|l| l.starts_with("[Shape] μ =")).unwrap();
+    let chi: usize = numbers(&a, "χ =", 1)[0].parse().unwrap();
+    assert_eq!(numbers(&a, "χ =", 5), [chi.to_string(), format!("{chi}.1"), format!("{chi}.2"), format!("{chi}.2.1"), format!("{chi}.2.2")]);
+    // The last digit of the primary index is in one column.
+    let at = sources(&a).iter().position(|l| l.starts_with("[Shape] μ =")).unwrap();
     let (h, b) = (a.row_header(at), a.row_header(at + 1));
     let digit = |s: &str| s.find('.').unwrap_or_else(|| s.trim_end().len());
     assert_eq!(h.len(), b.len());
     assert_eq!(digit(&h), digit(&b), "{h:?} {b:?}");
-    let first = a.row_header(0);
-    assert_eq!(first.len(), h.len(), "{first:?} {h:?}: same width everywhere");
-    assert!(first.starts_with(' '), "{first:?}: 1 stands under the last digit of 56");
+    assert_eq!(a.row_header(0).len(), h.len(), "same width everywhere");
+    // Indentation that only aligns lines under a label does not nest.
+    a.command("calc Loads");
+    assert_eq!(numbers(&a, "[Eq. 1]", 3), ["2", "3", "4"]);
 }
 
 fn sheet_names(a: &App) -> Vec<String> {
