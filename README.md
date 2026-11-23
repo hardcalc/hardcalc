@@ -172,7 +172,7 @@ layer and column names.
 | on a header: F8, ↓ / →           | delete columns / rows; back into the cells                    |
 | on a column header: typing, Enter | name the column (`Name` or `Name:Type`); references to the old name follow |
 | ← / ↑ from the headers, click top left | table origin: the whole table is selected; typing renames the table |
-| Tab / Shift+Tab                  | next / previous tab (tables, ⚙ types, ƒ functions, layouts)   |
+| Tab / Shift+Tab                  | next / previous tab (tables, ∑ calcs, ⚙ types, ƒ functions, layouts) |
 | `+` row / `+` column             | input there appends a new row / column                        |
 | Del / Backspace                  | clear the selection                                           |
 | Ctrl+D / Ctrl+R                  | fill the first row / column of the selection into the rest (one cell: from above / the left); formula references follow, `$B$1` stays |
@@ -605,7 +605,7 @@ with the data; on the right there are helper views:
 - **‹› source** – the Markdown source; the table on the left is highlighted.
 - **▥ charts**, another table, the types.
 
-**Tab** switches the active window, **Ctrl+U** swaps the windows (only when
+**Ctrl+W** (or **Alt+Tab**, where the terminal passes it on; Windows, macOS and most desktops keep it for themselves) switches the active window – **Tab** still goes through the tabs of the window –, **Ctrl+U** swaps the windows (only when
 both show data), **Ctrl+O** closes the split. The divider `│` can be grabbed
 and moved with the mouse, between 40/60 and 60/40. The hint line at the
 bottom belongs to the active window.

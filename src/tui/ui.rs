@@ -698,7 +698,7 @@ fn draw_split_title(f: &mut Frame, app: &mut App, area: Rect) {
     let dim = Style::new().fg(Color::Gray).bg(Color::DarkGray);
     let items = vec![
         (" ≡ hardcalc ".to_string(), Style::new().bold().fg(Color::Black).bg(Color::Cyan), Some(Hit::Logo)),
-        (" Tab: other window · Ctrl+U: swap · Ctrl+O: close split · drag │: width".to_string(), dim, None),
+        (" Ctrl+W: other window · Ctrl+U: swap · Ctrl+O: close split · drag │: width".to_string(), dim, None),
     ];
     let end = chips(f, area, items, &mut app.hits);
     draw_file_name(f, app, Rect { x: end, width: area.right().saturating_sub(end), ..area });

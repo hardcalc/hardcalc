@@ -56,6 +56,8 @@ impl App {
             Action::Pivot => self.toggle_pivot(None),
             Action::Split => self.toggle_split(),
             Action::SwapWindows => self.swap_windows(),
+            Action::OtherWindow if self.is_split() => self.swap_focus(),
+            Action::OtherWindow => self.error("one window only – Ctrl+O splits"),
             Action::NextTable => self.step_tab(1),
             Action::PrevTable => self.step_tab(-1),
             Action::Bold => self.toggle_style("bold"),

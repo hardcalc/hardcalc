@@ -4062,7 +4062,7 @@ impl App {
         if self.view.pivot.is_some() {
             return self.rotate_pivot(back);
         }
-        let tabs = self.window_tabs(true);
+        let tabs = self.window_tabs(self.left_focused || self.other.is_none());
         let Some(current) = tabs.iter().position(|(_, _, active)| *active) else { return };
         let n = tabs.len();
         let next = if back { (current + n - 1) % n } else { (current + 1) % n };
@@ -5011,9 +5011,6 @@ impl App {
             self.quit_armed = false;
         }
         self.message = None;
-        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) && self.is_split() {
-            return self.swap_focus();
-        }
         if let ViewKind::Layout(i) = self.view.kind
             && !ctrl
             && !matches!(key.code, KeyCode::F(_) | KeyCode::Char(':') | KeyCode::Tab | KeyCode::BackTab)

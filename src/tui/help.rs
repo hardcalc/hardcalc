@@ -58,7 +58,7 @@ pub const PAGES: &[Page] = &[
     (
         "Views",
         &[
-            ("Tab / Shift+Tab", "next / previous tab: tables, ⚙ types, ƒ functions, layouts"),
+            ("Tab / Shift+Tab", "next / previous tab of the window: tables, ∑ calcs, ⚙ types, ƒ functions, layouts (also Ctrl+PgDn / Ctrl+PgUp for tables and calcs)"),
             ("⚙ types, :types", "own data types (+ row or F5 adds, F8 deletes) and the built-in ones · Esc: back to the table"),
             ("ƒ functions", "own functions like gross(x) = x * 1.19, and the built-in ones"),
             (":calc, ∑ calc", "calculation sheet: Name · Input · the way to the result · Comment (f_d = f_tk / γ_M, n ≤ f); Del in Name or Comment clears it"),
@@ -73,7 +73,7 @@ pub const PAGES: &[Page] = &[
             ("click a filter", "next value of that axis"),
             ("", ""),
             ("Ctrl+O", "split: open / close the right window"),
-            ("Tab in the split", "switch between the windows"),
+            ("Ctrl+W (or Alt+Tab where the terminal passes it)", "in the split: switch between the windows; a click in a window does it too"),
             ("Ctrl+U", "swap the windows (when both show data)"),
             ("ⓘ inspector", "details of the cell on the left: value, type, links, choices"),
             ("‹› source", "the Markdown source, the current table highlighted"),

@@ -528,7 +528,7 @@ fn split_with_inspector() {
     assert!(lines.contains(&InspectorLine::Choice { value: "paid".into(), current: false }));
 
     // Tab focuses the inspector; Down + Enter picks "paid" for the main window's cell.
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     assert!(!a.left_focused);
     key(&mut a, KeyCode::Down);
     key(&mut a, KeyCode::Enter);
@@ -538,7 +538,7 @@ fn split_with_inspector() {
     assert_eq!(a.mode, Mode::Normal);
 
     // Clicking a choice while the table is focused applies it as well.
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     assert!(a.left_focused);
     render(&mut a);
     let (rect, _) = *a.other_hits.iter().find(|(_, h)| *h == Hit::Choice(2)).unwrap();
@@ -591,7 +591,7 @@ fn two_tables_side_by_side_and_swap() {
     use hardcalc::tui::app::ViewKind;
     let mut a = app();
     ctrl(&mut a, 'o');
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     render(&mut a);
     click(&mut a, Hit::Tab(2)); // right window: Metrics
     assert_eq!((a.view.kind, a.view.sheet), (ViewKind::Table, 2));
@@ -2767,10 +2767,10 @@ fn status_line_follows_the_focused_window() {
     let status = |a: &mut App| render(a).lines().nth(18).unwrap().to_string();
     assert!(status(&mut a).contains("double-click to edit"), "{}", status(&mut a));
     // The inspector on the right is focused: its keys, not the table's.
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     assert!(!a.left_focused);
     assert!(status(&mut a).contains("inspector: ↑↓ choose"), "{}", status(&mut a));
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     assert!(status(&mut a).contains("double-click to edit"));
 }
 
@@ -4839,4 +4839,23 @@ fn opening_a_chart_does_not_move_the_screen() {
     assert_eq!(line_of(&render(&mut a), "A1 "), bar);
     a.toggle_split();
     assert_eq!(line_of(&render(&mut a), "A1 "), bar);
+}
+
+#[test]
+fn tab_goes_through_tabs_in_the_split_and_ctrl_w_switches_the_window() {
+    let mut a = app();
+    ctrl(&mut a, 'o');
+    assert!(a.left_focused);
+    key(&mut a, KeyCode::Tab);
+    assert!(a.left_focused, "Tab no longer leaves the window");
+    assert_eq!(a.view.sheet, 1, "it goes to the next tab");
+    ctrl(&mut a, 'w');
+    assert!(!a.left_focused);
+    // In the right window Tab walks through the right window's tabs.
+    let kind = a.view.kind;
+    key(&mut a, KeyCode::Tab);
+    assert!(!a.left_focused);
+    assert_ne!(a.view.kind, kind, "{:?}", a.view.kind);
+    a.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::ALT));
+    assert!(a.left_focused, "Alt+Tab where the terminal passes it");
 }
