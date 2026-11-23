@@ -4654,7 +4654,7 @@ fn calc_example_numbers_nested_lines() {
     let (h, b) = (a.row_header(at), a.row_header(at + 1));
     let digit = |s: &str| s.find('.').unwrap_or_else(|| s.trim_end().len());
     assert_eq!(h.len(), b.len());
-    assert_eq!(digit(&h), digit(&b) - 0, "{h:?} {b:?}");
+    assert_eq!(digit(&h), digit(&b), "{h:?} {b:?}");
     let first = a.row_header(0);
     assert_eq!(first.len(), h.len(), "{first:?} {h:?}: same width everywhere");
     assert!(first.starts_with(' '), "{first:?}: 1 stands under the last digit of 56");
