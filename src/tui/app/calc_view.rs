@@ -1,7 +1,7 @@
 //! The "∑ calc" tab: the calculation sheet – the lines of all ```hardcalc
 //! blocks – with the way to each result next to them.
 
-use super::{App, CellView, ViewKind};
+use super::{App, CellView, Header, ViewKind};
 use crate::layers::{CellStyle, Color};
 use crate::model::{Align, Block, Document};
 use crate::sheet;
@@ -470,6 +470,75 @@ impl App {
             let tail = &word[head.len()..];
             self.info(format!("{word} is a name of its own – for {g}{tail} write \\{head}{tail} or press Ctrl+G"));
         }
+    }
+
+    /// Arrow keys around the row headers: ← from the Name column selects the
+    /// line, ↑ / ↓ (with Shift) extend, → goes back into the cells.
+    pub(super) fn calc_header_move(&mut self, dr: isize, dc: isize, extend: bool) -> bool {
+        let lines = self.calc_rows().len() - 1;
+        let (r, c) = self.view.cursor;
+        match self.view.header {
+            Some(Header::Row) => {
+                if dc > 0 {
+                    self.leave_header();
+                } else if dr != 0 {
+                    self.extend_header(extend);
+                    self.view.cursor.0 = (r as isize + dr).clamp(0, lines as isize - 1) as usize;
+                }
+            }
+            None if dc == -1 && dr == 0 && c == NAME && r < lines && !extend => {
+                self.enter_header(Header::Row, r, 0);
+                self.info("line selected – - / + moves it, Shift+↑/↓ extends, → back to the cells");
+            }
+            _ => return false,
+        }
+        self.view.follow = true;
+        true
+    }
+
+    /// Moves the selected lines one place up (-1) or down (+1); the lines
+    /// swap places in the document, also across the blocks of the sheet.
+    pub(super) fn move_calc_lines(&mut self, d: isize) {
+        let ((r0, _), (r1, _)) = self.selection();
+        let mut rows = self.calc_rows();
+        rows.pop();
+        let n = rows.len();
+        if r1 >= n || (d < 0 && r0 == 0) || (d > 0 && r1 + 1 >= n) {
+            return;
+        }
+        let slots: Vec<(usize, usize)> = rows
+            .iter()
+            .filter_map(|row| match row {
+                CalcRow::Line { block, line } => Some((*block, *line)),
+                CalcRow::New => None,
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..n).collect();
+        if d < 0 {
+            order[r0 - 1..=r1].rotate_left(1);
+        } else {
+            order[r0..=r1 + 1].rotate_right(1);
+        }
+        self.with_doc(|doc| {
+            let old: Vec<String> = slots
+                .iter()
+                .map(|&(b, l)| match &doc.blocks[b] {
+                    Block::Code { body, .. } => body[l].clone(),
+                    _ => String::new(),
+                })
+                .collect();
+            for (&(b, l), &from) in slots.iter().zip(&order) {
+                if let Block::Code { body, .. } = &mut doc.blocks[b] {
+                    body[l] = old[from].clone();
+                }
+            }
+        });
+        let step = |i: usize| (i as isize + d) as usize;
+        self.view.cursor.0 = step(self.view.cursor.0);
+        if let Some(a) = &mut self.view.anchor {
+            a.0 = step(a.0);
+        }
+        self.view.follow = true;
     }
 
     /// Inserts an empty line below the cursor (at the end on the + row) and edits it.

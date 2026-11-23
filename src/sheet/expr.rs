@@ -785,6 +785,19 @@ impl Parser {
         Ok(Expr::Num { value, text, unit })
     }
 
+    /// Index of the `)` of the group of known units that starts at `(` here.
+    fn unit_group_end(&self) -> Option<usize> {
+        let end = (self.pos..self.chars.len()).find(|&i| self.chars[i] == ')')?;
+        let inner: String = self.chars[self.pos + 1..end].iter().collect();
+        // Plain products of symbols: no nesting.
+        if inner.contains('(') {
+            return None;
+        }
+        let unit = parse_unit(&inner)?;
+        crate::quantity::resolve(&unit).ok()?;
+        Some(end)
+    }
+
     /// A unit right after a number: known symbols joined by `/`, `·`, `*`
     /// without spaces, each with an exponent (`^2`, `²`).
     fn unit(&mut self) -> Option<Unit> {
@@ -794,16 +807,23 @@ impl Parser {
         }
         let mut text = String::new();
         loop {
-            let sym_start = self.pos;
-            while self.peek().is_some_and(is_unit_char) {
-                self.pos += 1;
+            // After an operator a parenthesised group of units may follow.
+            if !text.is_empty() && self.peek() == Some('(') {
+                let end = self.unit_group_end().expect("checked at the operator");
+                text.extend(&self.chars[self.pos..=end]);
+                self.pos = end + 1;
+            } else {
+                let sym_start = self.pos;
+                while self.peek().is_some_and(is_unit_char) {
+                    self.pos += 1;
+                }
+                let sym: String = self.chars[sym_start..self.pos].iter().collect();
+                if !is_unit_symbol(&sym) {
+                    self.pos = sym_start;
+                    break;
+                }
+                text.push_str(&sym);
             }
-            let sym: String = self.chars[sym_start..self.pos].iter().collect();
-            if !is_unit_symbol(&sym) {
-                self.pos = sym_start;
-                break;
-            }
-            text.push_str(&sym);
             // Exponent.
             if self.peek() == Some('^') {
                 let e_start = self.pos;
@@ -821,6 +841,17 @@ impl Parser {
                 self.pos += 1;
             }
             match self.peek() {
+                Some(op @ ('/' | '·' | '*' | '⋅')) if self.peek_at(1) == Some('(') => {
+                    // Only a group of known units.
+                    self.pos += 1;
+                    let ok = self.unit_group_end().is_some();
+                    self.pos -= 1;
+                    if !ok {
+                        break;
+                    }
+                    text.push(op);
+                    self.pos += 1;
+                }
                 Some(op @ ('/' | '·' | '*' | '⋅')) if self.peek_at(1).is_some_and(is_unit_char) => {
                     // Only when another unit symbol follows.
                     let mut end = self.pos + 1;

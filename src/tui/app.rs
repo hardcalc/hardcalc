@@ -2210,7 +2210,9 @@ impl App {
 
     /// The header the cursor is on (tables only, not in the pivot view).
     pub fn on_header(&self) -> Option<Header> {
-        self.view.header.filter(|_| self.view.kind == ViewKind::Table && self.view.pivot.is_none())
+        // The calculation sheet has row headers only: its lines are moved with them.
+        let calc_row = self.view.kind == ViewKind::Calc && self.view.header == Some(Header::Row);
+        self.view.header.filter(|_| calc_row || (self.view.kind == ViewKind::Table && self.view.pivot.is_none()))
     }
 
     // ------------------------------------------------------------ types view
@@ -4443,6 +4445,9 @@ impl App {
     /// Arrow keys on a column / row header, or from the first row / column
     /// onto it. Returns whether the move was handled here.
     fn header_move(&mut self, dr: isize, dc: isize, extend: bool) -> bool {
+        if self.view.kind == ViewKind::Calc {
+            return self.calc_header_move(dr, dc, extend);
+        }
         if self.view.kind != ViewKind::Table || self.view.pivot.is_some() {
             return false;
         }
@@ -5003,6 +5008,7 @@ impl App {
                 let d = if ch == '-' { -1 } else { 1 };
                 match self.on_header() {
                     Some(Header::Column) => self.move_lines(0, d),
+                    _ if self.calc_view() => self.move_calc_lines(d),
                     _ => self.move_lines(d, 0),
                 }
             }
@@ -5471,6 +5477,11 @@ impl App {
                         }
                         self.fill_drag = Some(self.selection());
                         self.fill_to = None;
+                    }
+                    Some(Hit::RowHeader(r)) if self.calc_view() => {
+                        if r + 1 < self.calc_rows().len() {
+                            self.click_header(Header::Row, (r, 0), m.modifiers.contains(KeyModifiers::SHIFT));
+                        }
                     }
                     Some(Hit::RowHeader(_) | Hit::File(_) | Hit::Confirm(_) | Hit::MenuTop(_) | Hit::MenuItem(_) | Hit::ContextItem(_) | Hit::Suggestion(_) | Hit::ValueItem(_) | Hit::ValuesApply | Hit::Symbol(_)) => {}
                     Some(Hit::Corner) => {

@@ -4512,3 +4512,41 @@ fn formula_help_below_the_table_while_typing() {
     key(&mut a, KeyCode::Esc);
     assert!(!render(&mut a).contains(" formula – "));
 }
+
+#[test]
+fn calc_lines_move_on_the_row_header() {
+    use hardcalc::tui::app::ViewKind;
+    let mut a = app();
+    a.command("calc");
+    for l in ["a = 1", "b = 2", "c = 3"] {
+        typ(&mut a, l);
+        key(&mut a, KeyCode::Enter);
+    }
+    a.view.cursor = (0, 0);
+    key(&mut a, KeyCode::Left);
+    assert_eq!(a.view.kind, ViewKind::Calc);
+    assert_eq!(a.view.header, Some(Header::Row));
+    key(&mut a, KeyCode::Char('+'));
+    key(&mut a, KeyCode::Char('+'));
+    assert_eq!(hardcalc::sheet::source_lines(&a.doc), ["b = 2", "c = 3", "a = 1"]);
+    assert_eq!(a.view.cursor.0, 2);
+    key(&mut a, KeyCode::Char('+'));
+    assert_eq!(a.view.cursor.0, 2, "already last");
+    key(&mut a, KeyCode::Char('-'));
+    assert_eq!(hardcalc::sheet::source_lines(&a.doc), ["b = 2", "a = 1", "c = 3"]);
+    key(&mut a, KeyCode::Right);
+    assert_eq!(a.view.header, None);
+}
+
+#[test]
+fn calc_units_with_parentheses() {
+    let mut a = app();
+    a.command("calc");
+    typ(&mut a, "U = 0,3 W/(m^2*K)");
+    key(&mut a, KeyCode::Enter);
+    typ(&mut a, "q = U * 20 K -> W/m^2");
+    key(&mut a, KeyCode::Enter);
+    let screen = render(&mut a);
+    assert!(screen.contains("6"), "{screen}");
+    assert!(!screen.contains("unknown") && !screen.contains("unexpected"), "{screen}");
+}

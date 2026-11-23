@@ -30,7 +30,7 @@ pub const PAGES: &[Page] = &[
             ("Shift+arrows, drag", "select cells"),
             ("↑ in row 1, ← in column A", "onto the header: the whole column / row is selected"),
             ("  click a column / row header", "the same; Shift+arrows or dragging selects more"),
-            ("  - / +", "move the column(s) / row(s) – references follow"),
+            ("  - / +", "move the column(s) / row(s) – references follow; in the ∑ calc tab ← in Name selects a line, - / + moves it"),
             ("  F8 · Del · ↓ / →", "delete them · clear them · back into the cells"),
             ("  type, Enter on a column header", "name the column (Name or Name:Type) – references follow"),
             ("← / ↑ from the headers, click top left", "table origin: the whole table; type to rename it"),

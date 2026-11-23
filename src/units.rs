@@ -59,37 +59,76 @@ impl Unit {
         self.0.iter().map(|(k, e)| (k.as_str(), *e))
     }
 
-    /// Parses `€`, `m/s`, `kg*m/s^2`, `m^2`; superscripts (`cm³`, `s⁻¹`) and
-    /// `⋅` are read as `^` and `*`. Returns `None` for malformed input.
+    /// Parses `€`, `m/s`, `kg*m/s^2`, `m^2`, `W/(m^2*K)`; superscripts (`cm³`,
+    /// `s⁻¹`) and `⋅` are read as `^` and `*`. Operators work from left to
+    /// right: `a/b*c` is `a·c/b`; parentheses group. `None` for malformed input.
     pub fn parse(s: &str) -> Option<Unit> {
         let s = carets(s.trim());
-        let s = s.as_str();
-        if s.is_empty() {
+        let chars: Vec<char> = s.chars().collect();
+        let mut pos = 0;
+        let unit = parse_product(&chars, &mut pos)?;
+        (pos == chars.len()).then_some(unit)
+    }
+}
+
+/// `a/b*c`, up to the end or a closing parenthesis.
+fn parse_product(c: &[char], pos: &mut usize) -> Option<Unit> {
+    let mut unit = Unit::none();
+    let mut sign = 1;
+    loop {
+        let factor = parse_factor(c, pos)?;
+        unit = unit.mul(&factor.powi(sign));
+        match c.get(*pos) {
+            Some(op @ ('*' | '/' | '·')) => {
+                sign = if *op == '/' { -1 } else { 1 };
+                *pos += 1;
+            }
+            _ => return Some(unit),
+        }
+    }
+}
+
+/// A symbol or a parenthesised product, with an optional `^exponent`.
+fn parse_factor(c: &[char], pos: &mut usize) -> Option<Unit> {
+    while c.get(*pos).is_some_and(|ch| ch.is_whitespace()) {
+        *pos += 1;
+    }
+    let base = if c.get(*pos) == Some(&'(') {
+        *pos += 1;
+        let inner = parse_product(c, pos)?;
+        if c.get(*pos) != Some(&')') {
             return None;
         }
-        let mut unit = Unit::none();
-        let mut sign = 1;
-        let mut rest = s;
-        loop {
-            let end = rest.find(['*', '/', '·']).unwrap_or(rest.len());
-            let factor = rest[..end].trim();
-            let (sym, exp) = match factor.split_once('^') {
-                Some((sym, e)) => (sym.trim(), e.trim().parse::<i32>().ok()?),
-                None => (factor, 1),
-            };
-            if sym.is_empty() || sym.chars().any(|c| c.is_ascii_digit() || c.is_whitespace()) {
-                return None;
-            }
-            unit = unit.mul(&Unit::symbol(sym).powi(exp * sign));
-            if end == rest.len() {
-                break;
-            }
-            let op = rest[end..].chars().next().unwrap();
-            sign = if op == '/' { -1 } else { 1 };
-            rest = &rest[end + op.len_utf8()..];
+        *pos += 1;
+        inner
+    } else {
+        let start = *pos;
+        while c.get(*pos).is_some_and(|ch| !matches!(ch, '*' | '/' | '·' | '^' | '(' | ')')) {
+            *pos += 1;
         }
-        Some(unit)
+        let sym: String = c[start..*pos].iter().collect();
+        let sym = sym.trim();
+        if sym.is_empty() || sym.chars().any(|ch| ch.is_ascii_digit() || ch.is_whitespace()) {
+            return None;
+        }
+        Unit::symbol(sym)
+    };
+    while c.get(*pos).is_some_and(|ch| ch.is_whitespace()) {
+        *pos += 1;
     }
+    if c.get(*pos) != Some(&'^') {
+        return Some(base);
+    }
+    *pos += 1;
+    let start = *pos;
+    if c.get(*pos) == Some(&'-') {
+        *pos += 1;
+    }
+    while c.get(*pos).is_some_and(|ch| ch.is_ascii_digit()) {
+        *pos += 1;
+    }
+    let exp: i32 = c[start..*pos].iter().collect::<String>().parse().ok()?;
+    Some(base.powi(exp))
 }
 
 /// `cm³` → `cm^3`, `s⁻¹` → `s^-1`, `kN⋅m` → `kN*m`.
@@ -136,6 +175,8 @@ impl std::fmt::Display for Unit {
         let num = if num.is_empty() { "1".to_string() } else { num.join("*") };
         if den.is_empty() {
             write!(f, "{num}")
+        } else if den.len() > 1 {
+            write!(f, "{num}/({})", den.join("*"))
         } else {
             write!(f, "{num}/{}", den.join("*"))
         }
@@ -155,6 +196,11 @@ mod tests {
         assert_eq!(Unit::parse("cm³"), Unit::parse("cm^3"));
         assert_eq!(Unit::parse("kN/m²"), Unit::parse("kN/m^2"));
         assert_eq!(Unit::parse("s⁻¹"), Unit::parse("s^-1"));
+        assert_eq!(Unit::parse("W/(m^2*K)"), Unit::parse("W/m^2/K"));
+        assert_eq!(Unit::parse("W/(m²·K)").unwrap().to_string(), "W/(K*m^2)");
+        assert_eq!(Unit::parse("(kN*m)^2/m"), Unit::parse("kN^2*m"));
+        assert!(Unit::parse("W/(m^2").is_none());
+        assert!(Unit::parse("W/m)").is_none());
     }
 
     #[test]
