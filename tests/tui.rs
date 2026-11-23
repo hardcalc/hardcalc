@@ -4578,3 +4578,51 @@ fn calc_sections_fold_and_move() {
     a.command("fold off");
     assert!(!a.row_hidden(1));
 }
+
+#[test]
+fn calc_tree_nests_with_tab_and_moves_as_a_unit() {
+    let mut a = app();
+    a.command("calc");
+    for l in ["l = 0,4", "x =", "l <= 1: 2", "else: 3", "y = 5"] {
+        typ(&mut a, l);
+        key(&mut a, KeyCode::Enter);
+    }
+    let lines = |a: &App| hardcalc::sheet::source_lines(&a.doc);
+    // Nest the two branches below the head: select both lines, Tab.
+    a.view.cursor = (2, 0);
+    key(&mut a, KeyCode::Left);
+    a.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    key(&mut a, KeyCode::Tab);
+    assert_eq!(lines(&a), ["l = 0.4", "x =", "    l ≤ 1: 2", "    else: 3", "y = 5"]);
+    let screen = render(&mut a);
+    assert!(screen.contains("if l ≤ 1") && screen.contains("x = 2"), "{screen}");
+    // y moves up over the whole head with its branches.
+    a.view.header = None;
+    a.view.anchor = None;
+    a.view.cursor = (4, 0);
+    key(&mut a, KeyCode::Left);
+    key(&mut a, KeyCode::Char('-'));
+    assert_eq!(lines(&a), ["l = 0.4", "y = 5", "x =", "    l ≤ 1: 2", "    else: 3"]);
+    // The head moves with its branches, and a branch does not leave its group.
+    a.view.header = None;
+    a.view.cursor = (2, 0);
+    key(&mut a, KeyCode::Left);
+    key(&mut a, KeyCode::Char('-'));
+    assert_eq!(lines(&a), ["l = 0.4", "x =", "    l ≤ 1: 2", "    else: 3", "y = 5"]);
+    a.view.header = None;
+    a.view.cursor = (3, 0);
+    key(&mut a, KeyCode::Left);
+    key(&mut a, KeyCode::Char('+'));
+    assert!(a.message.as_ref().is_some_and(|m| m.error), "else is last in its group");
+    assert_eq!(lines(&a)[3], "    else: 3");
+    // Shift+Tab takes lines out again.
+    a.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert_eq!(lines(&a)[3], "else: 3");
+    ctrl(&mut a, 'z');
+    // F8 on the head deletes its branches too.
+    a.view.header = None;
+    a.view.anchor = None;
+    a.view.cursor = (1, 1);
+    key(&mut a, KeyCode::F(8));
+    assert_eq!(lines(&a), ["l = 0.4", "y = 5"]);
+}

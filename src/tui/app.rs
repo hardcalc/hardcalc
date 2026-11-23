@@ -2517,7 +2517,7 @@ impl App {
                 }
                 Block::Code { ref body, .. } if (all || calc_only) && calc.contains_key(&i) => {
                     let outs = calc.remove(&i).unwrap_or_default();
-                    items.push(PrintItem::Calc(outs.iter().map(calc_print_line).collect()));
+                    items.push(PrintItem::Calc(crate::sheet::document_lines(&outs).iter().map(calc_print_line).collect()));
                     // The plots of the block follow it.
                     let plots = body.iter().filter(|l| crate::sheet::is_plot_line(l)).count();
                     for _ in 0..plots {
@@ -5014,6 +5014,9 @@ impl App {
             KeyCode::Char(ch @ ('-' | '+')) if !ctrl && self.on_header() == Some(Header::Corner) && self.layer_count() > 0 => {
                 self.move_level(if ch == '-' { -1 } else { 1 });
             }
+            // On selected lines of the calculation sheet Tab / Shift+Tab nest them.
+            KeyCode::Tab if !ctrl && !alt && self.calc_view() && self.on_header() == Some(Header::Row) => self.indent_calc_lines(true),
+            KeyCode::BackTab if !ctrl && !alt && self.calc_view() && self.on_header() == Some(Header::Row) => self.indent_calc_lines(false),
             // On a heading line of the calculation sheet Space folds / unfolds its section.
             KeyCode::Char(' ') if !ctrl && !alt && self.calc_view() && self.on_header() == Some(Header::Row) => self.toggle_fold(),
             KeyCode::Char(ch @ ('-' | '+')) if !ctrl && matches!(self.on_header(), Some(Header::Column | Header::Row)) => {
@@ -6420,7 +6423,7 @@ fn calc_print_line(o: &crate::sheet::Out) -> print::CalcLine {
     let failed = matches!(o, Out::Check { rel, sides: Ok((l, r)), .. } if !sheet::verdict(*rel, l, r).ok);
     let ok = sheet::problems(std::slice::from_ref(o)).is_empty();
     let math = match o {
-        Out::Assign { .. } | Out::Show { .. } | Out::Def { .. } | Out::Check { .. } if ok => sheet::notation::line(sheet::notation::Lang::Typst, o),
+        Out::Assign { .. } | Out::Show { .. } | Out::Def { .. } | Out::Check { .. } | Out::Case { .. } if ok => sheet::notation::line(sheet::notation::Lang::Typst, o),
         _ => None,
     };
     let text = match o {

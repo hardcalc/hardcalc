@@ -302,12 +302,57 @@ fn steps(lang: Lang, e: &Expr, values: &Values, q: &Quantity, mode: Mode, series
     out
 }
 
+/// The words of a case distinction in the language of the report.
+fn case_words() -> (&'static str, &'static str) {
+    if report_lang() == "de" { ("für", "sonst") } else { ("if", "otherwise") }
+}
+
 /// One evaluated line as math (`None` for headings, comments, blanks and
 /// lines that could not be calculated).
 pub fn line(lang: Lang, o: &Out) -> Option<String> {
     match o {
         Out::Assign { name: n, expr: e, values, result: Ok(q), series, mode, .. } => Some(format!("{} = {}", name(lang, n), steps(lang, e, values, q, *mode, series.as_ref()).join(" = "))),
         Out::Show { expr: e, values, result: Ok(q), series, mode, .. } => Some(steps(lang, e, values, q, *mode, series.as_ref()).join(" = ")),
+        Out::Case { name: n, result: Ok(q), branches, mode, .. } => {
+            let (iff, otherwise) = case_words();
+            let cond = |b: &super::Branch| -> String {
+                let mut c = String::new();
+                for (i, k) in b.conds.iter().enumerate() {
+                    if i == 0 {
+                        c.push_str(&expr(lang, &k.lhs, &|_| None));
+                    }
+                    c.push_str(&format!(" {} {}", rel(lang, k.rel), expr(lang, &k.rhs, &|_| None)));
+                }
+                c
+            };
+            let rows: Vec<String> = branches
+                .iter()
+                .map(|b| {
+                    let f = b.shown.as_ref().map_or_else(|| "?".to_string(), |e| expr(lang, e, &|_| None));
+                    match (lang, b.is_else) {
+                        // term-maths writes the "if" of the second column itself.
+                        (Lang::Latex, false) => format!("{f} & {}", cond(b)),
+                        (Lang::Latex, true) => format!("{f} \\quad \\text{{{otherwise}}}"),
+                        (Lang::Typst, false) => format!("{f} quad \"{iff}\" {}", cond(b)),
+                        (Lang::Typst, true) => format!("{f} quad \"{otherwise}\""),
+                    }
+                })
+                .collect();
+            let cases = match lang {
+                Lang::Latex => format!("\\begin{{cases}} {} \\end{{cases}}", rows.join(" \\\\ ")),
+                Lang::Typst => format!("cases({})", rows.join(", ")),
+            };
+            // After the brace: the taken branch calculated (its formula is in the brace).
+            let tail = match o.taken().and_then(|b| b.value.as_ref()) {
+                Some(v) => {
+                    let steps = steps(lang, &v.expr, &v.values, q, *mode, None);
+                    let skip = usize::from(steps.len() > 1);
+                    steps[skip..].join(" = ")
+                }
+                None => quantity(lang, q),
+            };
+            Some(format!("{} = {cases} = {tail}", name(lang, n)))
+        }
         Out::Def { name: n, params, expr: e, .. } => {
             let params: Vec<String> = params.iter().map(|p| name(lang, p)).collect();
             Some(format!("{}{} = {}", own_function(lang, n), paren(lang, params.join("; ")), expr(lang, e, &|_| None)))
@@ -358,6 +403,7 @@ fn report_lang() -> String {
 /// The calculation as a Typst document: headings, comments as text, each
 /// line as display math. `title` heads the report.
 pub fn typst_report(title: &str, out: &[Out]) -> String {
+    let out = &super::document_lines(out);
     let mut s = String::new();
     s.push_str("#set page(paper: \"a4\", margin: 2cm)\n");
     s.push_str(&format!("#set text(lang: \"{}\", size: 10.5pt)\n", report_lang()));

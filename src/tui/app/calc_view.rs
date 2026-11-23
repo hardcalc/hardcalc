@@ -15,6 +15,37 @@ pub const INPUT: usize = 1;
 pub const CALCULATION: usize = 2;
 pub const COMMENT: usize = 3;
 
+/// Structure of the lines: heading levels, indents, blank lines.
+#[derive(Debug, Default)]
+struct Shape {
+    levels: Vec<Option<usize>>,
+    indents: Vec<usize>,
+    blank: Vec<bool>,
+}
+
+impl Shape {
+    /// Last line that belongs to line `r`: the rest of a heading's section
+    /// (up to the next heading of the same or a higher level), else the
+    /// lines nested deeper below it.
+    fn unit_end(&self, r: usize) -> usize {
+        let n = self.indents.len();
+        if let Some(level) = self.levels[r] {
+            return (r + 1..n).find(|&i| self.levels[i].is_some_and(|l| l <= level)).map_or(n - 1, |i| i - 1);
+        }
+        if self.blank[r] {
+            return r;
+        }
+        let mut j = r + 1;
+        while j < n && (self.blank[j] || self.indents[j] > self.indents[r]) {
+            j += 1;
+        }
+        while j > r + 1 && self.blank[j - 1] {
+            j -= 1;
+        }
+        j - 1
+    }
+}
+
 /// One row of the calculation view.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CalcRow {
@@ -128,6 +159,7 @@ pub enum PreviewKind {
 /// The sheet typeset: one or more screen lines per evaluated line.
 pub fn preview_lines(out: &[sheet::Out], style: FormulaStyle) -> Vec<(String, PreviewKind)> {
     use sheet::Out;
+    let out = &sheet::document_lines(out);
     let mut lines = Vec::new();
     let render = match style {
         FormulaStyle::Ascii => sheet::Render { style: sheet::expr::TextStyle { ascii: true, point: true } },
@@ -291,14 +323,35 @@ impl App {
         let parts = row.and_then(|row| self.calc_source(row)).map(|s| Parts::of(s));
         let text = match (row, c) {
             (Some(CalcRow::Line { .. }), NAME) => parts.and_then(|p| p.label).unwrap_or_default(),
-            (Some(CalcRow::Line { .. }), INPUT) => parts.map(|p| p.code).unwrap_or_default(),
+            // Indented lines (branches, side calculations) show their indent.
+            (Some(CalcRow::Line { .. }), INPUT) => {
+                let indent = row.and_then(|row| self.calc_source(row)).map_or(0, |s| sheet::expr::indent_of(s));
+                format!("{}{}", " ".repeat(indent), parts.map(|p| p.code).unwrap_or_default())
+            }
             (Some(CalcRow::Line { .. }), COMMENT) => {
                 style.fg = Some(Color::Named("darkgray".into()));
                 parts.and_then(|p| p.comment).unwrap_or_default()
             }
             (Some(CalcRow::Line { .. }), _) => match self.calc_out(r) {
                 Some(out) => {
+                    let nested = matches!(out, sheet::Out::Child(_));
+                    let out = out.inner().clone();
                     match &out {
+                        sheet::Out::Skipped(_) => {
+                            style.fg = Some(Color::Named("darkgray".into()));
+                            style.italic = true;
+                        }
+                        sheet::Out::Branch(b) => {
+                            style.fg = Some(Color::Named(
+                                match b.holds {
+                                    Some(true) => "green",
+                                    _ => "darkgray",
+                                }
+                                .into(),
+                            ));
+                            error = b.error.is_some();
+                        }
+                        sheet::Out::Case { result: Err(_), .. } => error = true,
                         // Headings and comment lines without their `##` and `'`.
                         sheet::Out::Heading { level, text } => {
                             style.bold = true;
@@ -327,7 +380,10 @@ impl App {
                         }
                         _ => {}
                     }
-                    sheet::Render::default().body(&out)
+                    let text = sheet::Render::default().body(&out);
+                    // Lines below a case head are indented as in the input.
+                    let indent = row.and_then(|row| self.calc_source(row)).map_or(0, |s| sheet::expr::indent_of(s));
+                    if nested { format!("{}{text}", " ".repeat(indent)) } else { text }
                 }
                 None => String::new(),
             },
@@ -339,12 +395,12 @@ impl App {
     /// The calculation of row `r` as Typst math, for lines that are
     /// calculated without problems (not headings, comments, plots or errors).
     pub fn calc_math(&mut self, r: usize) -> Option<String> {
-        let out = self.calc_out(r)?;
+        let out = self.calc_out(r)?.inner().clone();
         if !sheet::problems(std::slice::from_ref(&out)).is_empty() {
             return None;
         }
         match out {
-            sheet::Out::Assign { .. } | sheet::Out::Show { .. } | sheet::Out::Def { .. } | sheet::Out::Check { .. } => {
+            sheet::Out::Assign { .. } | sheet::Out::Show { .. } | sheet::Out::Def { .. } | sheet::Out::Check { .. } | sheet::Out::Case { .. } => {
                 sheet::notation::line(sheet::notation::Lang::Typst, &out)
             }
             _ => None,
@@ -459,6 +515,9 @@ impl App {
         };
         let line = parts.line();
         let code = Parts::of(&line).code;
+        // An edited line keeps its indent.
+        let indent: String = row.and_then(|row| self.calc_source(row)).map(|s| s.chars().take_while(|c| c.is_whitespace()).collect()).unwrap_or_default();
+        let line = if line.is_empty() { line } else { format!("{indent}{line}") };
         match row {
             Some(CalcRow::Line { block, line: i }) => self.with_doc(|doc| {
                 if let Block::Code { body, .. } = &mut doc.blocks[block] {
@@ -560,11 +619,20 @@ impl App {
         self.calc_keys = keys;
     }
 
-    /// Last line of the section of the heading at `r`: up to the next heading
-    /// of the same or a higher level.
-    fn section_end(levels: &[Option<usize>], r: usize) -> usize {
-        let Some(level) = levels[r] else { return r };
-        (r + 1..levels.len()).find(|&i| levels[i].is_some_and(|l| l <= level)).map_or(levels.len() - 1, |i| i - 1)
+    /// Heading levels, indents and blank lines of the lines (without the + row).
+    fn calc_shape(&self) -> Shape {
+        let rows = self.calc_rows();
+        let mut shape = Shape::default();
+        for row in &rows[..rows.len() - 1] {
+            let src = self.calc_source(*row).map(String::as_str).unwrap_or("");
+            shape.levels.push(match sheet::expr::parse_line(src) {
+                Line::Heading { level, .. } => Some(level),
+                _ => None,
+            });
+            shape.indents.push(sheet::expr::indent_of(src));
+            shape.blank.push(src.trim().is_empty());
+        }
+        shape
     }
 
     /// Folds / unfolds the section the cursor is in (the nearest heading above).
@@ -605,29 +673,85 @@ impl App {
         }
     }
 
+    /// What a single line stands for when it is moved, indented or deleted:
+    /// a heading with its section, a line with the lines nested below it.
+    fn calc_unit(&self, shape: &Shape, r0: usize) -> usize {
+        shape.unit_end(r0)
+    }
+
+    /// Tab / Shift+Tab on selected lines: nest them one step deeper / back out.
+    pub(super) fn indent_calc_lines(&mut self, deeper: bool) {
+        let ((r0, _), (mut r1, _)) = self.selection();
+        let shape = self.calc_shape();
+        let n = shape.indents.len();
+        if r0 >= n {
+            return;
+        }
+        if r0 == r1 && self.view.anchor.is_none() && shape.levels[r0].is_none() {
+            r1 = self.calc_unit(&shape, r0);
+        }
+        let r1 = r1.min(n - 1);
+        let rows = self.calc_rows();
+        let targets: Vec<(usize, usize)> = (r0..=r1)
+            .filter_map(|r| match rows[r] {
+                CalcRow::Line { block, line } => Some((block, line)),
+                CalcRow::New => None,
+            })
+            .collect();
+        // Two steps deeper than the line above is no nesting.
+        if deeper && r0 > 0 && !shape.blank[r0 - 1] && shape.indents[r0] > shape.indents[r0 - 1] {
+            return self.error("already nested below the line above");
+        }
+        if !deeper && (r0..=r1).all(|r| shape.indents[r] == 0) {
+            return;
+        }
+        self.with_doc(|doc| {
+            for (block, line) in targets {
+                let Block::Code { body, .. } = &mut doc.blocks[block] else { continue };
+                let l = &mut body[line];
+                if l.trim().is_empty() {
+                    continue;
+                }
+                if deeper {
+                    *l = format!("    {l}");
+                } else {
+                    let strip = l.chars().take_while(|c| *c == ' ').count().min(4);
+                    let n = if l.starts_with('\t') { 1 } else { strip };
+                    *l = l[n..].to_string();
+                }
+            }
+        });
+    }
+
     /// Moves the selected lines one place up (-1) or down (+1): over the
-    /// neighbouring line, or over a whole section when that is a heading
-    /// (folded or not) or when a heading with its section is moved. The lines
-    /// swap places in the document, also across the blocks of the sheet.
+    /// neighbouring line with what is nested below it, or over a whole
+    /// section when that is a heading (folded or not) or when a heading with
+    /// its section is moved. A line does not leave the group it is nested
+    /// in. The lines swap places in the document, also across the blocks of
+    /// the sheet.
     pub(super) fn move_calc_lines(&mut self, d: isize) {
         let ((r0, _), (mut r1, _)) = self.selection();
         let mut rows = self.calc_rows();
         rows.pop();
         let n = rows.len();
-        let levels = self.calc_levels();
         if r1 >= n {
             return;
         }
-        // A single heading takes its section along.
-        let heading = levels[r0];
+        let shape = self.calc_shape();
+        let heading = shape.levels[r0];
+        // A single line takes what belongs to it along.
         if r0 == r1 && self.view.anchor.is_none() {
-            r1 = Self::section_end(&levels, r0);
+            r1 = self.calc_unit(&shape, r0);
         }
-        let neighbour = if d > 0 {
+        let (n0, n1) = if d > 0 {
             if r1 + 1 >= n {
                 return;
             }
-            (r1 + 1, Self::section_end(&levels, r1 + 1))
+            let c = r1 + 1;
+            if heading.is_none() && !shape.blank[c] && !shape.blank[r0] && shape.indents[c] < shape.indents[r0] {
+                return self.error("already the last line of its group");
+            }
+            (c, self.calc_unit(&shape, c))
         } else {
             if r0 == 0 {
                 return;
@@ -635,15 +759,30 @@ impl App {
             let c = r0 - 1;
             let start = match heading {
                 // A section moves over the one before it (same level).
-                Some(level) => match (0..=c).rev().find(|&i| levels[i].is_some_and(|l| l <= level)) {
-                    Some(j) if levels[j] == Some(level) => j,
+                Some(level) => match (0..=c).rev().find(|&i| shape.levels[i].is_some_and(|l| l <= level)) {
+                    Some(j) if shape.levels[j] == Some(level) => j,
                     _ => return self.error("already the first section of its group"),
                 },
-                None => (0..=c).rev().find(|&i| !self.calc_hidden[i]).unwrap_or(c),
+                None => {
+                    // Up to the start of what is nested below the neighbour.
+                    let mut s = c;
+                    if !shape.blank[r0] && !shape.blank[c] {
+                        while s > 0 && !shape.blank[s] && shape.indents[s] > shape.indents[r0] {
+                            s -= 1;
+                        }
+                        if shape.indents[s] < shape.indents[r0] {
+                            return self.error("already the first line of its group");
+                        }
+                    }
+                    // A folded section is passed as a whole.
+                    if self.calc_hidden[s] {
+                        s = (0..=s).rev().find(|&i| !self.calc_hidden[i]).unwrap_or(s);
+                    }
+                    s
+                }
             };
             (start, c)
         };
-        let (n0, n1) = neighbour;
         let moved = r1 - r0 + 1;
         let other = n1 - n0 + 1;
         let slots: Vec<(usize, usize)> = rows
@@ -686,9 +825,17 @@ impl App {
         let r = self.view.cursor.0;
         match self.calc_rows().get(r).copied() {
             Some(CalcRow::Line { block, line }) => {
+                // The new line stands where this one does; below a case head or
+                // a branch without value it starts the lines nested in it.
+                let src = self.calc_source(CalcRow::Line { block, line }).cloned().unwrap_or_default();
+                let mut indent: String = src.chars().take_while(|c| c.is_whitespace()).collect();
+                let code = Parts::of(&src).code;
+                if code.ends_with('=') || (code.ends_with(':') && !code.starts_with('#')) {
+                    indent.push_str("    ");
+                }
                 self.with_doc(|doc| {
                     if let Block::Code { body, .. } = &mut doc.blocks[block] {
-                        body.insert(line + 1, String::new());
+                        body.insert(line + 1, indent);
                     }
                 });
                 self.view.cursor = (r + 1, INPUT);
@@ -710,8 +857,15 @@ impl App {
     }
 
     pub(super) fn delete_calc_lines(&mut self) {
-        let ((r0, _), (r1, _)) = self.selection();
+        let ((r0, _), (mut r1, _)) = self.selection();
         let rows = self.calc_rows();
+        // A single line with lines nested below it takes them along.
+        if r0 == r1 && self.view.anchor.is_none() && r0 + 1 < rows.len() {
+            let shape = self.calc_shape();
+            if shape.levels[r0].is_none() {
+                r1 = shape.unit_end(r0);
+            }
+        }
         let mut doomed: Vec<(usize, usize)> = (r0..=r1)
             .filter_map(|r| match rows.get(r) {
                 Some(CalcRow::Line { block, line }) => Some((*block, *line)),

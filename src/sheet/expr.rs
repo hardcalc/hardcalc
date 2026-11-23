@@ -115,6 +115,9 @@ impl Mode {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Assign { name: String, expr: Expr, to: Option<Unit> },
+    /// `χ =` with nothing after it: the head of a case distinction, whose
+    /// indented lines below are the branches (`λ ≤ 0.2: 1`, `else: …`).
+    Head { name: String },
     Check { lhs: Expr, rel: Rel, rhs: Expr },
     Show { expr: Expr, to: Option<Unit> },
     /// An own function: `M_span(q; L) = q·L^2/8`.
@@ -244,6 +247,76 @@ pub fn parse_line(src: &str) -> Line {
         Ok(stmt) => Line::Stmt { stmt: Some(stmt), comment, mode, label },
         Err(msg) => Line::Error { msg },
     }
+}
+
+/// How far a line is indented: spaces, a tab counting four.
+pub fn indent_of(src: &str) -> usize {
+    src.chars().take_while(|c| c.is_whitespace()).map(|c| if c == '\t' { 4 } else { 1 }).sum()
+}
+
+/// The branch of a case distinction: `condition: value`, `condition:` (its
+/// value is the last line below it) or `else: value`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchLine {
+    pub label: Option<String>,
+    pub comment: Option<String>,
+    /// Relations that all have to hold (`0.2 < λ ≤ 1` is two); empty for `else`.
+    pub conds: Vec<(Expr, Rel, Expr)>,
+    pub is_else: bool,
+    /// The value written after the colon.
+    pub value: Option<Expr>,
+}
+
+/// Words that start the branch taken when no other one is.
+const ELSE_WORDS: [&str; 3] = ["else", "sonst", "otherwise"];
+
+/// Parses a line as a branch; `Err` when it is none (no `condition:`).
+pub fn parse_branch(src: &str) -> Result<BranchLine, String> {
+    let (label, t) = split_label(src.trim());
+    let (code, comment) = split_comment(t);
+    let chars: Vec<char> = code.chars().collect();
+    // The first colon outside brackets and quotes that is followed by a space.
+    let (mut depth, mut quoted, mut at) = (0i32, false, None);
+    for (i, &c) in chars.iter().enumerate() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => depth -= 1,
+            ':' if !quoted && depth == 0 && chars.get(i + 1).is_none_or(|n| n.is_whitespace()) => {
+                at = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let Some(at) = at else { return Err("a branch reads 'condition: value' or 'else: value'".into()) };
+    let head: String = chars[..at].iter().collect();
+    let body: String = chars[at + 1..].iter().collect();
+    let value = match body.trim() {
+        "" => None,
+        b => {
+            let mut p = Parser::new(b);
+            let e = p.expr()?;
+            p.finish()?;
+            Some(e)
+        }
+    };
+    let head = head.trim();
+    if ELSE_WORDS.contains(&head.to_lowercase().as_str()) {
+        return Ok(BranchLine { label, comment, conds: Vec::new(), is_else: true, value });
+    }
+    let mut p = Parser::new(head);
+    let mut conds = Vec::new();
+    let mut lhs = p.expr()?;
+    while let Some(rel) = p.rel() {
+        let rhs = p.expr()?;
+        conds.push((std::mem::replace(&mut lhs, rhs.clone()), rel, rhs));
+    }
+    p.finish()?;
+    if conds.is_empty() {
+        return Err(format!("'{head}' is no condition – use a comparison like λ ≤ 0.2, or else"));
+    }
+    Ok(BranchLine { label, comment, conds, is_else: false, value })
 }
 
 fn mode_directive(t: &str) -> Option<Mode> {
@@ -411,7 +484,7 @@ impl Parser {
             if self.peek() == Some('=') && !matches!(self.peek_at(1), Some('=' | '>')) {
                 self.pos += 1;
                 if self.at_end() {
-                    return Err(format!("{name}: enter a value"));
+                    return Ok(Stmt::Head { name: canonical(name) });
                 }
                 let expr = self.expr()?;
                 let to = self.convert()?;

@@ -193,13 +193,75 @@ pub enum Out {
     /// `name`: the label, the name of the chart.
     Plot { name: String, plot: Result<Plot, String>, comment: Option<String>, label: Option<String> },
     Error(String),
+    /// `χ =` and its branches: `taken` is the one that was computed, `result`
+    /// its value. An empty error says the failure is shown in a line below.
+    Case { name: String, label: Option<String>, comment: Option<String>, mode: Mode, branches: Vec<Branch>, taken: Option<usize>, result: Result<Quantity, String> },
+    /// The line of a branch (`λ ≤ 0.2: …`) with what its conditions gave.
+    Branch(Branch),
+    /// A line of a branch that is not computed, as written.
+    Skipped(String),
+    /// A line below a case head: the line itself is part of the head's
+    /// [`Out::Case`], shown on its own only in the calculation view.
+    Child(Box<Out>),
+}
+
+/// One condition of a branch with the values it was checked with (`sides`
+/// is `None` where an earlier condition already decided).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cond {
+    pub lhs: Expr,
+    pub rel: Rel,
+    pub rhs: Expr,
+    pub values: Values,
+    pub sides: Option<Result<(Quantity, Quantity), String>>,
+}
+
+/// What a branch gives: its formula, the shown numbers and the value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchValue {
+    pub expr: Expr,
+    pub values: Values,
+    pub result: Quantity,
+}
+
+/// A branch of a case distinction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Branch {
+    pub conds: Vec<Cond>,
+    pub is_else: bool,
+    /// Whether the branch is the one taken; `None` where it was not looked at.
+    pub holds: Option<bool>,
+    /// The formula of the branch as written, also where it is not computed.
+    pub shown: Option<Expr>,
+    /// The lines below the branch, computed where it is taken.
+    pub body: Vec<Out>,
+    pub value: Option<BranchValue>,
+    /// The value is the last line of `body` (no value after the colon).
+    pub from_last: bool,
+    pub error: Option<String>,
 }
 
 impl Out {
+    /// The line itself, without the wrapper of a line below a case head.
+    pub fn inner(&self) -> &Out {
+        match self {
+            Out::Child(o) => o.inner(),
+            o => o,
+        }
+    }
+
+    /// The branch taken of a case distinction.
+    pub fn taken(&self) -> Option<&Branch> {
+        match self {
+            Out::Case { branches, taken: Some(i), .. } => branches.get(*i),
+            _ => None,
+        }
+    }
+
     /// The label of a calculated line (`[Bending]`).
     pub fn label(&self) -> Option<&str> {
         match self {
-            Out::Assign { label, .. } | Out::Check { label, .. } | Out::Show { label, .. } | Out::Def { label, .. } | Out::Plot { label, .. } => label.as_deref(),
+            Out::Assign { label, .. } | Out::Check { label, .. } | Out::Show { label, .. } | Out::Def { label, .. } | Out::Plot { label, .. } | Out::Case { label, .. } => label.as_deref(),
             _ => None,
         }
     }
@@ -207,7 +269,7 @@ impl Out {
     /// The comment at the end of a calculated line, if not empty.
     pub fn comment(&self) -> Option<&str> {
         match self {
-            Out::Assign { comment, .. } | Out::Check { comment, .. } | Out::Show { comment, .. } | Out::Def { comment, .. } | Out::Plot { comment, .. } => {
+            Out::Assign { comment, .. } | Out::Check { comment, .. } | Out::Show { comment, .. } | Out::Def { comment, .. } | Out::Plot { comment, .. } | Out::Case { comment, .. } => {
                 comment.as_deref().filter(|c| !c.is_empty())
             }
             _ => None,
@@ -247,27 +309,68 @@ pub fn evaluate(lines: &[String], wb: Option<&mut Workbook>) -> Vec<Out> {
 }
 
 /// Evaluates the lines with the functions `library` already known.
-pub fn evaluate_with(lines: &[String], mut wb: Option<&mut Workbook>, library: &Funcs) -> Vec<Out> {
-    let mut vars: HashMap<String, Var> = HashMap::new();
-    let mut funcs = library.clone();
-    let mut mode = Mode::default();
-    let mut plots = 0;
-    let mut out = Vec::new();
-    for src in lines {
+pub fn evaluate_with(lines: &[String], wb: Option<&mut Workbook>, library: &Funcs) -> Vec<Out> {
+    let mut ev = Eval { vars: HashMap::new(), funcs: library.clone(), mode: Mode::default(), plots: 0, wb };
+    ev.run(lines)
+}
+
+/// The state while a sheet is evaluated.
+struct Eval<'a> {
+    vars: HashMap<String, Var>,
+    funcs: Funcs,
+    mode: Mode,
+    plots: usize,
+    wb: Option<&'a mut Workbook>,
+}
+
+fn is_blank(src: &str) -> bool {
+    src.trim().is_empty()
+}
+
+impl Eval<'_> {
+    /// The lines in order, one result per line (none for `#result` …). A
+    /// case head takes the lines indented below it along.
+    fn run(&mut self, lines: &[String]) -> Vec<Out> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            let src = &lines[i];
+            if matches!(expr::parse_line(src), Line::Stmt { stmt: Some(Stmt::Head { .. }), .. }) {
+                let h = expr::indent_of(src);
+                let mut j = i + 1;
+                while j < lines.len() && (is_blank(&lines[j]) || expr::indent_of(&lines[j]) > h) {
+                    j += 1;
+                }
+                while j > i + 1 && is_blank(&lines[j - 1]) {
+                    j -= 1;
+                }
+                out.extend(self.case(src, &lines[i + 1..j]));
+                i = j;
+                continue;
+            }
+            out.extend(self.line(src));
+            i += 1;
+        }
+        out
+    }
+
+    /// One line; `None` for a `#result` … line, which only sets the mode.
+    fn line(&mut self, src: &str) -> Option<Out> {
         let line = expr::parse_line(src);
         let o = match line {
             Line::Blank => Out::Blank,
             Line::Heading { level, text } => Out::Heading { level, text },
             Line::Mode(m) => {
-                mode = m;
-                continue;
+                self.mode = m;
+                return None;
             }
             Line::Error { msg } => Out::Error(format!("{}: {msg}", src.trim())),
             Line::Stmt { stmt: None, comment, .. } => Out::Comment(comment.unwrap_or_default()),
             Line::Stmt { stmt: Some(stmt), comment, mode: own, label } => {
-                let mode = own.unwrap_or(mode);
-                let mut ctx = Ctx { vars: &vars, funcs: &funcs, locals: Vec::new(), wb: wb.as_deref_mut(), values: Values::new(), depth: 0 };
+                let mode = own.unwrap_or(self.mode);
+                let mut ctx = Ctx { vars: &self.vars, funcs: &self.funcs, locals: Vec::new(), wb: self.wb.as_deref_mut(), values: Values::new(), depth: 0 };
                 match stmt {
+                    Stmt::Head { name } => Out::Error(format!("{name}: a case distinction needs branches")),
                     Stmt::Assign { name, expr, to } => {
                         let val = ctx.eval(&expr).and_then(|v| match &to {
                             Some(u) => v.map(|q| q.convert(u)),
@@ -285,7 +388,7 @@ pub fn evaluate_with(lines: &[String], mut wb: Option<&mut Workbook>, library: &
                         };
                         match (&result, &series) {
                             (Ok(_), Some(s)) => {
-                                vars.insert(name.clone(), Var { val: Val::Many(s.clone()), written: None });
+                                self.vars.insert(name.clone(), Var { val: Val::Many(s.clone()), written: None });
                             }
                             (Ok(q), None) => {
                                 let written = match &expr {
@@ -296,16 +399,16 @@ pub fn evaluate_with(lines: &[String], mut wb: Option<&mut Workbook>, library: &
                                     },
                                     _ => None,
                                 };
-                                vars.insert(name.clone(), Var { val: Val::One(q.clone()), written });
+                                self.vars.insert(name.clone(), Var { val: Val::One(q.clone()), written });
                             }
                             (Err(_), _) => {
-                                vars.remove(&name);
+                                self.vars.remove(&name);
                             }
                         }
                         Out::Assign { name, expr, values, result, series, mode, comment, label }
                     }
                     Stmt::Check { lhs, rel, rhs } => {
-                        let checked = ctx.eval(&lhs).and_then(|l| Ok((l, ctx.eval(&rhs)?))).and_then(|(l, r)| check(&l, &r, rel, &vars));
+                        let checked = ctx.eval(&lhs).and_then(|l| Ok((l, ctx.eval(&rhs)?))).and_then(|(l, r)| check(&l, &r, rel, &self.vars));
                         let (sides, at) = match checked {
                             Ok((l, r, at)) => (Ok((l, r)), at),
                             Err(e) => (Err(e), None),
@@ -328,21 +431,196 @@ pub fn evaluate_with(lines: &[String], mut wb: Option<&mut Workbook>, library: &
                         Out::Show { expr, values: ctx.values, result, series, mode, comment, label }
                     }
                     Stmt::Def { name, params, expr } => {
-                        funcs.insert(name.clone(), Func { params: params.clone(), expr: expr.clone() });
+                        self.funcs.insert(name.clone(), Func { params: params.clone(), expr: expr.clone() });
                         Out::Def { name, params, expr, comment, label }
                     }
                     Stmt::Plot { ys, x, opts } => {
-                        let name = label.clone().unwrap_or_else(|| plot_name(plots));
-                        plots += 1;
-                        let plot = ctx.plot(&ys, x.as_ref(), &opts, &vars);
+                        let name = label.clone().unwrap_or_else(|| plot_name(self.plots));
+                        self.plots += 1;
+                        let plot = ctx.plot(&ys, x.as_ref(), &opts, &self.vars);
                         Out::Plot { name, plot, comment, label }
                     }
                 }
             }
         };
-        out.push(o);
+        Some(o)
     }
-    out
+
+    /// The value of an expression and the shown numbers of what it uses.
+    fn eval_value(&mut self, e: &Expr) -> (Result<Val, String>, Values) {
+        let mut ctx = Ctx { vars: &self.vars, funcs: &self.funcs, locals: Vec::new(), wb: self.wb.as_deref_mut(), values: Values::new(), depth: 0 };
+        let v = ctx.eval(e);
+        (v, ctx.values)
+    }
+
+    /// A case distinction: `χ =` and the branches indented below it. The
+    /// first branch whose condition holds is computed, the others stay
+    /// untouched. The side calculations of a branch are local to it. The
+    /// result is the head with all branches, then one entry per line below it.
+    fn case(&mut self, head: &str, body: &[String]) -> Vec<Out> {
+        let Line::Stmt { stmt: Some(Stmt::Head { name }), comment, mode: own, label } = expr::parse_line(head) else { return Vec::new() };
+        let mode = own.unwrap_or(self.mode);
+        let child = |o: Out| Out::Child(Box::new(o));
+        let first = body.iter().position(|l| !is_blank(l)).unwrap_or(body.len());
+        let mut flat: Vec<Out> = (0..first).map(|_| child(Out::Blank)).collect();
+        // A branch is a line of the first indent, with the deeper lines after it.
+        let mut groups: Vec<(usize, usize)> = Vec::new();
+        if let Some(l) = body.get(first) {
+            let d = expr::indent_of(l);
+            for (i, l) in body.iter().enumerate().skip(first) {
+                if !is_blank(l) && expr::indent_of(l) <= d {
+                    groups.push((i, i + 1));
+                } else if let Some(g) = groups.last_mut() {
+                    g.1 = i + 1;
+                }
+            }
+        }
+        let mut branches: Vec<Branch> = Vec::new();
+        let mut taken = None;
+        let mut done = false;
+        let mut result: Result<Quantity, String> = Err("no condition holds – add an else: branch".into());
+        for (s, e) in groups {
+            let (src, rest) = (&body[s], &body[s + 1..e]);
+            let line = match expr::parse_branch(src) {
+                Ok(l) => l,
+                Err(msg) => {
+                    flat.push(child(Out::Error(format!("{}: {msg}", src.trim()))));
+                    flat.extend(skipped(rest));
+                    if !done {
+                        done = true;
+                        result = Err(String::new());
+                    }
+                    continue;
+                }
+            };
+            let mut branch = Branch {
+                conds: Vec::new(),
+                is_else: line.is_else,
+                holds: None,
+                shown: line.value.clone().or_else(|| last_expr(rest)),
+                body: Vec::new(),
+                value: None,
+                from_last: line.value.is_none(),
+                error: None,
+            };
+            // Conditions up to the first one that fails; the rest are only written.
+            let mut holds = true;
+            let mut failed = None;
+            for (lhs, rel, rhs) in &line.conds {
+                if done || !holds || failed.is_some() {
+                    branch.conds.push(Cond { lhs: lhs.clone(), rel: *rel, rhs: rhs.clone(), values: Values::new(), sides: None });
+                    continue;
+                }
+                let (l, vl) = self.eval_value(lhs);
+                let (r, vr) = self.eval_value(rhs);
+                let mut values = vl;
+                values.extend(vr);
+                let sides = match (l, r) {
+                    (Ok(Val::One(a)), Ok(Val::One(b))) => a.cmp(&b, rel.symbol(false)).map(|_| (a, b)),
+                    (Ok(_), Ok(_)) => Err("a condition takes single values, not ranges".to_string()),
+                    (Err(e), _) | (_, Err(e)) => Err(e),
+                };
+                match &sides {
+                    Ok((a, b)) => holds = verdict(*rel, a, b).ok,
+                    Err(e) => failed = Some(e.clone()),
+                }
+                branch.conds.push(Cond { lhs: lhs.clone(), rel: *rel, rhs: rhs.clone(), values, sides: Some(sides) });
+            }
+            if done {
+                flat.push(child(Out::Skipped(src.trim().to_string())));
+                flat.extend(skipped(rest));
+                branches.push(branch);
+                continue;
+            }
+            if let Some(e) = failed {
+                branch.error = Some(e);
+                done = true;
+                result = Err(String::new());
+                flat.push(child(Out::Branch(branch.clone())));
+                flat.extend(skipped(rest));
+                branches.push(branch);
+                continue;
+            }
+            branch.holds = Some(holds || line.is_else);
+            if branch.holds == Some(false) {
+                flat.push(child(Out::Branch(branch.clone())));
+                flat.extend(skipped(rest));
+                branches.push(branch);
+                continue;
+            }
+            // The branch that is taken: its side calculations are local.
+            done = true;
+            taken = Some(branches.len());
+            let saved = (self.vars.clone(), self.funcs.clone(), self.mode);
+            let lines = self.run(rest);
+            let value = match &line.value {
+                Some(e) => match self.eval_value(e) {
+                    (Ok(Val::One(q)), values) => Ok(BranchValue { expr: e.clone(), values, result: q }),
+                    (Ok(Val::Many(_)), _) => Err("a branch gives a single value, not a range".to_string()),
+                    (Err(e), _) => Err(e),
+                },
+                None => last_value(&lines),
+            };
+            (self.vars, self.funcs, self.mode) = saved;
+            match value {
+                Ok(v) => branch.value = Some(v),
+                Err(e) if !e.is_empty() => branch.error = Some(e),
+                Err(_) => {}
+            }
+            result = branch.value.as_ref().map(|v| v.result.clone()).ok_or_else(String::new);
+            flat.push(child(Out::Branch(branch.clone())));
+            flat.extend(lines.iter().cloned().map(child));
+            branch.body = lines;
+            branches.push(branch);
+        }
+        match &result {
+            Ok(q) => {
+                self.vars.insert(name.clone(), Var { val: Val::One(q.clone()), written: None });
+            }
+            Err(_) => {
+                self.vars.remove(&name);
+            }
+        }
+        let mut out = vec![Out::Case { name, label, comment, mode, branches, taken, result }];
+        out.extend(flat);
+        out
+    }
+}
+
+/// The lines of a branch that is not computed, as they are written.
+fn skipped(lines: &[String]) -> Vec<Out> {
+    lines
+        .iter()
+        .filter_map(|l| match expr::parse_line(l) {
+            Line::Mode(_) => None,
+            Line::Blank => Some(Out::Child(Box::new(Out::Blank))),
+            _ => Some(Out::Child(Box::new(Out::Skipped(l.trim().to_string())))),
+        })
+        .collect()
+}
+
+/// The formula of the last line of a branch (what it gives).
+fn last_expr(lines: &[String]) -> Option<Expr> {
+    let last = lines.iter().rev().find(|l| !is_blank(l))?;
+    match expr::parse_line(last) {
+        Line::Stmt { stmt: Some(Stmt::Assign { expr, .. } | Stmt::Show { expr, .. }), .. } => Some(expr),
+        Line::Stmt { stmt: Some(Stmt::Head { name }), .. } => Some(Expr::Var(name)),
+        _ => None,
+    }
+}
+
+/// What a branch gives: the value of its last line.
+fn last_value(outs: &[Out]) -> Result<BranchValue, String> {
+    let last = outs.iter().rev().find(|o| !matches!(o, Out::Child(_) | Out::Blank | Out::Comment(_) | Out::Heading { .. }));
+    match last {
+        Some(Out::Assign { expr, values, result: Ok(q), .. } | Out::Show { expr, values, result: Ok(q), .. }) => {
+            Ok(BranchValue { expr: expr.clone(), values: values.clone(), result: q.clone() })
+        }
+        Some(Out::Case { name, result: Ok(q), .. }) => Ok(BranchValue { expr: Expr::Var(name.clone()), values: Values::new(), result: q.clone() }),
+        Some(Out::Check { .. }) => Err("a branch gives a value, not a check".into()),
+        None => Err("a branch needs a value – write it after the colon or as the last line below".into()),
+        Some(_) => Err(String::new()),
+    }
 }
 
 /// A check point by point: the decisive pair (the one with the highest
@@ -434,6 +712,29 @@ pub fn plot_names(doc: &Document) -> Vec<String> {
     names
 }
 
+/// The sheet as it is read: the lines below a case head belong to it, so
+/// they are left out, and the side calculations of the branch taken follow
+/// the head (as lines of their own). For previews, reports and printing.
+pub fn document_lines(out: &[Out]) -> Vec<Out> {
+    let mut lines = Vec::new();
+    for o in out {
+        match o {
+            Out::Child(_) => {}
+            Out::Case { .. } => {
+                lines.push(o.clone());
+                if let Some(b) = o.taken() {
+                    // The line that gives the value is in the head already.
+                    let last = b.from_last.then(|| b.body.iter().rposition(|o| !matches!(o, Out::Child(_) | Out::Blank | Out::Comment(_) | Out::Heading { .. }))).flatten();
+                    let body: Vec<Out> = b.body.iter().enumerate().filter(|(i, _)| Some(*i) != last).map(|(_, o)| o.clone()).collect();
+                    lines.extend(document_lines(&body));
+                }
+            }
+            _ => lines.push(o.clone()),
+        }
+    }
+    lines
+}
+
 /// Messages of all lines that could not be calculated.
 pub fn problems(out: &[Out]) -> Vec<String> {
     out.iter()
@@ -442,6 +743,9 @@ pub fn problems(out: &[Out]) -> Vec<String> {
             Out::Assign { name, result: Err(e), .. } => Some(format!("{name}: {e}")),
             Out::Show { result: Err(e), .. } | Out::Check { sides: Err(e), .. } => Some(e.clone()),
             Out::Plot { name, plot: Err(e), .. } => Some(format!("{name}: {e}")),
+            Out::Case { name, result: Err(e), .. } if !e.is_empty() => Some(format!("{name}: {e}")),
+            Out::Branch(Branch { error: Some(e), .. }) => Some(e.clone()),
+            Out::Child(o) => problems(std::slice::from_ref(o)).into_iter().next(),
             _ => None,
         })
         .collect()
@@ -845,6 +1149,21 @@ impl Render {
         steps
     }
 
+    /// The condition of a branch as written: `0.2 < λ ≤ 1`, or `else`.
+    pub fn cond_text(&self, b: &Branch) -> String {
+        if b.is_else {
+            return "else".into();
+        }
+        let mut s = String::new();
+        for (i, c) in b.conds.iter().enumerate() {
+            if i == 0 {
+                s.push_str(&self.formula(&c.lhs));
+            }
+            s.push_str(&format!(" {} {}", c.rel.symbol(self.style.ascii), self.formula(&c.rhs)));
+        }
+        s
+    }
+
     /// One line of text per evaluated line.
     pub fn lines(&self, out: &[Out]) -> Vec<String> {
         out.iter().map(|o| self.line(o)).collect()
@@ -912,6 +1231,46 @@ impl Render {
                 let params: Vec<String> = params.iter().map(|p| self.name(p)).collect();
                 format!("{}({}) = {}", self.name(name), params.join("; "), self.formula(expr))
             }
+            Out::Case { name, result, mode, .. } => match (result, o.taken().and_then(|b| b.value.as_ref().map(|v| (b, v)))) {
+                (Ok(q), Some((b, v))) => format!("{} = {}   if {}", self.name(name), self.steps(&v.expr, &v.values, q, *mode, None).join(" = "), self.cond_text(b)),
+                (Err(e), _) if !e.is_empty() => format!("{} =   ⚠ {e}", self.name(name)),
+                _ => format!("{} =   ⚠ see the lines below", self.name(name)),
+            },
+            Out::Branch(b) => {
+                let cond = self.cond_text(b);
+                if let Some(e) = &b.error {
+                    return format!("{cond}   ⚠ {e}");
+                }
+                let mark = |ok: bool| match (ok, self.style.ascii) {
+                    (true, false) => "✓",
+                    (false, false) => "✗",
+                    (true, true) => "ok",
+                    (false, true) => "no",
+                };
+                let mut s = cond;
+                if let Some(ok) = b.holds {
+                    if !b.is_else {
+                        let mut sub = String::new();
+                        for (i, c) in b.conds.iter().enumerate() {
+                            if !matches!(c.sides, Some(Ok(_))) {
+                                break;
+                            }
+                            if i == 0 {
+                                sub.push_str(&self.substituted(&c.lhs, &c.values));
+                            }
+                            sub.push_str(&format!(" {} {}", c.rel.symbol(self.style.ascii), self.substituted(&c.rhs, &c.values)));
+                        }
+                        s.push_str(&format!(" → {sub}"));
+                    }
+                    s.push_str(&format!(" {}", mark(ok)));
+                    if let Some(v) = &b.value {
+                        s.push_str(&format!("   ⇒ {}", self.q(&v.result)));
+                    }
+                }
+                s
+            }
+            Out::Skipped(t) => t.clone(),
+            Out::Child(inner) => self.body(inner),
             Out::Plot { plot, .. } => match plot {
                 Ok(p) => {
                     let ys: Vec<&str> = p.ys.iter().map(|(n, _)| n.as_str()).collect();

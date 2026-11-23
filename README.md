@@ -360,6 +360,28 @@ M_ss(q; L) = q·L^2/8                 ' an own function
 ```
 ````
 
+**Case distinctions:** where a code gives several formulas, each with a
+condition, write `name =` and indent the branches below it. The first
+condition that holds is computed, the report draws the brace; side
+calculations of a branch are indented below it and local to it:
+
+````markdown
+```hardcalc
+χ =                                  ' reduction factor
+    λ ≤ 0.2: 1
+    0.2 < λ ≤ 1.0:
+        Φ = 0.5·(1 + α·(λ - 0.2) + λ^2)
+        1/(Φ + sqrt(Φ^2 - λ^2))     ' the last line is the value
+    else: 0.5/λ^2
+```
+````
+
+In the **∑ calc** tab, **←** in the Name column selects a line (click on its
+number does too); then **- / +** move it – with what is nested below it, a
+`##` heading with its section –, **Tab / Shift+Tab** nest it deeper / back
+out, **Space** folds the section of a heading (`:fold`, `:fold all`,
+`:fold off`), Shift+↑/↓ select several lines.
+
 **F6** (`:library`) opens the formula library – beams, cross sections,
 stresses, buckling, geometry, and your own formulas in `formulas.hcmd` in the
 hardcalc configuration folder; Enter inserts the formula with a line for each

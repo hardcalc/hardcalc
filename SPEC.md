@@ -872,6 +872,30 @@ f_yd   = f_yk / γ_M
   derivative of `f` by `x` at `x0` (central difference). `x` is a name of
   their own while `f` is evaluated; units multiply and divide
   (`int(q; t; 0 m; L)` with `q` in kN/m → kN). Shown as ∫ and d/dx.
+- **Case distinctions** (as in codes: several formulas, a condition for
+  each): `name =` with nothing after it, and the branches indented below it.
+  The first branch whose condition holds is computed; the others are not.
+
+  ````markdown
+  ```hardcalc
+  χ =                              ' reduction factor
+      λ ≤ 0.2: 1
+      0.2 < λ ≤ 1.0:
+          Φ = 0.5·(1 + α·(λ - 0.2) + λ^2)
+          1/(Φ + sqrt(Φ^2 - λ^2))
+      else: 0.5/λ^2
+  ```
+  ````
+
+  A branch is `condition: formula`, or `condition:` with lines indented
+  below it – side calculations that are local to the branch; its value is
+  the last line. A condition is a comparison (`≤ ≥ < >`), also chained
+  (`0.2 < λ ≤ 1.0`); `else:` (also `sonst:`, `otherwise:`) is the branch
+  taken when no other is. The colon is followed by a space. With no
+  condition holding the line is an error. Indent with spaces (a tab counts
+  four); a line indented below a line that is no case head is read as an
+  ordinary line. The report and the preview draw the head as a brace with
+  all branches, then the side calculations of the branch taken.
 - **Ranges:** `{1, 1.1,,, 2}` are the 11 values from 1 to 2 in steps of 0.1:
   an empty item continues with the step of the two values before it, up to
   the value after it; `{1, 2, 5}` lists values. Inside the braces a comma
