@@ -4658,4 +4658,74 @@ fn calc_example_numbers_nested_lines() {
     let first = a.row_header(0);
     assert_eq!(first.len(), h.len(), "{first:?} {h:?}: same width everywhere");
     assert!(first.starts_with(' '), "{first:?}: 1 stands under the last digit of 56");
+
+fn sheet_names(a: &App) -> Vec<String> {
+    a.wb.sheets.iter().map(|s| s.name.clone().unwrap_or_default()).collect()
+}
+
+#[test]
+fn tabs_remember_where_they_were_left() {
+    let mut a = app();
+    a.switch_sheet(0);
+    a.view.cursor = (2, 1);
+    a.view.scroll = (1, 0);
+    a.switch_sheet(1);
+    assert_eq!(a.view.cursor, (0, 0), "a table not shown before starts at the top");
+    a.view.cursor = (1, 1);
+    a.switch_sheet(0);
+    assert_eq!((a.view.cursor, a.view.scroll), ((2, 1), (1, 0)));
+    a.switch_sheet(1);
+    assert_eq!(a.view.cursor, (1, 1));
+    // Also back from another view of the window.
+    a.command("calc");
+    a.switch_sheet(1);
+    assert_eq!(a.view.cursor, (1, 1));
+}
+
+#[test]
+fn tables_move_in_the_tab_bar() {
+    let mut a = app();
+    let before = sheet_names(&a);
+    assert!(before.len() >= 3, "{before:?}");
+    a.switch_sheet(0);
+    a.view.cursor = (1, 1);
+    a.command("movetab right");
+    let after = sheet_names(&a);
+    assert_eq!((&after[0], &after[1], &after[2]), (&before[1], &before[0], &before[2]));
+    assert_eq!(a.view.sheet, 1, "the shown table goes along");
+    assert_eq!(a.view.cursor, (1, 1));
+    // The tab of the table before it is the other one now; its place is kept.
+    a.switch_sheet(0);
+    a.view.cursor = (3, 0);
+    a.switch_sheet(1);
+    a.command("movetab first");
+    assert_eq!(sheet_names(&a)[0], before[0]);
+    assert_eq!(a.view.sheet, 0);
+    a.switch_sheet(1);
+    assert_eq!(a.view.cursor, (3, 0), "the remembered place followed its table");
+    // On the table origin - and + do the same; the file keeps the order.
+    a.switch_sheet(0);
+    a.view.header = Some(Header::Corner);
+    key(&mut a, KeyCode::Char('+'));
+    assert_eq!(a.view.sheet, 1);
+    let text = hardcalc::write(&a.doc);
+    let back = hardcalc::parse(&text).unwrap();
+    let b = App::new(PathBuf::from("x.hcmd"), back);
+    assert_eq!(sheet_names(&b), sheet_names(&a));
+    // Undo takes the move back.
+    ctrl(&mut a, 'z');
+    assert_ne!(sheet_names(&a), sheet_names(&b));
+    // Dragging a tab over another moves it.
+    a.switch_sheet(0);
+    let names = sheet_names(&a);
+    render(&mut a);
+    let at = |a: &App, i: usize| a.hits.iter().find(|(_, h)| *h == Hit::Tab(i)).map(|(r, _)| *r).unwrap();
+    let (r0, r1) = (at(&a, 0), at(&a, 1));
+    let mouse = |a: &mut App, kind, r: ratatui::layout::Rect| a.on_mouse(MouseEvent { kind, column: r.x, row: r.y, modifiers: KeyModifiers::NONE });
+    mouse(&mut a, MouseEventKind::Down(MouseButton::Left), r0);
+    mouse(&mut a, MouseEventKind::Drag(MouseButton::Left), r1);
+    mouse(&mut a, MouseEventKind::Up(MouseButton::Left), r1);
+    let moved = sheet_names(&a);
+    assert_eq!((&moved[0], &moved[1]), (&names[1], &names[0]));
+    assert_eq!(a.view.sheet, 1);
 }
