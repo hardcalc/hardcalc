@@ -8,8 +8,10 @@ values, checks over a range, own functions and the formula library,
 integrals and derivatives, angle functions, case distinctions with
 indented branches, and charts. Open it with
 `hardcalc examples/calc-features.hcmd`, then `:calc` (F6: formula library,
-F7: chart settings; ← in the Name column selects a line, then - / + move it,
-Tab nests it, Space folds a heading's section) and `:report` for the typeset report.
+F7: chart settings). The headings form groups: `##` sections with `###`
+subsections. In the calculation tab ← in the Name column selects a line, then
+Space folds the section (▾ / ▸; `:fold all`, `:fold off`), - / + move a heading
+with its whole section, Tab nests lines below a case head and `:report` for the typeset report.
 
 ## Profiles :: matrix
 
@@ -41,11 +43,13 @@ V_max = max(V)
 [Moments] plot(M; title: Bending moment M)
 [Shear] plot(V; type: area; title: Shear force V)
 
-## Bending check at every point
+## Verifications
+
+### Bending check at every point
 σ = M/W_y → N/mm²
 [Bending] σ ≤ f_yd                     ' decisive point and η
 
-## Deflection with an own function
+### Deflection with an own function
 w_x(q; L; E; I; x) = q·x·(L^3 - 2·L·x^2 + x^3)/(24·E·I)   ' deflection line
 w = w_x(g_k + q_k; L; E; I_y; x) → mm
 w_max = max(w) → mm
@@ -54,18 +58,20 @@ w_lim = L/300 → mm
 [Serviceability] w_max ≤ w_lim         ' limit L/300
 [Deflection] plot(w; title: Deflection line w)
 
-## Equilibrium by integration
+### Equilibrium by integration
 R = int(q_d; t; 0 m; L)                ' total load: integral of q_d
 A = V_ss(q_d; L)                       ' support force, formula library
 [Equilibrium] 2·A ≥ R                  ' η = 1.00: both supports carry R
 
-## Load factor study
+### Load factor study
 k = {1, 1.1,,, 2}                      ' 11 factors from 1 to 2, step 0.1
 σ_k = k·max(σ)
 [Reserve] σ_k ≤ f_yd                   ' decisive: the highest factor
 [Factors] plot(σ_k; x: k; type: bar; title: Stress over the load factor)
 
-## Roof slope with angle functions
+## Roof geometry and loads
+
+### Roof slope with angle functions
 h = 1.2 m                              ' rise
 l = 4.0 m                              ' run
 α = atan2(h; l)                        ' angle of the slope
@@ -73,7 +79,7 @@ s = l/cos(α)                           ' length of the rafter
 c = sqrt(h^2 + l^2)                    ' the same by Pythagoras
 g_slope = g_k·cos(α)                   ' dead load across the rafter
 
-## Case distinction: snow load shape factor
+### Case distinction: snow load shape factor
 s_k = 1.0 kN/m^2                       ' ground snow load
 [Shape] μ =                            ' one formula per range of the slope
     α ≤ 30°: 0.8
@@ -81,7 +87,7 @@ s_k = 1.0 kN/m^2                       ' ground snow load
     else: 0                            ' too steep: no snow
 s_roof = μ·s_k                         ' snow load on the roof
 
-## Case distinction with a side calculation
+### Case distinction with a side calculation
 λ_rel = 0.6                            ' relative slenderness
 α_b   = 0.34                           ' imperfection factor, curve b
 χ =                                    ' buckling reduction factor
