@@ -43,6 +43,21 @@ pub(crate) fn detect_light() -> Option<bool> {
     terminal_colorsaurus::theme_mode(options).ok().map(|m| m == terminal_colorsaurus::ThemeMode::Light)
 }
 
+/// The terminal's background colour, for images without transparency
+/// (Sixel); light or dark gray where it does not say.
+fn terminal_background(light: Option<bool>) -> [u8; 3] {
+    let mut options = terminal_colorsaurus::QueryOptions::default();
+    options.timeout = std::time::Duration::from_millis(300);
+    match terminal_colorsaurus::background_color(options) {
+        Ok(c) => {
+            let (r, g, b) = c.scale_to_8bit();
+            [r, g, b]
+        }
+        Err(_) if light == Some(true) => [255, 255, 255],
+        Err(_) => [12, 12, 12],
+    }
+}
+
 /// Runs the UI on `path`, or on a new untitled document.
 pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     let mut app = match path {
@@ -78,6 +93,7 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     // automatic light/dark switch of the terminal is followed.
     app.detected_light = detect_light();
     let can_query = app.detected_light.is_some();
+    let sixel_bg = (graphics::detect(|k| std::env::var(k).ok()) == Some(graphics::Protocol::Sixel)).then(|| terminal_background(app.detected_light));
     // Raw mode, alternate screen and the panic hook; then a terminal that
     // draws in synchronized frames.
     drop(ratatui::init());
@@ -102,7 +118,7 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     app.cell_px = cell_pixels();
     app.truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
     app.anim.enabled = std::env::var("HARDCALC_ANIMATIONS").map_or(true, |v| v != "0" && v != "off");
-    let mut images = ImageState::default();
+    let mut images = ImageState { bg: sixel_bg.unwrap_or_default(), ..ImageState::default() };
 
     let result = (|| loop {
         frame_bytes.take();
@@ -219,10 +235,20 @@ struct ImageState {
     cache: Option<(u64, Vec<u8>)>,
     /// The PNGs of the charts and pictures on screen, by what they show.
     charts: std::collections::HashMap<u64, Vec<u8>>,
+    /// The terminal's background, under images when they are sent as Sixel.
+    bg: [u8; 3],
 }
 
 /// Pixels of a terminal cell; a usual size where the terminal does not say.
 pub fn cell_pixels() -> (u16, u16) {
+    // `HARDCALC_CELL_PX=9x19` for terminals that do not tell (Windows Terminal).
+    let forced = std::env::var("HARDCALC_CELL_PX").ok().and_then(|v| {
+        let (w, h) = v.split_once('x')?;
+        Some((w.trim().parse::<u16>().ok()?, h.trim().parse::<u16>().ok()?))
+    });
+    if let Some((w, h)) = forced.filter(|(w, h)| *w > 0 && *h > 0) {
+        return (w, h);
+    }
     match ratatui::crossterm::terminal::window_size() {
         Ok(w) if w.width > 0 && w.height > 0 && w.columns > 0 && w.rows > 0 => ((w.width / w.columns).max(1), (w.height / w.rows).max(1)),
         _ => (10, 20),
@@ -281,7 +307,7 @@ impl ImageState {
             page.iter().map(|(s, _)| *s).chain(charts.iter().map(|(_, i)| i.rect)).chain(pictures.iter().map(|(_, p)| p.rect)).collect();
         // iTerm2 images are part of the cells: one that moved away is only
         // gone once its cells are written again.
-        if protocol == graphics::Protocol::Iterm && self.rects.iter().any(|r| !rects.contains(r)) {
+        if matches!(protocol, graphics::Protocol::Iterm | graphics::Protocol::Sixel) && self.rects.iter().any(|r| !rects.contains(r)) {
             self.shown = None;
             self.rects.clear();
             terminal.clear()?;
@@ -324,7 +350,14 @@ impl ImageState {
         write!(out, "{}", graphics::clear(protocol))?;
         for (rect, png) in &pngs {
             execute!(out, ratatui::crossterm::cursor::MoveTo(rect.x, rect.y))?;
-            write!(out, "{}", graphics::escape(protocol, png, rect.width, rect.height))?;
+            if protocol == graphics::Protocol::Sixel {
+                match graphics::sixel(png, rect.width, rect.height, cell, self.bg) {
+                    Ok(sixel) => write!(out, "{sixel}")?,
+                    Err(e) => app.message = Some(app::Message { text: e, error: true }),
+                }
+            } else {
+                write!(out, "{}", graphics::escape(protocol, png, rect.width, rect.height))?;
+            }
         }
         out.flush()?;
         self.shown = Some(key);

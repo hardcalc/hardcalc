@@ -393,7 +393,7 @@ input still missing. **F7** (`:plot`) edits the chart on the cursor line
 **Typeset calculations:** in the `∑ calc` view the column *Calculation*
 shows each calculation as a typeset formula – fractions, roots, indices and
 Greek letters as in the report – in terminals that show images (Kitty,
-Ghostty, iTerm2, WezTerm); a row with a fraction becomes two lines high.
+Ghostty, iTerm2, WezTerm, and with Sixel Windows Terminal 1.22+, foot, mlterm); a row with a fraction becomes two lines high.
 `:typeset off` (menu *View → Typeset formulas on/off*) switches back to text;
 without image support the calculations stay text. Printing a calculation
 sheet (`:print` from the `∑ calc` view, or the whole document) always sets
@@ -602,7 +602,7 @@ histogram; for tensors with `x`, `series` and `filter` as in the pivot view.
 The chart highlights the row under the cursor, a click on a bar jumps to the
 row, **t** changes the type. `:chart [type]` creates a chart from the
 selected columns. `=spark(B1:B12)` draws a sparkline into a cell.
-In terminals with a graphics protocol (Kitty, Ghostty, iTerm2, WezTerm) line,
+In terminals with a graphics protocol (Kitty, Ghostty, iTerm2, WezTerm, Sixel) line,
 area and scatter charts are drawn as images – in the chart window and in
 layouts – with their labels as text; elsewhere, and while a menu or dialog is
 open, in braille. Bar charts stay text. `HARDCALC_GRAPHICS=none` keeps
@@ -690,9 +690,13 @@ so Greek letters, `≤`, `✓`, arrows and other Unicode characters print as
 they are (license of the font: [assets/fonts/THIRD-PARTY-FONTS.txt](assets/fonts/THIRD-PARTY-FONTS.txt)).
 
 The **image preview** (i) shows the real PDF page – sharp in terminals with
-a graphics protocol (Kitty, Ghostty, iTerm2, WezTerm), otherwise (e.g. macOS
+a graphics protocol (Kitty, Ghostty, iTerm2, WezTerm, Sixel), otherwise (e.g. macOS
 Terminal.app) as a page overview in block graphics.
-`HARDCALC_GRAPHICS=kitty|iterm|none` forces or prevents the image protocol.
+`HARDCALC_GRAPHICS=kitty|iterm|sixel|none` forces or prevents the image protocol.
+Windows Terminal (1.22 or newer, also in WSL) is recognised by `WT_SESSION` and
+sent Sixel; it does not tell the size of its cells, so hardcalc assumes 10×20
+pixels – if formulas look too big or small, set `HARDCALC_CELL_PX=9x19` (width x
+height of a cell in pixels).
 
 ### Compressed files
 

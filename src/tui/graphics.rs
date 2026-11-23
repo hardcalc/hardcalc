@@ -1,5 +1,6 @@
-//! Inline images for the print preview: the PDF page is rasterized by an
-//! external tool and shown with the Kitty or iTerm2 graphics protocol.
+//! Inline images (charts, typeset formulas, the print preview): shown with
+//! the Kitty or iTerm2 graphics protocol, or as Sixel (Windows Terminal,
+//! foot, mlterm); the PDF page of the preview is rasterized by an external tool.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -10,15 +11,18 @@ pub enum Protocol {
     Kitty,
     /// iTerm2 inline images (iTerm2, WezTerm).
     Iterm,
+    /// Sixel graphics (Windows Terminal 1.22+, foot, mlterm, xterm -ti vt340).
+    Sixel,
 }
 
-/// Picks the protocol from the environment. `HARDCALC_GRAPHICS=kitty|iterm|none`
+/// Picks the protocol from the environment. `HARDCALC_GRAPHICS=kitty|iterm|sixel|none`
 /// overrides the detection. Inside tmux images are off unless forced.
 pub fn detect(var: impl Fn(&str) -> Option<String>) -> Option<Protocol> {
     if let Some(forced) = var("HARDCALC_GRAPHICS") {
         return match forced.to_lowercase().as_str() {
             "kitty" => Some(Protocol::Kitty),
             "iterm" | "iterm2" => Some(Protocol::Iterm),
+            "sixel" => Some(Protocol::Sixel),
             _ => None,
         };
     }
@@ -31,6 +35,9 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> Option<Protocol> {
         Some(Protocol::Kitty)
     } else if program == "iTerm.app" || program == "WezTerm" || var("WEZTERM_EXECUTABLE").is_some() {
         Some(Protocol::Iterm)
+    } else if var("WT_SESSION").is_some() || term == "foot" || term.starts_with("foot-") || term.starts_with("mlterm") {
+        // Windows Terminal (also under WSL) understands Sixel since 1.22.
+        Some(Protocol::Sixel)
     } else {
         None
     }
@@ -76,6 +83,8 @@ pub fn escape(protocol: Protocol, png: &[u8], cols: u16, rows: u16) -> String {
             "\x1b]1337;File=inline=1;size={};width={cols};height={rows};preserveAspectRatio=1:{data}\x07",
             png.len()
         ),
+        // Sixel needs the pixels: see [`sixel`].
+        Protocol::Sixel => String::new(),
     }
 }
 
@@ -84,8 +93,176 @@ pub fn escape(protocol: Protocol, png: &[u8], cols: u16, rows: u16) -> String {
 pub fn clear(protocol: Protocol) -> &'static str {
     match protocol {
         Protocol::Kitty => "\x1b_Ga=d,d=A,q=2\x1b\\",
-        Protocol::Iterm => "",
+        Protocol::Iterm | Protocol::Sixel => "",
     }
+}
+
+/// Decodes a PNG (8 bit, not interlaced – what pdftoppm, mutool, sips and
+/// hardcalc write) to RGBA pixels.
+pub fn decode_png(data: &[u8]) -> Result<(usize, usize, Vec<[u8; 4]>), String> {
+    use std::io::Read;
+    let bad = |what: &str| format!("PNG: {what}");
+    if !data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(bad("not a PNG"));
+    }
+    let (mut pos, mut header, mut palette, mut idat) = (8, None, Vec::new(), Vec::new());
+    while pos + 8 <= data.len() {
+        let len = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let kind = &data[pos + 4..pos + 8];
+        let body = data.get(pos + 8..pos + 8 + len).ok_or_else(|| bad("cut off"))?;
+        match kind {
+            b"IHDR" if len >= 13 => header = Some((u32::from_be_bytes([body[0], body[1], body[2], body[3]]) as usize, u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as usize, body[8], body[9], body[12])),
+            b"PLTE" => palette = body.to_vec(),
+            b"IDAT" => idat.extend_from_slice(body),
+            b"IEND" => break,
+            _ => {}
+        }
+        pos += 12 + len;
+    }
+    let (w, h, depth, ctype, interlace) = header.ok_or_else(|| bad("no header"))?;
+    if depth != 8 || interlace != 0 {
+        return Err(bad("only 8 bit, not interlaced"));
+    }
+    let bpp = match ctype {
+        0 | 3 => 1,
+        2 => 3,
+        4 => 2,
+        6 => 4,
+        _ => return Err(bad("colour type")),
+    };
+    let mut raw = Vec::new();
+    flate2::read::ZlibDecoder::new(&idat[..]).read_to_end(&mut raw).map_err(|e| bad(&e.to_string()))?;
+    let stride = w * bpp;
+    if raw.len() < h * (stride + 1) {
+        return Err(bad("too little data"));
+    }
+    let mut rows: Vec<u8> = vec![0; h * stride];
+    for y in 0..h {
+        let filter = raw[y * (stride + 1)];
+        let line = &raw[y * (stride + 1) + 1..(y + 1) * (stride + 1)];
+        for x in 0..stride {
+            let a = if x >= bpp { rows[y * stride + x - bpp] as i32 } else { 0 };
+            let b = if y > 0 { rows[(y - 1) * stride + x] as i32 } else { 0 };
+            let c = if y > 0 && x >= bpp { rows[(y - 1) * stride + x - bpp] as i32 } else { 0 };
+            let add = match filter {
+                0 => 0,
+                1 => a,
+                2 => b,
+                3 => (a + b) / 2,
+                4 => {
+                    let p = a + b - c;
+                    let (pa, pb, pc) = ((p - a).abs(), (p - b).abs(), (p - c).abs());
+                    if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c }
+                }
+                _ => return Err(bad("filter")),
+            };
+            rows[y * stride + x] = (line[x] as i32 + add) as u8;
+        }
+    }
+    let pixels = rows
+        .chunks(bpp)
+        .map(|p| match ctype {
+            0 => [p[0], p[0], p[0], 255],
+            2 => [p[0], p[1], p[2], 255],
+            3 => {
+                let i = p[0] as usize * 3;
+                match palette.get(i..i + 3) {
+                    Some(c) => [c[0], c[1], c[2], 255],
+                    None => [0, 0, 0, 255],
+                }
+            }
+            4 => [p[0], p[0], p[0], p[1]],
+            _ => [p[0], p[1], p[2], p[3]],
+        })
+        .collect();
+    Ok((w, h, pixels))
+}
+
+/// A PNG as Sixel for a box of `cols` × `rows` cells of `cell` pixels: laid
+/// over the background colour `bg` (Sixel has no transparency we can rely
+/// on) and fitted into the box.
+pub fn sixel(png: &[u8], cols: u16, rows: u16, cell: (u16, u16), bg: [u8; 3]) -> Result<String, String> {
+    let (w, h, pixels) = decode_png(png)?;
+    let over = crate::typeset::Image { width: w, height: h, pixels }.over(bg);
+    let mut img = RgbImage { width: w, height: h, pixels: over };
+    let (bw, bh) = (cols as usize * cell.0 as usize, rows as usize * cell.1 as usize);
+    if bw > 0 && bh > 0 && (w > bw || h > bh || (w < bw && h < bh)) {
+        let f = (bw as f64 / w as f64).min(bh as f64 / h as f64);
+        img = img.resize(((w as f64 * f) as usize).max(1), ((h as f64 * f) as usize).max(1));
+    }
+    Ok(sixel_encode(&img))
+}
+
+/// The image as a Sixel escape sequence: a palette of the 255 most common
+/// colours (at 4 bits per channel), bands of six pixel rows.
+pub fn sixel_encode(img: &RgbImage) -> String {
+    use std::fmt::Write;
+    let bin = |p: [u8; 3]| ((p[0] as usize >> 4) << 8) | ((p[1] as usize >> 4) << 4) | (p[2] as usize >> 4);
+    let mut count = vec![0u32; 4096];
+    let mut sum = vec![[0u32; 3]; 4096];
+    for p in &img.pixels {
+        let b = bin(*p);
+        count[b] += 1;
+        for k in 0..3 {
+            sum[b][k] += p[k] as u32;
+        }
+    }
+    let mut used: Vec<usize> = (0..4096).filter(|&b| count[b] > 0).collect();
+    used.sort_by_key(|&b| std::cmp::Reverse(count[b]));
+    let mean = |b: usize| [sum[b][0] / count[b], sum[b][1] / count[b], sum[b][2] / count[b]];
+    let palette: Vec<[u32; 3]> = used.iter().take(255).map(|&b| mean(b)).collect();
+    // The palette entry nearest to each colour bin.
+    let mut map = vec![0u8; 4096];
+    for (i, &b) in used.iter().enumerate() {
+        map[b] = if i < palette.len() {
+            i as u8
+        } else {
+            let m = mean(b);
+            let dist = |c: &[u32; 3]| (0..3).map(|k| (c[k] as i64 - m[k] as i64).pow(2)).sum::<i64>();
+            palette.iter().enumerate().min_by_key(|(_, c)| dist(c)).map_or(0, |(j, _)| j as u8)
+        };
+    }
+    let idx: Vec<u8> = img.pixels.iter().map(|p| map[bin(*p)]).collect();
+    let mut out = format!("\x1bPq\"1;1;{};{}", img.width, img.height);
+    for (i, c) in palette.iter().enumerate() {
+        let _ = write!(out, "#{i};2;{};{};{}", c[0] * 100 / 255, c[1] * 100 / 255, c[2] * 100 / 255);
+    }
+    let w = img.width;
+    for top in (0..img.height).step_by(6) {
+        let mut masks: Vec<Option<Vec<u8>>> = vec![None; palette.len()];
+        for k in 0..6.min(img.height - top) {
+            for x in 0..w {
+                let c = idx[(top + k) * w + x] as usize;
+                masks[c].get_or_insert_with(|| vec![0; w])[x] |= 1 << k;
+            }
+        }
+        let mut first = true;
+        for (c, mask) in masks.iter().enumerate() {
+            let Some(mask) = mask else { continue };
+            // Back to the left edge before the next colour paints the same band.
+            if !first {
+                out.push('$');
+            }
+            first = false;
+            let _ = write!(out, "#{c}");
+            let end = mask.iter().rposition(|m| *m != 0).map_or(0, |i| i + 1);
+            let mut x = 0;
+            while x < end {
+                let m = mask[x];
+                let run = mask[x..end].iter().take_while(|v| **v == m).count();
+                let ch = (m + 63) as char;
+                if run > 3 {
+                    let _ = write!(out, "!{run}{ch}");
+                } else {
+                    (0..run).for_each(|_| out.push(ch));
+                }
+                x += run;
+            }
+        }
+        out.push('-');
+    }
+    out.push_str("\x1b\\");
+    out
 }
 
 fn run(cmd: &mut Command) -> bool {
@@ -369,5 +546,37 @@ mod tests {
         let iterm = escape(Protocol::Iterm, &png, 40, 20);
         assert!(iterm.starts_with("\x1b]1337;File=inline=1;size=5000;width=40;height=20;preserveAspectRatio=1:"));
         assert!(iterm.ends_with('\x07'));
+    }
+
+    #[test]
+    fn sixel_detection_and_encoding() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+        };
+        assert_eq!(detect(env(&[("WT_SESSION", "x")])), Some(Protocol::Sixel));
+        assert_eq!(detect(env(&[("HARDCALC_GRAPHICS", "sixel")])), Some(Protocol::Sixel));
+        assert_eq!(detect(env(&[("WT_SESSION", "x"), ("HARDCALC_GRAPHICS", "none")])), None);
+        // 2 × 8 pixels: left column red, right column blue; two bands.
+        let img = RgbImage { width: 2, height: 8, pixels: (0..16).map(|i| if i % 2 == 0 { [255, 0, 0] } else { [0, 0, 255] }).collect() };
+        let s = sixel_encode(&img);
+        assert!(s.starts_with("\x1bPq\"1;1;2;8#"));
+        assert!(s.contains(";2;100;0;0") && s.contains(";2;0;0;100"));
+        // Band 1: blue in the right pixel of all six rows (~), red in the left one;
+        // band 2 has two rows (B). The empty tail of a colour is left out.
+        assert!(s.contains("#0?~$#1~-"), "{s}");
+        assert!(s.contains("#0?B$#1B-"), "{s}");
+        assert_eq!(s.matches('-').count(), 2);
+        assert!(s.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn png_round_trip_through_the_decoder() {
+        let mut c = crate::tui::chart_image::Canvas::new(3, 2, [0, 0, 0, 0]);
+        c.pixels[1] = [10, 20, 30, 255];
+        c.pixels[5] = [200, 100, 50, 128];
+        let (w, h, px) = decode_png(&c.png()).unwrap();
+        assert_eq!((w, h), (3, 2));
+        assert_eq!(px, c.pixels);
+        assert!(sixel(&c.png(), 1, 1, (3, 2), [0, 0, 0]).unwrap().starts_with("\x1bPq"));
     }
 }
