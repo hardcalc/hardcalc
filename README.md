@@ -165,14 +165,14 @@ layer and column names.
 |----------------------------------|---------------------------------------------------------------|
 | typing, Enter, double-click      | edit the cell (typing replaces the content; the input appears in the cell) |
 | arrows, click                    | move; Shift+arrows or dragging selects                        |
-| `:movetab left\|right\|first\|last\|N`, drag a tab, `-` / `+` on the table origin | reorder the tables (the tabs); each table keeps its cursor and scroll position when you switch away and back |
+| `:movetab left\|right\|first\|last\|N`, drag a tab, `-` / `+` on the table origin | reorder the tabs of tables and calculations; each keeps its cursor and scroll position when you switch away and back; a move that breaks a calculation shows a big red warning |
 | while editing a formula: arrows, click | after `=`, `(`, `,` or an operator a reference is inserted (Shift+arrows, dragging: a range; without Shift: type `:` and point at the second corner), as in Excel |
 | ↑ in the first row, ← in the first column, click on a column/row header | cursor on the header: the whole column / row is selected; Shift+arrows extend |
 | on a header: `-` / `+`           | move the selected columns / rows; references follow           |
 | on a header: F8, ↓ / →           | delete columns / rows; back into the cells                    |
 | on a column header: typing, Enter | name the column (`Name` or `Name:Type`); references to the old name follow |
 | ← / ↑ from the headers, click top left | table origin: the whole table is selected; typing renames the table |
-| Tab / Shift+Tab                  | next / previous tab (tables, ⚙ types, ƒ functions, layouts)   |
+| Tab / Shift+Tab                  | next / previous tab (tables, ∑ calcs, ⚙ types, ƒ functions, layouts) |
 | `+` row / `+` column             | input there appends a new row / column                        |
 | Del / Backspace                  | clear the selection                                           |
 | Ctrl+D / Ctrl+R                  | fill the first row / column of the selection into the rest (one cell: from above / the left); formula references follow, `$B$1` stays |
@@ -362,6 +362,15 @@ M_ss(q; L) = q·L^2/8                 ' an own function
 [Moments] plot(M)                    ' a chart: ▥ Moments, layouts, print, report
 ```
 ````
+
+**Several calculations:** every ```` ```hardcalc ```` block is a tab of its own –
+`:calc new Bending` starts one (the name follows `hardcalc` in the file),
+`:calc 2` or `:calc Bending` shows it. Tables and calculations stand in the
+order of the document and move among each other (`:movetab`, dragging).
+The calculations form one sheet: a later one sees the names of the earlier
+ones, so the order of the tabs is the order of evaluation. A move that
+makes a name unknown shows a big red warning at once (Ctrl+Z takes it back).
+Charts and layouts have a row of tabs below, each group under its label.
 
 **Case distinctions:** where a code gives several formulas, each with a
 condition, write `name =` and indent the branches below it. The first
@@ -596,7 +605,7 @@ with the data; on the right there are helper views:
 - **‹› source** – the Markdown source; the table on the left is highlighted.
 - **▥ charts**, another table, the types.
 
-**Tab** switches the active window, **Ctrl+U** swaps the windows (only when
+**Ctrl+W** (or **Alt+Tab**, where the terminal passes it on; Windows, macOS and most desktops keep it for themselves) switches the active window – **Tab** still goes through the tabs of the window –, **Ctrl+U** swaps the windows (only when
 both show data), **Ctrl+O** closes the split. The divider `│` can be grabbed
 and moved with the mouse, between 40/60 and 60/40. The hint line at the
 bottom belongs to the active window.

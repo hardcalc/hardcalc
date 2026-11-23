@@ -32,7 +32,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let [tabs, page, status, fkeys] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1), Constraint::Length(1)])
                 .areas(f.area());
-        draw_tabs(f, app, tabs);
+        draw_tabs(f, app, tabs, false);
         draw_preview(f, app, page);
         draw_preview_status(f, app, status);
         draw_fkeys(f, app, fkeys);
@@ -63,8 +63,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             1
         }
     });
+    // Layouts and charts have a row of their own below the tabs of the tables
+    // and calculations – also while the window is split, so that nothing moves
+    // when a chart is opened.
+    let second_row = app.has_second_tab_row();
     let [top, bar, body, stack, layers, status, fkeys] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(1 + u16::from(second_row)),
         Constraint::Length(bar_height),
         Constraint::Min(3),
         Constraint::Length(u16::from(stacked)),
@@ -94,7 +98,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let helper = helper_hint(app);
     app.split_body = None;
     if app.is_split() {
-        draw_split_title(f, app, top);
+        let [row1, row2] = Layout::vertical([Constraint::Length(1), Constraint::Length(u16::from(second_row))]).areas(top);
+        draw_split_title(f, app, row1);
+        if second_row {
+            draw_second_tabs(f, app, row2);
+        }
         let [left, sep, right] =
             Layout::horizontal([Constraint::Percentage(app.split_percent), Constraint::Length(1), Constraint::Fill(1)]).areas(body);
         app.split_body = Some(body);
@@ -117,7 +125,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
         }
     } else {
-        draw_tabs(f, app, top);
+        let [row1, row2] = Layout::vertical([Constraint::Length(1), Constraint::Length(u16::from(second_row))]).areas(top);
+        draw_tabs(f, app, row1, second_row);
+        if second_row {
+            draw_second_tabs(f, app, row2);
+        }
         app.window_areas.push((true, body));
         draw_window(f, app, body, true, false);
         turn_window(f, app, true, body);
@@ -154,8 +166,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             draw_help(f, app);
         }
     });
+    draw_order_warning(f, app);
     app.anim.finish(f.buffer_mut());
     super::theme::apply(f.buffer_mut(), app.light(), app.theme != super::theme::ThemeSetting::Auto);
+}
+
+/// The big red warning after a tab was moved and a calculation broke.
+fn draw_order_warning(f: &mut Frame, app: &App) {
+    let Some(text) = &app.order_warning else { return };
+    let screen = f.area();
+    if screen.width < 20 || screen.height < 6 {
+        return;
+    }
+    let text = format!("⚠  {text}\n\nThe order of the calculations is the order of evaluation. Ctrl+Z takes the move back · any key closes this.");
+    let inner = screen.width.saturating_sub(4) as usize;
+    let rows: usize = text.lines().map(|l| l.width().div_ceil(inner).max(1)).sum();
+    let height = (rows as u16 + 2).min(screen.height.saturating_sub(2));
+    let area = Rect { x: screen.x, y: screen.y + 1, width: screen.width, height };
+    f.render_widget(Clear, area);
+    let style = Style::new().bold().fg(Color::White).bg(Color::Red);
+    f.render_widget(
+        Paragraph::new(text).style(style).wrap(ratatui::widgets::Wrap { trim: true }).block(Block::new().padding(ratatui::widgets::Padding::new(2, 2, 1, 1)).style(style)),
+        area,
+    );
 }
 
 /// Draws a popup with `draw` and lets it slide in from above (from behind
@@ -665,7 +698,7 @@ fn draw_split_title(f: &mut Frame, app: &mut App, area: Rect) {
     let dim = Style::new().fg(Color::Gray).bg(Color::DarkGray);
     let items = vec![
         (" ≡ hardcalc ".to_string(), Style::new().bold().fg(Color::Black).bg(Color::Cyan), Some(Hit::Logo)),
-        (" Tab: other window · Ctrl+U: swap · Ctrl+O: close split · drag │: width".to_string(), dim, None),
+        (" Ctrl+W: other window · Ctrl+U: swap · Ctrl+O: close split · drag │: width".to_string(), dim, None),
     ];
     let end = chips(f, area, items, &mut app.hits);
     draw_file_name(f, app, Rect { x: end, width: area.right().saturating_sub(end), ..area });
@@ -1091,29 +1124,37 @@ fn chips(f: &mut Frame, area: Rect, items: Vec<(String, Style, Option<Hit>)>, hi
     x
 }
 
-fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect, second_row: bool) {
     f.buffer_mut().set_style(area, Style::new().bg(Color::DarkGray));
     let mut items = vec![(" ≡ hardcalc ".to_string(), Style::new().bold().fg(Color::Black).bg(Color::Cyan), Some(Hit::Logo))];
-    // Tables the edited formula takes data from, in their source colour.
+    // Tables the edited formula takes data from, in their source colour. Tables
+    // and calculations stand in the order of the document, types and functions after them.
     let sources = app.formula_sources();
-    for (i, s) in app.wb.sheets.iter().enumerate() {
-        let name = s.name.clone().unwrap_or_else(|| format!("#{}", i + 1));
-        let active = i == app.view.sheet && app.view.kind == ViewKind::Table;
-        let style = match sources.table(i) {
-            Some(k) => source_tab_style(k),
-            None => tab_style(active),
-        };
-        items.push((format!(" {name} "), style, Some(Hit::Tab(i))));
+    for tab in crate::tui::app::tabs::tab_items(&app.doc) {
+        use crate::tui::app::tabs::TabItem;
+        match tab {
+            TabItem::Table(i) => {
+                let active = i == app.view.sheet && app.view.kind == ViewKind::Table;
+                let style = match sources.table(i) {
+                    Some(k) => source_tab_style(k),
+                    None => tab_style(active),
+                };
+                items.push((format!(" {} ", app.tab_title(tab)), style, Some(Hit::Tab(i))));
+            }
+            TabItem::Calc(k) => {
+                let active = app.calc_view() && app.view.calc == k;
+                items.push((format!(" ∑ {} ", app.tab_title(tab)), tab_style(active).italic(), Some(Hit::CalcTab(k))));
+            }
+        }
         items.push(("│".into(), Style::new().fg(Color::Gray).bg(Color::DarkGray), None));
     }
     items.push((" ⚙ types ".into(), tab_style(app.types_view()).italic(), Some(Hit::TypesTab)));
     items.push((" ƒ functions ".into(), tab_style(app.functions_view()).italic(), Some(Hit::ViewTab(ViewKind::Functions))));
-    if app.has_calc() {
-        items.push((" ∑ calc ".into(), tab_style(app.calc_view()).italic(), Some(Hit::ViewTab(ViewKind::Calc))));
-    }
-    for (i, (name, _)) in app.layout_blocks().into_iter().enumerate() {
-        let active = app.view.kind == ViewKind::Layout(i);
-        items.push((format!(" ▤ {name} "), tab_style(active), Some(Hit::ViewTab(ViewKind::Layout(i)))));
+    if !second_row {
+        for (i, (name, _)) in app.layout_blocks().into_iter().enumerate() {
+            let active = app.view.kind == ViewKind::Layout(i);
+            items.push((format!(" ▤ {name} "), tab_style(active), Some(Hit::ViewTab(ViewKind::Layout(i)))));
+        }
     }
     if app.can_pivot() {
         let style = if app.view.pivot.is_some() {
@@ -1124,11 +1165,43 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
         items.push(("  ".into(), Style::new().bg(Color::DarkGray), None));
         items.push((" ⊞ pivot ".into(), style, Some(Hit::PivotButton)));
     }
-    for (i, (name, _)) in app.chart_blocks().into_iter().enumerate() {
-        items.push((format!(" ▥ {name} "), tab_style(false).fg(Color::LightGreen), Some(Hit::ViewTab(ViewKind::Chart(i)))));
+    if !second_row {
+        for (i, (name, _)) in app.chart_blocks().into_iter().enumerate() {
+            items.push((format!(" ▥ {name} "), tab_style(false).fg(Color::LightGreen), Some(Hit::ViewTab(ViewKind::Chart(i)))));
+        }
     }
     let end = chips(f, area, items, &mut app.hits);
     draw_file_name(f, app, Rect { x: end, width: area.right().saturating_sub(end), ..area });
+}
+
+/// The second row of tabs: the charts of the calculations and tables, and the
+/// layouts – each group under its own label.
+fn draw_second_tabs(f: &mut Frame, app: &mut App, area: Rect) {
+    f.buffer_mut().set_style(area, Style::new().bg(Color::DarkGray));
+    let label = |t: &str| (format!(" {t} "), Style::new().italic().fg(Color::Gray).bg(Color::DarkGray), None);
+    // Whichever window shows it.
+    let shows = |kind: ViewKind| app.view.kind == kind || app.other.as_ref().is_some_and(|o| o.kind == kind);
+    let mut items = Vec::new();
+    let charts = app.chart_blocks();
+    if !charts.is_empty() {
+        items.push(label("charts"));
+        for (i, (name, _)) in charts.into_iter().enumerate() {
+            let shown = shows(ViewKind::Chart(i));
+            let style = if shown { tab_style(true) } else { tab_style(false).fg(Color::LightGreen) };
+            items.push((format!(" ▥ {name} "), style, Some(Hit::ViewTab(ViewKind::Chart(i)))));
+        }
+    }
+    let layouts = app.layout_blocks();
+    if !layouts.is_empty() {
+        if !items.is_empty() {
+            items.push(("  │  ".into(), Style::new().fg(Color::Gray).bg(Color::DarkGray), None));
+        }
+        items.push(label("layouts"));
+        for (i, (name, _)) in layouts.into_iter().enumerate() {
+            items.push((format!(" ▤ {name} "), tab_style(shows(ViewKind::Layout(i))), Some(Hit::ViewTab(ViewKind::Layout(i)))));
+        }
+    }
+    chips(f, area, items, &mut app.hits);
 }
 
 /// The tab of a table the edited formula takes data from.

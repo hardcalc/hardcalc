@@ -6,12 +6,15 @@ A simply supported steel beam under a uniform load. The sheet shows what a
 calculation sheet can do: names and comments beside the lines, ranges of
 values, checks over a range, own functions and the formula library,
 integrals and derivatives, angle functions, case distinctions with
-indented branches, and charts. Open it with
-`hardcalc examples/calc-features.hcmd`, then `:calc` (F6: formula library,
-F7: chart settings). The headings form groups: `##` sections with `###`
-subsections. In the calculation tab ← in the Name column selects a line, then
-Space folds the section (▾ / ▸; `:fold all`, `:fold off`), - / + move a heading
-with its whole section, Tab nests lines below a case head and `:report` for the typeset report.
+indented branches, charts, and three calculations as tabs among the tables.
+
+Open it with `hardcalc examples/calc-features.hcmd`, then `:calc` (F6: formula
+library, F7: chart settings; `:calc Beam` or `:calc 2` shows another one) and
+`:report` for the typeset report. The headings form groups: `##` sections
+with `###` subsections. In a calculation, ← in the Name column selects a line;
+Space then folds the section (▾ / ▸; `:fold all`, `:fold off`), - / + move a
+heading with its whole section, Tab nests lines below a case head. Tabs move
+with `:movetab` or by dragging them.
 
 ## Profiles :: matrix
 
@@ -21,7 +24,7 @@ with its whole section, Tab nests lines below a case head and `:report` for the 
 | IPE 270 | 429 | 5790 |
 | IPE 300 | 557 | 8360 |
 
-```hardcalc
+```hardcalc Loads
 ## System and loads
 [Eq. 1]  f_yk = 235 N/mm²              ' yield strength S235
          γ_M  = 1.1                    ' partial factor
@@ -34,6 +37,14 @@ with its whole section, Tab nests lines below a case head and `:report` for the 
          I_y  = Profiles["IPE 270", I_y]
          f_yd = f_yk/γ_M
 
+```
+
+The next calculation is a tab of its own. It reads the names of the one
+before it (`L`, `q_d`, `f_yd` …), so the order of the tabs is the order of
+evaluation: move a tab (`:movetab`, or drag it) before the data it uses and
+hardcalc warns in red.
+
+```hardcalc Beam
 ## Internal forces along the beam
 x = {0, 0.5,,, 6} m                    ' 13 points, every 0.5 m
 [Eq. 3] M = M_ss_x(q_d; L; x)          ' formula library (F6)
@@ -69,6 +80,11 @@ k = {1, 1.1,,, 2}                      ' 11 factors from 1 to 2, step 0.1
 [Reserve] σ_k ≤ f_yd                   ' decisive: the highest factor
 [Factors] plot(σ_k; x: k; type: bar; title: Stress over the load factor)
 
+```
+
+Any block can stand anywhere among the tables; this one follows the beam.
+
+```hardcalc Roof
 ## Roof geometry and loads
 
 ### Roof slope with angle functions

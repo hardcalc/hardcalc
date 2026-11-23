@@ -528,7 +528,7 @@ fn split_with_inspector() {
     assert!(lines.contains(&InspectorLine::Choice { value: "paid".into(), current: false }));
 
     // Tab focuses the inspector; Down + Enter picks "paid" for the main window's cell.
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     assert!(!a.left_focused);
     key(&mut a, KeyCode::Down);
     key(&mut a, KeyCode::Enter);
@@ -538,7 +538,7 @@ fn split_with_inspector() {
     assert_eq!(a.mode, Mode::Normal);
 
     // Clicking a choice while the table is focused applies it as well.
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     assert!(a.left_focused);
     render(&mut a);
     let (rect, _) = *a.other_hits.iter().find(|(_, h)| *h == Hit::Choice(2)).unwrap();
@@ -591,7 +591,7 @@ fn two_tables_side_by_side_and_swap() {
     use hardcalc::tui::app::ViewKind;
     let mut a = app();
     ctrl(&mut a, 'o');
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     render(&mut a);
     click(&mut a, Hit::Tab(2)); // right window: Metrics
     assert_eq!((a.view.kind, a.view.sheet), (ViewKind::Table, 2));
@@ -607,8 +607,9 @@ fn two_tables_side_by_side_and_swap() {
     // The left window never shows helpers.
     a.set_view(ViewKind::Table, 2);
     render(&mut a);
-    // The left window never offers helpers (layouts are main views and may appear).
-    assert!(!a.hits.iter().any(|(_, h)| matches!(h, Hit::ViewTab(ViewKind::Inspector | ViewKind::Source | ViewKind::Chart(_)))));
+    // The left window never offers helpers (layouts are main views and may appear;
+    // the charts stand in the row of charts and layouts below the tabs).
+    assert!(!a.hits.iter().any(|(_, h)| matches!(h, Hit::ViewTab(ViewKind::Inspector | ViewKind::Source))));
 }
 
 #[test]
@@ -1145,24 +1146,24 @@ fn light_terminal_theme() {
         term.backend().buffer().clone()
     };
     let mut a = app();
-    // Column header "Amount" (row 3, not the cursor's column) is gray: light gray on dark terminals …
+    // Column header "Amount" (row 4, not the cursor's column) is gray: light gray on dark terminals …
     let dark = draw(&mut a);
-    let x = (0..100).find(|&x| dark[(x, 3)].symbol() == "A").unwrap();
-    assert_eq!(dark[(x, 3)].fg, Color::Gray);
+    let x = (0..100).find(|&x| dark[(x, 4)].symbol() == "A").unwrap();
+    assert_eq!(dark[(x, 4)].fg, Color::Gray);
     // … darker on light ones, whether detected or chosen.
     a.detected_light = Some(true);
-    assert_eq!(draw(&mut a)[(x, 3)].fg, Color::Indexed(240));
+    assert_eq!(draw(&mut a)[(x, 4)].fg, Color::Indexed(240));
     typ(&mut a, ":theme dark");
     key(&mut a, KeyCode::Enter);
-    assert_eq!(draw(&mut a)[(x, 3)].fg, Color::Gray);
+    assert_eq!(draw(&mut a)[(x, 4)].fg, Color::Gray);
     // Chosen explicitly, the theme also paints the sheet: dark on a light terminal.
-    let cell = draw(&mut a)[(5, 6)].clone();
+    let cell = draw(&mut a)[(5, 7)].clone();
     assert_eq!(cell.bg, hardcalc::tui::theme::DARK_PAPER);
     typ(&mut a, ":theme auto");
     key(&mut a, KeyCode::Enter);
     assert!(a.message.as_ref().unwrap().text.contains("terminal: light"));
     // Auto keeps the terminal's own background for the sheet.
-    assert_eq!(draw(&mut a)[(5, 6)].bg, Color::Reset);
+    assert_eq!(draw(&mut a)[(5, 7)].bg, Color::Reset);
 }
 
 #[test]
@@ -2766,10 +2767,10 @@ fn status_line_follows_the_focused_window() {
     let status = |a: &mut App| render(a).lines().nth(18).unwrap().to_string();
     assert!(status(&mut a).contains("double-click to edit"), "{}", status(&mut a));
     // The inspector on the right is focused: its keys, not the table's.
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     assert!(!a.left_focused);
     assert!(status(&mut a).contains("inspector: ↑↓ choose"), "{}", status(&mut a));
-    key(&mut a, KeyCode::Tab);
+    ctrl(&mut a, 'w');
     assert!(status(&mut a).contains("double-click to edit"));
 }
 
@@ -3122,8 +3123,8 @@ fn long_input_wraps_in_the_formula_bar() {
     let buf = term.backend().buffer();
     let rows: Vec<String> = (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect();
     // The text continues on the second and third line instead of running off.
-    assert!(rows[1].contains("1+1+1"), "{rows:#?}");
-    assert!(rows[2].contains("1+1+1") && !rows[2].contains("Item"), "{rows:#?}");
+    assert!(rows[2].contains("1+1+1"), "{rows:#?}");
+    assert!(rows[3].contains("1+1+1") && !rows[3].contains("Item"), "{rows:#?}");
     let end = rows.iter().take(8).map(|r| r.matches('1').count()).sum::<usize>();
     assert!(end >= 90, "{end}\n{rows:#?}");
 }
@@ -3166,8 +3167,8 @@ fn formula_bar_stays_one_line_while_navigating() {
     term.draw(|f| ui::draw(f, &mut a)).unwrap();
     let buf = term.backend().buffer();
     let row = |y: u16| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>();
-    assert!(!row(2).contains("1+1+1"), "{}", row(2));
-    assert!(row(1).trim_end().contains('…'), "{}", row(1));
+    assert!(!row(3).contains("1+1+1"), "{}", row(3));
+    assert!(row(2).trim_end().contains('…'), "{}", row(2));
 }
 
 #[test]
@@ -4476,7 +4477,9 @@ fn special_characters_with_ctrl_g() {
 fn calculation_headings_without_markdown() {
     let src = include_str!("../examples/calc-features.hcmd");
     let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
-    command(&mut a, "calc");
+    command(&mut a, "calc Beam");
+    // The cursor off the heading, whose text the formula bar would repeat.
+    a.view.cursor = (4, 1);
     let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
     term.draw(|f| ui::draw(f, &mut a)).unwrap();
     let screen: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
@@ -4634,30 +4637,29 @@ fn calc_tree_nests_with_tab_and_moves_as_a_unit() {
 fn calc_example_numbers_nested_lines() {
     let src = include_str!("../examples/calc-features.hcmd");
     let mut a = App::new(PathBuf::from("calc-features.hcmd"), hardcalc::parse(src).unwrap());
-    a.command("calc");
-    let lines = hardcalc::sheet::source_lines(&a.doc);
-    let numbers = |first: &str, n: usize| {
-        let at = lines.iter().position(|l| l.starts_with(first)).unwrap();
+    let sources = |a: &App| -> Vec<String> { a.calc_rows().iter().filter_map(|r| a.calc_row_source(*r)).collect() };
+    let numbers = |a: &App, first: &str, n: usize| {
+        let at = sources(a).iter().position(|l| l.starts_with(first)).unwrap();
         (at..at + n).map(|r| a.row_header(r).trim().to_string()).collect::<Vec<_>>()
     };
     // The head of the snow factor: its branches count on from its number, the
     // line after them goes on at the level of the head.
-    let head: usize = numbers("[Shape] μ =", 1)[0].parse().unwrap();
-    assert_eq!(numbers("[Shape] μ =", 5), [head.to_string(), format!("{head}.1"), format!("{head}.2"), format!("{head}.3"), (head + 1).to_string()]);
+    a.command("calc Roof");
+    let head: usize = numbers(&a, "[Shape] μ =", 1)[0].parse().unwrap();
+    assert_eq!(numbers(&a, "[Shape] μ =", 5), [head.to_string(), format!("{head}.1"), format!("{head}.2"), format!("{head}.3"), (head + 1).to_string()]);
     // The buckling factor: branch 2 has side calculations nested below it.
-    let chi: usize = numbers("χ =", 1)[0].parse().unwrap();
-    assert_eq!(numbers("χ =", 5), [chi.to_string(), format!("{chi}.1"), format!("{chi}.2"), format!("{chi}.2.1"), format!("{chi}.2.2")]);
-    // Indentation that only aligns lines under a label does not nest.
-    assert_eq!(numbers("[Eq. 1]", 3), ["2", "3", "4"]);
-    // The last digit of the primary index is in one column: the 9 under the 10's 0.
-    let at = lines.iter().position(|l| l.starts_with("[Shape] μ =")).unwrap();
+    let chi: usize = numbers(&a, "χ =", 1)[0].parse().unwrap();
+    assert_eq!(numbers(&a, "χ =", 5), [chi.to_string(), format!("{chi}.1"), format!("{chi}.2"), format!("{chi}.2.1"), format!("{chi}.2.2")]);
+    // The last digit of the primary index is in one column.
+    let at = sources(&a).iter().position(|l| l.starts_with("[Shape] μ =")).unwrap();
     let (h, b) = (a.row_header(at), a.row_header(at + 1));
     let digit = |s: &str| s.find('.').unwrap_or_else(|| s.trim_end().len());
     assert_eq!(h.len(), b.len());
     assert_eq!(digit(&h), digit(&b), "{h:?} {b:?}");
-    let first = a.row_header(0);
-    assert_eq!(first.len(), h.len(), "{first:?} {h:?}: same width everywhere");
-    assert!(first.starts_with(' '), "{first:?}: 1 stands under the last digit of 56");
+    assert_eq!(a.row_header(0).len(), h.len(), "same width everywhere");
+    // Indentation that only aligns lines under a label does not nest.
+    a.command("calc Loads");
+    assert_eq!(numbers(&a, "[Eq. 1]", 3), ["2", "3", "4"]);
 }
 
 fn sheet_names(a: &App) -> Vec<String> {
@@ -4729,4 +4731,131 @@ fn tables_move_in_the_tab_bar() {
     let moved = sheet_names(&a);
     assert_eq!((&moved[0], &moved[1]), (&names[1], &names[0]));
     assert_eq!(a.view.sheet, 1);
+}
+
+const TWO_CALCS: &str = "<!-- hardcalc 1 -->\n\n## A :: matrix\n\n| x | y |\n|---|---|\n| 1 | 2 |\n\n```hardcalc Loads\nq = 5 kN/m\n```\n\n## B :: matrix\n\n| x | y |\n|---|---|\n| 3 | 4 |\n\n```hardcalc Check\nq_d = 1.5·q\n```\n";
+
+fn tab_names(a: &App) -> Vec<String> {
+    a.window_tabs(true).into_iter().map(|(n, ..)| n).collect()
+}
+
+#[test]
+fn calculations_are_tabs_among_the_tables() {
+    let mut a = App::new(PathBuf::from("x.hcmd"), hardcalc::parse(TWO_CALCS).unwrap());
+    assert_eq!(tab_names(&a), ["A", "∑ Loads", "B", "∑ Check", "⚙ types", "ƒ functions"]);
+    a.command("calc Check");
+    assert!(a.calc_view());
+    assert_eq!(a.calc_rows().len(), 2, "the line and the + row of that calculation only");
+    assert_eq!(a.row_header(0), "1");
+    // Variables of an earlier calculation are known in a later one.
+    assert!(render(&mut a).contains("q_d = 1.5·q = 1.5·5 = 7.50 kN/m"), "{}", render(&mut a));
+    a.command("calc 1");
+    assert_eq!(a.view.calc, 0);
+    // A new calculation: named, empty, and lines typed into it stay in it.
+    a.command("calc new Third");
+    assert_eq!(tab_names(&a)[4], "∑ Third");
+    typ(&mut a, "z = q_d·2");
+    key(&mut a, KeyCode::Enter);
+    let src = hardcalc::write(&a.doc);
+    assert!(src.contains("```hardcalc Third\nz = q_d·2\n```"), "{src}");
+    assert!(a.row_header(0) == "1" && a.calc_rows().len() == 2);
+}
+
+#[test]
+fn moving_a_calculation_before_its_data_warns_in_red() {
+    let mut a = App::new(PathBuf::from("x.hcmd"), hardcalc::parse(TWO_CALCS).unwrap());
+    a.command("calc Check");
+    a.command("movetab first");
+    assert_eq!(tab_names(&a)[0], "∑ Check", "{:?}", tab_names(&a));
+    assert_eq!(a.view.calc, 0, "the view went along");
+    let warning = a.order_warning.clone().expect("a warning");
+    assert!(warning.contains("Check") && warning.contains('q'), "{warning}");
+    let screen = render(&mut a);
+    assert!(screen.contains("broke the calculation"), "{screen}");
+    // Any key closes it; undo puts the calculation back and nothing is wrong.
+    key(&mut a, KeyCode::Esc);
+    assert!(a.order_warning.is_none());
+    ctrl(&mut a, 'z');
+    assert_eq!(tab_names(&a)[..4], ["A", "∑ Loads", "B", "∑ Check"]);
+    // A move that breaks nothing does not warn.
+    a.switch_sheet(0);
+    a.command("movetab last");
+    assert!(a.order_warning.is_none());
+    assert_eq!(tab_names(&a)[..4], ["∑ Loads", "B", "∑ Check", "A"]);
+    // Moving the data behind the calculation that uses it warns.
+    a.command("calc Loads");
+    a.command("movetab last");
+    assert!(a.order_warning.as_ref().is_some_and(|w| w.contains("Loads")), "{:?}", a.order_warning);
+}
+
+#[test]
+fn tab_and_ctrl_page_keys_walk_through_tables_and_calculations() {
+    let mut a = App::new(PathBuf::from("x.hcmd"), hardcalc::parse(TWO_CALCS).unwrap());
+    let here = |a: &App| (a.view.kind, if a.calc_view() { a.view.calc } else { a.view.sheet });
+    use hardcalc::tui::app::ViewKind;
+    // Tab goes along the bar: A, ∑ Loads, B, ∑ Check, types, functions, and round.
+    let mut seen = vec![here(&a)];
+    for _ in 0..6 {
+        key(&mut a, KeyCode::Tab);
+        seen.push(here(&a));
+    }
+    assert_eq!(
+        seen,
+        [(ViewKind::Table, 0), (ViewKind::Calc, 0), (ViewKind::Table, 1), (ViewKind::Calc, 1), (ViewKind::Types, 1), (ViewKind::Functions, 1), (ViewKind::Table, 0)]
+    );
+    a.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert_eq!(here(&a).0, ViewKind::Functions);
+    // Ctrl+PgDn / Ctrl+PgUp step over tables and calculations alike.
+    a.switch_sheet(0);
+    let pg = |a: &mut App, code| a.on_key(KeyEvent::new(code, KeyModifiers::CONTROL));
+    pg(&mut a, KeyCode::PageDown);
+    assert_eq!(here(&a), (ViewKind::Calc, 0));
+    pg(&mut a, KeyCode::PageDown);
+    assert_eq!(here(&a), (ViewKind::Table, 1));
+    pg(&mut a, KeyCode::PageUp);
+    pg(&mut a, KeyCode::PageUp);
+    assert_eq!(here(&a), (ViewKind::Table, 0));
+}
+
+#[test]
+fn opening_a_chart_does_not_move_the_screen() {
+    use hardcalc::tui::app::ViewKind;
+    let mut a = app();
+    let screen = render(&mut a);
+    let rows = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
+    let line_of = |s: &str, needle: &str| rows(s).iter().position(|l| l.contains(needle)).unwrap_or(usize::MAX);
+    let (bar, header, tabs2) = (line_of(&screen, "A1 "), line_of(&screen, "Item  "), line_of(&screen, "charts"));
+    assert!(tabs2 < bar && bar < header, "{screen}");
+    click(&mut a, Hit::ViewTab(ViewKind::Chart(0)));
+    assert!(a.is_split(), "the chart opens beside the table");
+    let after = render(&mut a);
+    // The row that was clicked is still there, with the chart marked, and the
+    // formula bar and the table stand where they stood.
+    assert_eq!(line_of(&after, "charts"), tabs2, "{after}");
+    assert_eq!(line_of(&after, "A1 "), bar, "{after}");
+    assert!(rows(&after)[tabs2].contains("▥ Spending"), "{after}");
+    // A click on another chart there goes on from the same place, and closing the split changes nothing either.
+    click(&mut a, Hit::ViewTab(ViewKind::Chart(1)));
+    assert_eq!(line_of(&render(&mut a), "A1 "), bar);
+    a.toggle_split();
+    assert_eq!(line_of(&render(&mut a), "A1 "), bar);
+}
+
+#[test]
+fn tab_goes_through_tabs_in_the_split_and_ctrl_w_switches_the_window() {
+    let mut a = app();
+    ctrl(&mut a, 'o');
+    assert!(a.left_focused);
+    key(&mut a, KeyCode::Tab);
+    assert!(a.left_focused, "Tab no longer leaves the window");
+    assert_eq!(a.view.sheet, 1, "it goes to the next tab");
+    ctrl(&mut a, 'w');
+    assert!(!a.left_focused);
+    // In the right window Tab walks through the right window's tabs.
+    let kind = a.view.kind;
+    key(&mut a, KeyCode::Tab);
+    assert!(!a.left_focused);
+    assert_ne!(a.view.kind, kind, "{:?}", a.view.kind);
+    a.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::ALT));
+    assert!(a.left_focused, "Alt+Tab where the terminal passes it");
 }

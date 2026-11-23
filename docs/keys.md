@@ -32,6 +32,7 @@ context menu (`/`, then the marked letters).
 | Pivot view | `Ctrl+P` · `/ T P` | `click ⊞ pivot` |
 | Split window | `Ctrl+O` · `/ V S` | – |
 | Swap windows | `Ctrl+U` · `/ V W` | – |
+| Other window | `Ctrl+W` · `Alt+Tab` | `click in a window` |
 | Next table | `Ctrl+PgDn` | `click a tab` |
 | Previous table | `Ctrl+PgUp` | `click a tab` |
 | Bold on / off | `Ctrl+B` · `/ F B` | – |

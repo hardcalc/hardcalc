@@ -37,13 +37,14 @@ pub enum Action {
     Pivot,
     Split,
     SwapWindows,
+    OtherWindow,
     NextTable,
     PrevTable,
     Bold,
 }
 
 impl Action {
-    pub const ALL: [Action; 27] = [
+    pub const ALL: [Action; 28] = [
         Action::ContextMenu,
         Action::Menu,
         Action::Help,
@@ -68,6 +69,7 @@ impl Action {
         Action::Pivot,
         Action::Split,
         Action::SwapWindows,
+        Action::OtherWindow,
         Action::NextTable,
         Action::PrevTable,
         Action::Bold,
@@ -99,6 +101,7 @@ impl Action {
             Action::Pivot => "Pivot view",
             Action::Split => "Split window",
             Action::SwapWindows => "Swap windows",
+            Action::OtherWindow => "Other window",
             Action::NextTable => "Next table",
             Action::PrevTable => "Previous table",
             Action::Bold => "Bold on / off",
@@ -165,6 +168,7 @@ pub struct Binding {
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
 const CTRL: KeyModifiers = KeyModifiers::CONTROL;
+const ALT: KeyModifiers = KeyModifiers::ALT;
 const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
 
 const fn key(action: Action, label: &'static str, code: KeyCode, mods: KeyModifiers) -> Binding {
@@ -253,6 +257,9 @@ pub static KEYMAP: &[Binding] = &[
     seq(Action::Split, "/ V S"),
     key(Action::SwapWindows, "Ctrl+U", KeyCode::Char('u'), CTRL),
     seq(Action::SwapWindows, "/ V W"),
+    key(Action::OtherWindow, "Ctrl+W", KeyCode::Char('w'), CTRL),
+    key(Action::OtherWindow, "Alt+Tab", KeyCode::Tab, ALT),
+    mouse(Action::OtherWindow, "click in a window"),
     key(Action::NextTable, "Ctrl+PgDn", KeyCode::PageDown, CTRL),
     mouse(Action::NextTable, "click a tab"),
     key(Action::PrevTable, "Ctrl+PgUp", KeyCode::PageUp, CTRL),

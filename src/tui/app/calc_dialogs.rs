@@ -70,10 +70,20 @@ fn result_name(f: &str) -> String {
 }
 
 impl App {
-    /// The calculation row of plot `k` (in document order).
-    fn plot_row(&self, k: usize) -> Option<usize> {
-        let rows = self.calc_rows();
-        (0..rows.len()).filter(|&r| self.calc_line(r).is_some_and(|l| crate::sheet::is_plot_line(&l))).nth(k)
+    /// The calculation row of plot `k` (in document order, over all
+    /// calculations); the window then shows the calculation it is in.
+    fn plot_row(&mut self, k: usize) -> Option<usize> {
+        let mut left = k;
+        for (c, &b) in crate::sheet::calc_blocks(&self.doc).iter().enumerate() {
+            let Block::Code { body, .. } = &self.doc.blocks[b] else { continue };
+            let plots: Vec<usize> = (0..body.len()).filter(|&l| crate::sheet::is_plot_line(&body[l])).collect();
+            if left < plots.len() {
+                self.view.calc = c;
+                return Some(plots[left]);
+            }
+            left -= plots.len();
+        }
+        None
     }
 
     /// The source of calculation row `r`.
@@ -114,9 +124,10 @@ impl App {
             }
             _ => {
                 let first = self.calc_rows().len() - 1;
+                let calc = self.view.calc;
                 self.with_doc(|doc| {
                     for l in lines {
-                        super::calc_view::add_calc_line(doc, l);
+                        super::calc_view::add_calc_line(doc, calc, l);
                     }
                 });
                 first
