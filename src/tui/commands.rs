@@ -79,7 +79,7 @@ pub const COMMANDS: &[Command] = &[
     c("swap", "", "swap the windows"),
     c("types", "", "the types tab"),
     c("functions", "", "the functions tab"),
-    c("calc", "", "the calculation sheet (```hardcalc blocks)"),
+    c("calc", "[N|name|new [name]]", "the calculation (a ```hardcalc block, a tab of its own); new starts another one"),
     choice("movetab", "left|right|first|last|<place>", "move the shown table in the tab bar (also - / + on the table origin, or drag the tab)", &["left", "right", "first", "last"]),
     c("fold", "[all|off]", "calculation sheet: fold / unfold the section of the heading at the cursor; all / off: every section"),
     c("preview", "", "the calculation sheet typeset, in the right window"),

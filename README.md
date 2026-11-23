@@ -165,7 +165,7 @@ layer and column names.
 |----------------------------------|---------------------------------------------------------------|
 | typing, Enter, double-click      | edit the cell (typing replaces the content; the input appears in the cell) |
 | arrows, click                    | move; Shift+arrows or dragging selects                        |
-| `:movetab left\|right\|first\|last\|N`, drag a tab, `-` / `+` on the table origin | reorder the tables (the tabs); each table keeps its cursor and scroll position when you switch away and back |
+| `:movetab left\|right\|first\|last\|N`, drag a tab, `-` / `+` on the table origin | reorder the tabs of tables and calculations; each keeps its cursor and scroll position when you switch away and back; a move that breaks a calculation shows a big red warning |
 | while editing a formula: arrows, click | after `=`, `(`, `,` or an operator a reference is inserted (Shift+arrows, dragging: a range; without Shift: type `:` and point at the second corner), as in Excel |
 | ↑ in the first row, ← in the first column, click on a column/row header | cursor on the header: the whole column / row is selected; Shift+arrows extend |
 | on a header: `-` / `+`           | move the selected columns / rows; references follow           |
@@ -362,6 +362,15 @@ M_ss(q; L) = q·L^2/8                 ' an own function
 [Moments] plot(M)                    ' a chart: ▥ Moments, layouts, print, report
 ```
 ````
+
+**Several calculations:** every ```` ```hardcalc ```` block is a tab of its own –
+`:calc new Bending` starts one (the name follows `hardcalc` in the file),
+`:calc 2` or `:calc Bending` shows it. Tables and calculations stand in the
+order of the document and move among each other (`:movetab`, dragging).
+The calculations form one sheet: a later one sees the names of the earlier
+ones, so the order of the tabs is the order of evaluation. A move that
+makes a name unknown shows a big red warning at once (Ctrl+Z takes it back).
+Charts and layouts have a row of tabs below, each group under its label.
 
 **Case distinctions:** where a code gives several formulas, each with a
 condition, write `name =` and indent the branches below it. The first

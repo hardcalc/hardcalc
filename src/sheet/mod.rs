@@ -47,6 +47,26 @@ pub fn is_sheet_info(info: &str) -> bool {
     info.split_whitespace().next() == Some(INFO)
 }
 
+/// The blocks that hold a calculation sheet (indices into `doc.blocks`), in order.
+pub fn calc_blocks(doc: &Document) -> Vec<usize> {
+    doc.blocks.iter().enumerate().filter(|(_, b)| matches!(b, Block::Code { info, .. } if is_sheet_info(info))).map(|(i, _)| i).collect()
+}
+
+/// The name a ```hardcalc block was given (```` ```hardcalc Bending ````).
+pub fn calc_name(info: &str) -> Option<String> {
+    let rest = info.trim().strip_prefix(INFO)?.trim();
+    (!rest.is_empty()).then(|| rest.to_string())
+}
+
+/// The name of the `k`-th calculation: its own, else `calc`, `calc 2` …
+pub fn calc_title(doc: &Document, k: usize) -> String {
+    let name = calc_blocks(doc).get(k).and_then(|&b| match &doc.blocks[b] {
+        Block::Code { info, .. } => calc_name(info),
+        _ => None,
+    });
+    name.unwrap_or_else(|| if k == 0 { "calc".to_string() } else { format!("calc {}", k + 1) })
+}
+
 /// A variable: its value and, for an input, the number as written (shown
 /// in the substituted step: `0,60` rather than `0,600`).
 #[derive(Debug, Clone)]

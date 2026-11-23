@@ -810,7 +810,9 @@ would lead out of the bundle (`../x`) are ignored.
 A ```` ```hardcalc ```` block holds calculation lines: traceable
 calculations with units, readable formulas and the way to the result. All
 blocks of a file together form one calculation sheet, evaluated from top to
-bottom; later blocks see the variables of earlier ones. Other Markdown
+bottom; later blocks see the variables of earlier ones. A block may have a name after `hardcalc` (```` ```hardcalc Bending ````): in the
+application each block is a tab of its own, named so (`calc`, `calc 2` …
+without a name); the order of the blocks is the order of evaluation. Other Markdown
 editors show the block as code.
 
 ````markdown

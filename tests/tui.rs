@@ -1145,24 +1145,24 @@ fn light_terminal_theme() {
         term.backend().buffer().clone()
     };
     let mut a = app();
-    // Column header "Amount" (row 3, not the cursor's column) is gray: light gray on dark terminals …
+    // Column header "Amount" (row 4, not the cursor's column) is gray: light gray on dark terminals …
     let dark = draw(&mut a);
-    let x = (0..100).find(|&x| dark[(x, 3)].symbol() == "A").unwrap();
-    assert_eq!(dark[(x, 3)].fg, Color::Gray);
+    let x = (0..100).find(|&x| dark[(x, 4)].symbol() == "A").unwrap();
+    assert_eq!(dark[(x, 4)].fg, Color::Gray);
     // … darker on light ones, whether detected or chosen.
     a.detected_light = Some(true);
-    assert_eq!(draw(&mut a)[(x, 3)].fg, Color::Indexed(240));
+    assert_eq!(draw(&mut a)[(x, 4)].fg, Color::Indexed(240));
     typ(&mut a, ":theme dark");
     key(&mut a, KeyCode::Enter);
-    assert_eq!(draw(&mut a)[(x, 3)].fg, Color::Gray);
+    assert_eq!(draw(&mut a)[(x, 4)].fg, Color::Gray);
     // Chosen explicitly, the theme also paints the sheet: dark on a light terminal.
-    let cell = draw(&mut a)[(5, 6)].clone();
+    let cell = draw(&mut a)[(5, 7)].clone();
     assert_eq!(cell.bg, hardcalc::tui::theme::DARK_PAPER);
     typ(&mut a, ":theme auto");
     key(&mut a, KeyCode::Enter);
     assert!(a.message.as_ref().unwrap().text.contains("terminal: light"));
     // Auto keeps the terminal's own background for the sheet.
-    assert_eq!(draw(&mut a)[(5, 6)].bg, Color::Reset);
+    assert_eq!(draw(&mut a)[(5, 7)].bg, Color::Reset);
 }
 
 #[test]
@@ -3122,8 +3122,8 @@ fn long_input_wraps_in_the_formula_bar() {
     let buf = term.backend().buffer();
     let rows: Vec<String> = (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect();
     // The text continues on the second and third line instead of running off.
-    assert!(rows[1].contains("1+1+1"), "{rows:#?}");
-    assert!(rows[2].contains("1+1+1") && !rows[2].contains("Item"), "{rows:#?}");
+    assert!(rows[2].contains("1+1+1"), "{rows:#?}");
+    assert!(rows[3].contains("1+1+1") && !rows[3].contains("Item"), "{rows:#?}");
     let end = rows.iter().take(8).map(|r| r.matches('1').count()).sum::<usize>();
     assert!(end >= 90, "{end}\n{rows:#?}");
 }
@@ -3166,8 +3166,8 @@ fn formula_bar_stays_one_line_while_navigating() {
     term.draw(|f| ui::draw(f, &mut a)).unwrap();
     let buf = term.backend().buffer();
     let row = |y: u16| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>();
-    assert!(!row(2).contains("1+1+1"), "{}", row(2));
-    assert!(row(1).trim_end().contains('…'), "{}", row(1));
+    assert!(!row(3).contains("1+1+1"), "{}", row(3));
+    assert!(row(2).trim_end().contains('…'), "{}", row(2));
 }
 
 #[test]
@@ -4729,4 +4729,59 @@ fn tables_move_in_the_tab_bar() {
     let moved = sheet_names(&a);
     assert_eq!((&moved[0], &moved[1]), (&names[1], &names[0]));
     assert_eq!(a.view.sheet, 1);
+}
+
+const TWO_CALCS: &str = "<!-- hardcalc 1 -->\n\n## A :: matrix\n\n| x | y |\n|---|---|\n| 1 | 2 |\n\n```hardcalc Loads\nq = 5 kN/m\n```\n\n## B :: matrix\n\n| x | y |\n|---|---|\n| 3 | 4 |\n\n```hardcalc Check\nq_d = 1.5·q\n```\n";
+
+fn tab_names(a: &App) -> Vec<String> {
+    a.window_tabs(true).into_iter().map(|(n, ..)| n).collect()
+}
+
+#[test]
+fn calculations_are_tabs_among_the_tables() {
+    let mut a = App::new(PathBuf::from("x.hcmd"), hardcalc::parse(TWO_CALCS).unwrap());
+    assert_eq!(tab_names(&a), ["A", "∑ Loads", "B", "∑ Check", "⚙ types", "ƒ functions"]);
+    a.command("calc Check");
+    assert!(a.calc_view());
+    assert_eq!(a.calc_rows().len(), 2, "the line and the + row of that calculation only");
+    assert_eq!(a.row_header(0), "1");
+    // Variables of an earlier calculation are known in a later one.
+    assert!(render(&mut a).contains("q_d = 1.5·q = 1.5·5 = 7.50 kN/m"), "{}", render(&mut a));
+    a.command("calc 1");
+    assert_eq!(a.view.calc, 0);
+    // A new calculation: named, empty, and lines typed into it stay in it.
+    a.command("calc new Third");
+    assert_eq!(tab_names(&a)[4], "∑ Third");
+    typ(&mut a, "z = q_d·2");
+    key(&mut a, KeyCode::Enter);
+    let src = hardcalc::write(&a.doc);
+    assert!(src.contains("```hardcalc Third\nz = q_d·2\n```"), "{src}");
+    assert!(a.row_header(0) == "1" && a.calc_rows().len() == 2);
+}
+
+#[test]
+fn moving_a_calculation_before_its_data_warns_in_red() {
+    let mut a = App::new(PathBuf::from("x.hcmd"), hardcalc::parse(TWO_CALCS).unwrap());
+    a.command("calc Check");
+    a.command("movetab first");
+    assert_eq!(tab_names(&a)[0], "∑ Check", "{:?}", tab_names(&a));
+    assert_eq!(a.view.calc, 0, "the view went along");
+    let warning = a.order_warning.clone().expect("a warning");
+    assert!(warning.contains("Check") && warning.contains('q'), "{warning}");
+    let screen = render(&mut a);
+    assert!(screen.contains("broke the calculation"), "{screen}");
+    // Any key closes it; undo puts the calculation back and nothing is wrong.
+    key(&mut a, KeyCode::Esc);
+    assert!(a.order_warning.is_none());
+    ctrl(&mut a, 'z');
+    assert_eq!(tab_names(&a)[..4], ["A", "∑ Loads", "B", "∑ Check"]);
+    // A move that breaks nothing does not warn.
+    a.switch_sheet(0);
+    a.command("movetab last");
+    assert!(a.order_warning.is_none());
+    assert_eq!(tab_names(&a)[..4], ["∑ Loads", "B", "∑ Check", "A"]);
+    // Moving the data behind the calculation that uses it warns.
+    a.command("calc Loads");
+    a.command("movetab last");
+    assert!(a.order_warning.as_ref().is_some_and(|w| w.contains("Loads")), "{:?}", a.order_warning);
 }

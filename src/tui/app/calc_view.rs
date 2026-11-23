@@ -213,14 +213,14 @@ pub fn preview_lines(out: &[sheet::Out], style: FormulaStyle) -> Vec<(String, Pr
     lines
 }
 
-/// Appends a line to the last ```hardcalc block, creating one at the end.
-pub(super) fn add_calc_line(doc: &mut Document, line: String) {
-    let last = doc.blocks.iter_mut().rev().find_map(|b| match b {
-        Block::Code { info, body } if sheet::is_sheet_info(info) => Some(body),
-        _ => None,
-    });
-    match last {
-        Some(body) => body.push(line),
+/// Appends a line to the `calc`-th ```hardcalc block, creating one at the end.
+pub(super) fn add_calc_line(doc: &mut Document, calc: usize, line: String) {
+    match sheet::calc_blocks(doc).get(calc).copied() {
+        Some(b) => {
+            if let Block::Code { body, .. } = &mut doc.blocks[b] {
+                body.push(line);
+            }
+        }
         None => doc.blocks.push(Block::Code { info: sheet::INFO.into(), body: vec![line] }),
     }
 }
@@ -235,17 +235,30 @@ impl App {
         self.calc_view() || self.doc.blocks.iter().any(|b| matches!(b, Block::Code { info, .. } if sheet::is_sheet_info(info)))
     }
 
+    /// The lines of the calculation shown (one ```hardcalc block), and the + row.
     pub fn calc_rows(&self) -> Vec<CalcRow> {
         let mut rows = Vec::new();
-        for (b, block) in self.doc.blocks.iter().enumerate() {
-            if let Block::Code { info, body } = block
-                && sheet::is_sheet_info(info)
-            {
-                rows.extend((0..body.len()).map(|line| CalcRow::Line { block: b, line }));
-            }
+        if let Some(b) = sheet::calc_blocks(&self.doc).get(self.view.calc).copied()
+            && let Block::Code { body, .. } = &self.doc.blocks[b]
+        {
+            rows.extend((0..body.len()).map(|line| CalcRow::Line { block: b, line }));
         }
         rows.push(CalcRow::New);
         rows
+    }
+
+    /// How many evaluated lines the calculations before the shown one have:
+    /// where its results start in the results of the whole sheet.
+    fn calc_offset(&self) -> usize {
+        let blocks = sheet::calc_blocks(&self.doc);
+        blocks
+            .iter()
+            .take(self.view.calc)
+            .map(|&b| match &self.doc.blocks[b] {
+                Block::Code { body, .. } => body.iter().filter(|l| !matches!(sheet::expr::parse_line(l), Line::Mode(_))).count(),
+                _ => 0,
+            })
+            .sum()
     }
 
     fn calc_source(&self, row: CalcRow) -> Option<&String> {
@@ -307,7 +320,7 @@ impl App {
         if self.calc_source(*row).is_none() || is_mode(row) {
             return None;
         }
-        Some(r - rows[..r].iter().filter(|row| is_mode(row)).count())
+        Some(self.calc_offset() + r - rows[..r].iter().filter(|row| is_mode(row)).count())
     }
 
     /// The evaluated line for row `r`, if it has one.
@@ -357,7 +370,7 @@ impl App {
                             style.bold = true;
                             style.underline = *level <= 2;
                             // ▾ open, ▸ folded (with the number of lines it hides).
-                            let folded = self.calc_keys.get(r).cloned().flatten().is_some_and(|k| self.calc_folds.contains(&k));
+                            let folded = self.calc_keys.get(r).cloned().flatten().is_some_and(|(t, n)| self.calc_folds.contains(&(self.view.calc, t, n)));
                             let text = if folded {
                                 let hidden = self.calc_hidden.iter().skip(r + 1).take_while(|h| **h).count();
                                 format!("▸ {text} ({hidden} lines)")
@@ -524,7 +537,10 @@ impl App {
                     body[i] = line;
                 }
             }),
-            Some(CalcRow::New) if !line.trim().is_empty() => self.with_doc(|doc| add_calc_line(doc, line)),
+            Some(CalcRow::New) if !line.trim().is_empty() => {
+                let calc = self.view.calc;
+                self.with_doc(|doc| add_calc_line(doc, calc, line))
+            }
             _ => return,
         }
         if let Some(p) = self.calc_problem() {
@@ -598,8 +614,9 @@ impl App {
         }
         keys.push(None);
         // A folded heading that is gone does not come back with the same text.
+        let calc = self.view.calc;
         let present: std::collections::HashSet<_> = keys.iter().flatten().cloned().collect();
-        self.calc_folds.retain(|k| present.contains(k));
+        self.calc_folds.retain(|(c, t, n)| *c != calc || present.contains(&(t.clone(), *n)));
         let mut hidden = vec![false; n + 1];
         let mut folded_at: Option<usize> = None;
         for i in 0..n {
@@ -610,7 +627,7 @@ impl App {
             }
             hidden[i] = folded_at.is_some();
             if let (Some(level), None, Some(key)) = (levels[i], folded_at, &keys[i])
-                && self.calc_folds.contains(key)
+                && self.calc_folds.contains(&(self.view.calc, key.0.clone(), key.1))
             {
                 folded_at = Some(level);
             }
@@ -696,6 +713,7 @@ impl App {
             return self.error("no heading above – ## starts a section");
         };
         let Some(key) = self.calc_keys.get(h).cloned().flatten() else { return };
+        let key = (self.view.calc, key.0, key.1);
         if !self.calc_folds.remove(&key) {
             self.calc_folds.insert(key);
         }
@@ -714,12 +732,15 @@ impl App {
         match arg {
             None => self.toggle_fold(),
             Some("all") => {
-                self.calc_folds = self.calc_keys.iter().flatten().cloned().collect();
+                let calc = self.view.calc;
+                self.calc_folds.retain(|(c, ..)| *c != calc);
+                self.calc_folds.extend(self.calc_keys.iter().flatten().map(|(t, n)| (calc, t.clone(), *n)));
                 self.refresh_calc_hidden();
                 self.snap_to_shown();
             }
             Some("off") => {
-                self.calc_folds.clear();
+                let calc = self.view.calc;
+                self.calc_folds.retain(|(c, ..)| *c != calc);
                 self.refresh_calc_hidden();
             }
             Some(_) => self.error("usage: :fold [all|off]"),

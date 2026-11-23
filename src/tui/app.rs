@@ -38,7 +38,7 @@ mod shape;
 mod sources;
 mod calc_dialogs;
 mod symbol_picker;
-mod tabs;
+pub mod tabs;
 pub use symbol_picker::{SymbolPicker, SymbolTarget};
 mod values;
 mod views;
@@ -123,6 +123,8 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Hit {
     Tab(usize),
+    /// The tab of calculation `n`.
+    CalcTab(usize),
     /// Character `n` of the list of special characters.
     Symbol(usize),
     Cell(usize, usize),
@@ -376,6 +378,8 @@ pub struct View {
     pub mark: Option<usize>,
     /// The data layer shown (0: the table itself).
     pub layer: usize,
+    /// Which calculation the calculation view shows (the n-th ```hardcalc block).
+    pub calc: usize,
 }
 
 impl View {
@@ -392,6 +396,7 @@ impl View {
             pivot: None,
             mark: None,
             layer: 0,
+            calc: 0,
         }
     }
 
@@ -434,7 +439,7 @@ pub struct App {
     /// The evaluated calculation sheet, until the document changes.
     calc_cache: Option<Vec<crate::sheet::Out>>,
     /// Folded headings of the calculation sheet: (text, n-th heading with it).
-    calc_folds: std::collections::HashSet<(String, usize)>,
+    calc_folds: std::collections::HashSet<(usize, String, usize)>,
     /// Per row of the calculation sheet: hidden in a folded section.
     calc_hidden: Vec<bool>,
     /// Per row: the key of the heading in it.
@@ -483,6 +488,12 @@ pub struct App {
     pub levels: HashMap<usize, usize>,
     /// Where each table was left (cursor, scroll), for when it is shown again.
     table_views: HashMap<usize, tabs::Spot>,
+    /// The same for the calculations.
+    calc_spots: HashMap<usize, tabs::Spot>,
+    /// The calculation shown last (`:calc` goes back to it).
+    last_calc: usize,
+    /// A move of a tab broke a calculation: shown in red until a key is pressed.
+    pub order_warning: Option<String>,
     /// A tab being dragged to another place: its number.
     tab_drag: Option<usize>,
     /// Start of a possible `ESC ESC [ A` sequence (Alt+arrow in "Option as
@@ -955,6 +966,9 @@ impl App {
             bands: true,
             levels: HashMap::new(),
             table_views: HashMap::new(),
+            calc_spots: HashMap::new(),
+            last_calc: 0,
+            order_warning: None,
             tab_drag: None,
             esc_seq: None,
             symbols: None,
@@ -1129,15 +1143,14 @@ impl App {
                 tabs.push(("∑ preview".into(), Hit::ViewTab(ViewKind::CalcPreview), self.view.kind == ViewKind::CalcPreview));
             }
         }
-        for (i, s) in self.wb.sheets.iter().enumerate() {
-            let name = s.name.clone().unwrap_or_else(|| format!("#{}", i + 1));
-            tabs.push((name, Hit::Tab(i), self.view.kind == ViewKind::Table && self.view.sheet == i));
+        for tab in tabs::tab_items(&self.doc) {
+            match tab {
+                tabs::TabItem::Table(i) => tabs.push((self.tab_title(tab), Hit::Tab(i), self.view.kind == ViewKind::Table && self.view.sheet == i)),
+                tabs::TabItem::Calc(k) => tabs.push((format!("∑ {}", self.tab_title(tab)), Hit::CalcTab(k), self.calc_view() && self.view.calc == k)),
+            }
         }
         tabs.push(("⚙ types".into(), Hit::TypesTab, self.types_view()));
         tabs.push(("ƒ functions".into(), Hit::ViewTab(ViewKind::Functions), self.functions_view()));
-        if self.has_calc() {
-            tabs.push(("∑ calc".into(), Hit::ViewTab(ViewKind::Calc), self.calc_view()));
-        }
         if left {
             for (i, (name, _)) in self.layout_blocks().into_iter().enumerate() {
                 tabs.push((format!("▤ {name}"), Hit::ViewTab(ViewKind::Layout(i)), self.view.kind == ViewKind::Layout(i)));
@@ -1154,7 +1167,10 @@ impl App {
     /// Shows a helper (Inspector, Source, chart) in the right window, opening
     /// it if needed; layouts open in the main window.
     pub fn show_helper(&mut self, kind: ViewKind) {
-        if matches!(kind, ViewKind::Layout(_) | ViewKind::Functions | ViewKind::Calc) {
+        if kind == ViewKind::Calc {
+            return self.show_calc(self.last_calc);
+        }
+        if matches!(kind, ViewKind::Layout(_) | ViewKind::Functions) {
             return self.with_window(true, |app| app.set_view(kind, app.view.sheet));
         }
         if self.other.is_none() {
@@ -4895,6 +4911,8 @@ impl App {
     // ------------------------------------------------------------ input
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        // The warning about a broken order stays until a key is pressed.
+        self.order_warning = None;
         // Terminals in "Option as Meta" mode send Alt+arrow as ESC ESC [ A,
         // which arrives as Esc, '[', 'A' at the same instant – no one types
         // that fast, so the three are put back together.
@@ -5244,6 +5262,9 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
+        if matches!(m.kind, MouseEventKind::Down(_)) {
+            self.order_warning = None;
+        }
         let pos = Position::new(m.column, m.row);
         if self.caps.mouse != Cap::Confirmed && matches!(m.kind, MouseEventKind::Down(_)) {
             if self.key_test == Some(2) && m.kind == MouseEventKind::Down(MouseButton::Right) {
@@ -5526,7 +5547,11 @@ impl App {
                     }
                     Some(Hit::Tab(i)) => {
                         self.switch_sheet(i);
-                        self.tab_drag = Some(i);
+                        self.tab_drag = self.tab_position(tabs::TabItem::Table(i));
+                    }
+                    Some(Hit::CalcTab(k)) => {
+                        self.show_calc(k);
+                        self.tab_drag = self.tab_position(tabs::TabItem::Calc(k));
                     }
                     Some(Hit::Link(r, c)) => self.follow_link(r, c),
                     Some(Hit::Back) => self.back(),
@@ -5585,12 +5610,16 @@ impl App {
             }
             // A tab dragged over another one takes its place.
             MouseEventKind::Drag(MouseButton::Left) if self.tab_drag.is_some() => {
-                if let (Some(from), Some(Hit::Tab(to))) = (self.tab_drag, hit)
+                let over = match hit {
+                    Some(Hit::Tab(i)) => self.tab_position(tabs::TabItem::Table(i)),
+                    Some(Hit::CalcTab(k)) => self.tab_position(tabs::TabItem::Calc(k)),
+                    _ => None,
+                };
+                if let (Some(from), Some(to)) = (self.tab_drag, over)
                     && from != to
-                    && self.view.kind == ViewKind::Table
-                    && self.view.sheet == from
+                    && self.current_tab().and_then(|t| self.tab_position(t)) == Some(from)
                 {
-                    self.move_table(from, to);
+                    self.move_tab(from, to);
                     self.tab_drag = Some(to);
                 }
             }
@@ -5941,7 +5970,7 @@ impl App {
                 None => self.error("usage: :theme auto|light|dark"),
             },
             "functions" => self.show_helper(ViewKind::Functions),
-            "calc" => self.show_helper(ViewKind::Calc),
+            "calc" => self.calc_command(&args),
             "movetab" => self.movetab_command(&args),
             "fold" => self.fold_command(args.first().copied()),
             "plot" => self.open_plot_dialog(),
