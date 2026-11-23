@@ -4658,6 +4658,7 @@ fn calc_example_numbers_nested_lines() {
     let first = a.row_header(0);
     assert_eq!(first.len(), h.len(), "{first:?} {h:?}: same width everywhere");
     assert!(first.starts_with(' '), "{first:?}: 1 stands under the last digit of 56");
+}
 
 fn sheet_names(a: &App) -> Vec<String> {
     a.wb.sheets.iter().map(|s| s.name.clone().unwrap_or_default()).collect()
