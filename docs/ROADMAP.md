@@ -106,3 +106,13 @@ the two), and into the table in `SPEC.md`.
   dependency tracking).
 - Check `text(value; format)` against Calc: format codes there depend on the
   language settings; hardcalc's must not.
+
+## Distribution
+
+- **winget for Windows** (`winget install Hardcalc.Hardcalc`): manifests in
+  `microsoft/winget-pkgs` (installer type `zip` with nested `portable`,
+  `hardcalc.exe` and `hardconf.exe` as command aliases, x64 and ARM64 from the
+  release assets). First submission by hand with `wingetcreate`, later
+  releases with the `winget-releaser` action in the release workflow (needs a
+  token with `public_repo`). Typst stays optional: no package dependency, the
+  README names `winget install --id Typst.Typst`.
