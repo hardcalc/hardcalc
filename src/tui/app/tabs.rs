@@ -112,9 +112,14 @@ impl App {
         tab_items(&self.doc).iter().position(|t| *t == tab)
     }
 
-    /// Whether there are charts or layouts for a second row of tabs.
+    /// Whether there are charts for a second row of tabs.
     pub fn has_second_tab_row(&self) -> bool {
-        !self.layout_blocks().is_empty() || !self.chart_blocks().is_empty()
+        !self.chart_blocks().is_empty()
+    }
+
+    /// The place of a tab in the bar (for the direction of animations).
+    pub fn tab_index(&self, tab: TabItem) -> u32 {
+        self.tab_position(tab).unwrap_or(0) as u32
     }
 
     /// The name of a tab.

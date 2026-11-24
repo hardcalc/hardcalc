@@ -32,7 +32,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let [tabs, page, status, fkeys] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1), Constraint::Length(1)])
                 .areas(f.area());
-        draw_tabs(f, app, tabs, false);
+        draw_tabs(f, app, tabs);
         draw_preview(f, app, page);
         draw_preview_status(f, app, status);
         draw_fkeys(f, app, fkeys);
@@ -126,7 +126,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     } else {
         let [row1, row2] = Layout::vertical([Constraint::Length(1), Constraint::Length(u16::from(second_row))]).areas(top);
-        draw_tabs(f, app, row1, second_row);
+        draw_tabs(f, app, row1);
         if second_row {
             draw_second_tabs(f, app, row2);
         }
@@ -211,7 +211,7 @@ fn hash_of(v: impl std::hash::Hash) -> u64 {
 
 /// Turns the window like a cube when it switched to another table or view.
 fn turn_window(f: &mut Frame, app: &mut App, side: bool, area: Rect) {
-    let ident = (tab_order(app.view.kind), app.view.sheet);
+    let ident = (tab_order(app), 0);
     app.anim.window(side, ident, f.buffer_mut(), area);
 }
 
@@ -696,10 +696,9 @@ fn draw_file_dialog(f: &mut Frame, app: &mut App) {
 fn draw_split_title(f: &mut Frame, app: &mut App, area: Rect) {
     f.buffer_mut().set_style(area, Style::new().bg(Color::DarkGray));
     let dim = Style::new().fg(Color::Gray).bg(Color::DarkGray);
-    let items = vec![
-        (" ≡ hardcalc ".to_string(), Style::new().bold().fg(Color::Black).bg(Color::Cyan), Some(Hit::Logo)),
-        (" Ctrl+W: other window · Ctrl+U: swap · Ctrl+O: close split · drag │: width".to_string(), dim, None),
-    ];
+    let mut items = vec![(" ≡ hardcalc ".to_string(), Style::new().bold().fg(Color::Black).bg(Color::Cyan), Some(Hit::Logo))];
+    items.extend(layout_chips(app));
+    items.push((" Ctrl+W: other window · Ctrl+U: swap · Ctrl+O: close split · drag │: width".to_string(), dim, None));
     let end = chips(f, area, items, &mut app.hits);
     draw_file_name(f, app, Rect { x: end, width: area.right().saturating_sub(end), ..area });
 }
@@ -855,9 +854,16 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
         for g in graphics {
             let size = Rect::new(0, 0, g.width as u16, g.height as u16);
             let rows: Vec<Option<u16>> = (0..size.height).map(|y| visible(geom.line_of(page * body + g.line + y as usize + 1))).collect();
-            let whole = rows.iter().all(Option::is_some) && rows.windows(2).all(|w| w[1] == w[0].map(|y| y + 1)) && x0 + g.col as u16 + size.width <= right;
+            // The part in view must be one run of rows (a chart cut by the top or
+            // bottom of the window still gets its picture, cut the same way).
+            let first = rows.iter().position(Option::is_some);
+            let run = first.is_some_and(|f| {
+                let seen: Vec<Option<u16>> = rows[f..].iter().take_while(|r| r.is_some()).copied().collect();
+                seen.windows(2).all(|w| w[1] == w[0].map(|y| y + 1)) && rows[f + seen.len()..].iter().all(Option::is_none)
+            });
+            let fits = x0 + g.col as u16 + size.width <= right;
             let mut tmp = ratatui::buffer::Buffer::empty(size);
-            let (_, plot) = super::chart_view::render_with(&mut tmp, size, &g.data, true, None, app.images_allowed && whole);
+            let (_, plot) = super::chart_view::render_with(&mut tmp, size, &g.data, true, None, app.images_allowed && run && fits);
             for y in 0..size.height {
                 let Some(sy) = rows[y as usize] else { continue };
                 for x in 0..size.width {
@@ -867,9 +873,12 @@ fn draw_layout(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
                     }
                 }
             }
-            if let (Some(p), Some(Some(top))) = (plot, rows.first()) {
-                let rect = Rect { x: x0 + g.col as u16 + p.x, y: top + p.y, ..p };
-                images.push(super::chart_image::ChartImage { rect, data: g.data.clone(), paper: true });
+            if let Some(p) = plot {
+                let seen: Vec<u16> = (p.y..p.bottom()).filter(|&y| rows[y as usize].is_some()).collect();
+                if let (Some(&top), Some(sy)) = (seen.first(), seen.first().and_then(|&y| rows[y as usize])) {
+                    let rect = Rect { x: x0 + g.col as u16 + p.x, y: sy, width: p.width, height: seen.len() as u16 };
+                    images.push(super::chart_image::ChartImage { rect, data: g.data.clone(), paper: true, cut_top: top - p.y, full_rows: p.height });
+                }
             }
         }
     }
@@ -963,7 +972,7 @@ fn draw_chart(f: &mut Frame, app: &mut App, area: Rect, i: usize) {
             let (hits, plot) = super::chart_view::render_with(f.buffer_mut(), area, &data, false, highlight, app.images_allowed);
             app.hits.extend(hits.into_iter().map(|(r, k)| (r, Hit::ChartItem(k))));
             if let Some(rect) = plot {
-                app.images.push(super::chart_image::ChartImage { rect, data, paper: false });
+                app.images.push(super::chart_image::ChartImage { rect, data, paper: false, cut_top: 0, full_rows: rect.height });
             }
         }
         Err(e) => {
@@ -1124,7 +1133,7 @@ fn chips(f: &mut Frame, area: Rect, items: Vec<(String, Style, Option<Hit>)>, hi
     x
 }
 
-fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect, second_row: bool) {
+fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     f.buffer_mut().set_style(area, Style::new().bg(Color::DarkGray));
     let mut items = vec![(" ≡ hardcalc ".to_string(), Style::new().bold().fg(Color::Black).bg(Color::Cyan), Some(Hit::Logo))];
     // Tables the edited formula takes data from, in their source colour. Tables
@@ -1150,12 +1159,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect, second_row: bool) {
     }
     items.push((" ⚙ types ".into(), tab_style(app.types_view()).italic(), Some(Hit::TypesTab)));
     items.push((" ƒ functions ".into(), tab_style(app.functions_view()).italic(), Some(Hit::ViewTab(ViewKind::Functions))));
-    if !second_row {
-        for (i, (name, _)) in app.layout_blocks().into_iter().enumerate() {
-            let active = app.view.kind == ViewKind::Layout(i);
-            items.push((format!(" ▤ {name} "), tab_style(active), Some(Hit::ViewTab(ViewKind::Layout(i)))));
-        }
-    }
+    items.extend(layout_chips(app));
     if app.can_pivot() {
         let style = if app.view.pivot.is_some() {
             Style::new().bold().fg(Color::Black).bg(Color::Yellow)
@@ -1165,17 +1169,21 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect, second_row: bool) {
         items.push(("  ".into(), Style::new().bg(Color::DarkGray), None));
         items.push((" ⊞ pivot ".into(), style, Some(Hit::PivotButton)));
     }
-    if !second_row {
-        for (i, (name, _)) in app.chart_blocks().into_iter().enumerate() {
-            items.push((format!(" ▥ {name} "), tab_style(false).fg(Color::LightGreen), Some(Hit::ViewTab(ViewKind::Chart(i)))));
-        }
-    }
     let end = chips(f, area, items, &mut app.hits);
     draw_file_name(f, app, Rect { x: end, width: area.right().saturating_sub(end), ..area });
 }
 
-/// The second row of tabs: the charts of the calculations and tables, and the
-/// layouts – each group under its own label.
+/// The layouts as chips for the first row of tabs; marked when either window shows one.
+fn layout_chips(app: &App) -> Vec<(String, Style, Option<Hit>)> {
+    let shows = |kind: ViewKind| app.view.kind == kind || app.other.as_ref().is_some_and(|o| o.kind == kind);
+    app.layout_blocks()
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, _))| (format!(" ▤ {name} "), tab_style(shows(ViewKind::Layout(i))), Some(Hit::ViewTab(ViewKind::Layout(i)))))
+        .collect()
+}
+
+/// The second row of tabs: the charts of the calculations and tables.
 fn draw_second_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     f.buffer_mut().set_style(area, Style::new().bg(Color::DarkGray));
     let label = |t: &str| (format!(" {t} "), Style::new().italic().fg(Color::Gray).bg(Color::DarkGray), None);
@@ -1189,16 +1197,6 @@ fn draw_second_tabs(f: &mut Frame, app: &mut App, area: Rect) {
             let shown = shows(ViewKind::Chart(i));
             let style = if shown { tab_style(true) } else { tab_style(false).fg(Color::LightGreen) };
             items.push((format!(" ▥ {name} "), style, Some(Hit::ViewTab(ViewKind::Chart(i)))));
-        }
-    }
-    let layouts = app.layout_blocks();
-    if !layouts.is_empty() {
-        if !items.is_empty() {
-            items.push(("  │  ".into(), Style::new().fg(Color::Gray).bg(Color::DarkGray), None));
-        }
-        items.push(label("layouts"));
-        for (i, (name, _)) in layouts.into_iter().enumerate() {
-            items.push((format!(" ▤ {name} "), tab_style(shows(ViewKind::Layout(i))), Some(Hit::ViewTab(ViewKind::Layout(i)))));
         }
     }
     chips(f, area, items, &mut app.hits);
@@ -1385,13 +1383,14 @@ fn cell_style(st: &CellStyle) -> Style {
     s
 }
 
-/// Order of a view's tab in the tab line, so a table switch knows its direction.
-fn tab_order(kind: ViewKind) -> u32 {
-    match kind {
-        ViewKind::Table => 0,
+/// Order of a view's tab in the tab line, so a table switch knows its direction:
+/// tables and calculations by their place in the bar, then the other views.
+fn tab_order(app: &App) -> u32 {
+    match app.view.kind {
+        ViewKind::Table => app.tab_index(crate::tui::app::tabs::TabItem::Table(app.view.sheet)),
+        ViewKind::Calc => app.tab_index(crate::tui::app::tabs::TabItem::Calc(app.view.calc)),
         ViewKind::Types => 10_000,
         ViewKind::Functions => 10_001,
-        ViewKind::Calc => 10_002,
         ViewKind::Layout(i) => 20_000 + i as u32,
         ViewKind::Chart(i) => 30_000 + i as u32,
         ViewKind::Inspector => 40_000,

@@ -116,6 +116,14 @@ pub fn run(path: Option<&Path>) -> std::io::Result<()> {
     // Asked once and when the window changes: asking can take long (a
     // process is started where the terminal does not say).
     app.cell_px = cell_pixels();
+    // Typeset calculations: on where the terminal draws images reliably;
+    // off for Sixel (Windows Terminal), where they come out small and flicker
+    // on banded rows. `HARDCALC_TYPESET=on|off` decides, `:typeset` switches.
+    app.typeset = match std::env::var("HARDCALC_TYPESET").ok().as_deref() {
+        Some("on" | "1") => true,
+        Some("off" | "0") => false,
+        _ => app.graphics != Some(graphics::Protocol::Sixel),
+    };
     app.truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
     app.anim.enabled = std::env::var("HARDCALC_ANIMATIONS").map_or(true, |v| v != "0" && v != "off");
     let mut images = ImageState { bg: sixel_bg.unwrap_or_default(), ..ImageState::default() };
@@ -334,7 +342,12 @@ impl ImageState {
         let wanted: Vec<u64> = charts.iter().map(|(k, _)| *k).chain(pictures.iter().map(|(k, _)| *k)).collect();
         self.charts.retain(|k, _| wanted.contains(k));
         for (k, img) in &charts {
-            let png = self.charts.entry(*k).or_insert_with(|| chart_image::plot(&img.data, img.rect.width, img.rect.height, cell, img.paper).png());
+            let png = self.charts.entry(*k).or_insert_with(|| {
+                let ch = cell.1.max(1) as usize;
+                let full = chart_image::plot(&img.data, img.rect.width, img.full_rows, cell, img.paper);
+                let top = img.cut_top as usize * ch;
+                full.crop_rows(top, top + img.rect.height as usize * ch).png()
+            });
             pngs.push((img.rect, png.clone()));
         }
         for (k, p) in &pictures {

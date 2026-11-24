@@ -13,6 +13,10 @@ pub struct ChartImage {
     pub data: ChartData,
     /// On the white paper of a layout (else on the terminal's background).
     pub paper: bool,
+    /// A chart cut by the window shows only part of its plot: rows of the
+    /// plot hidden above `rect`, and the rows of the whole plot.
+    pub cut_top: u16,
+    pub full_rows: u16,
 }
 
 impl ChartImage {
@@ -21,7 +25,7 @@ impl ChartImage {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         format!("{:?}", self.data).hash(&mut h);
-        (self.rect.x, self.rect.y, self.rect.width, self.rect.height, self.paper).hash(&mut h);
+        (self.rect.x, self.rect.y, self.rect.width, self.rect.height, self.paper, self.cut_top, self.full_rows).hash(&mut h);
         h.finish()
     }
 }
@@ -98,6 +102,15 @@ impl Canvas {
                 self.blend(x, y, color, (r + 0.5 - d).clamp(0.0, 1.0));
             }
         }
+    }
+
+    /// The pixel rows `from..to`.
+    pub fn crop_rows(mut self, from: usize, to: usize) -> Canvas {
+        let to = to.min(self.height);
+        let from = from.min(to);
+        self.pixels = self.pixels[from * self.width..to * self.width].to_vec();
+        self.height = to - from;
+        self
     }
 
     /// A PNG of the picture (8-bit RGBA).

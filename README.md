@@ -410,7 +410,7 @@ input still missing. **F7** (`:plot`) edits the chart on the cursor line
 shows each calculation as a typeset formula – fractions, roots, indices and
 Greek letters as in the report – in terminals that show images (Kitty,
 Ghostty, iTerm2, WezTerm, and with Sixel Windows Terminal 1.22+, foot, mlterm); a row with a fraction becomes two lines high.
-`:typeset off` (menu *View → Typeset formulas on/off*) switches back to text;
+`:typeset off` (menu *View → Typeset formulas on/off*) switches back to text; with Sixel (Windows Terminal) they start off – `:typeset on` or `HARDCALC_TYPESET=on` turns them on, `HARDCALC_TYPESET=off` starts any terminal without them;
 without image support the calculations stay text. Printing a calculation
 sheet (`:print` from the `∑ calc` view, or the whole document) always sets
 the formulas this way, in the PDF and in the print preview. Both need Typst:
